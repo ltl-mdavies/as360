@@ -1,0 +1,201 @@
+/* src/styles/allocationReport.css */
+
+/* Screen */
+.alloc-report{
+  background: #fff;
+  color: #111;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}
+
+.alloc-page{
+  padding: 24px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.alloc-head{
+  margin-bottom: 14px;
+}
+
+.alloc-title{
+  font-size: 18px;
+  font-weight: 850;
+  letter-spacing: -.02em;
+}
+
+.alloc-sub{
+  margin-top: 6px;
+  color: #555;
+  font-size: 12px;
+}
+
+.alloc-kicker{
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid #dbe2ea;
+  background: #f8fafc;
+  font-size: 11px;
+  font-weight: 800;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.alloc-card{
+  display: grid;
+  grid-template-columns: 1.2fr .8fr;
+  gap: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 16px;
+  background: linear-gradient(180deg, #ffffff, #fbfdff);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .04);
+}
+
+.alloc-preview{
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #f8fafc;
+  display: grid;
+  place-items: center;
+  min-height: 440px;
+}
+
+.alloc-preview img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display:block;
+}
+
+.alloc-meta{
+  min-width: 0;
+}
+
+.alloc-filename{
+  font-weight: 800;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.alloc-filemeta{
+  margin-top: 6px;
+  color: #555;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.alloc-variant{
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #111;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  display: inline-flex;
+}
+
+.alloc-statRow{
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.alloc-stat{
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.alloc-statLabel{
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #64748b;
+}
+
+.alloc-statValue{
+  font-size: 13px;
+  font-weight: 850;
+  color: #111827;
+}
+
+.alloc-assignHead{
+  margin-top: 14px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.alloc-empty{
+  margin-top: 10px;
+  font-size: 12px;
+  color: #555;
+  border: 1px dashed #e5e7eb;
+  border-radius: 12px;
+  padding: 10px;
+  background: #fafafa;
+}
+
+.alloc-locs{
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.alloc-loc{
+  font-size: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.alloc-foot{
+  margin-top: 14px;
+  font-size: 11px;
+  color: #666;
+}
+
+@media (max-width: 860px){
+  .alloc-card{
+    grid-template-columns: 1fr;
+  }
+
+  .alloc-preview{
+    min-height: 300px;
+  }
+}
+
+/* Print: 1 creative per page */
+@media print{
+  .alloc-page{
+    page-break-after: always;
+    padding: 0;
+    max-width: none;
+  }
+  .alloc-card{
+    border: none;
+    padding: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+  .alloc-preview{
+    min-height: 520px;
+  }
+}

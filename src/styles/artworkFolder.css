@@ -1,0 +1,544 @@
+.artwork-folder{
+  display:flex;
+  flex-direction:column;
+  gap: 18px;
+  min-height:0;
+}
+
+.artwork-folder-projectMeta{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap: 8px 12px;
+}
+
+.artwork-folder-chip{
+  display:inline-flex;
+  align-items:center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(37,99,235,.14);
+  background: rgba(37,99,235,.06);
+  color: color-mix(in srgb, var(--text) 88%, rgba(37,99,235,.78));
+  font-size: 11.5px;
+  font-weight: 780;
+}
+
+.artwork-folder-detail{
+  display:inline-flex;
+  align-items:center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 720;
+}
+
+.artwork-folder-detail strong{
+  color: var(--text);
+  font-weight: 820;
+}
+
+.artwork-folder-kpis{
+  display:grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.artwork-folder-kpi{
+  position:relative;
+  overflow:hidden;
+  min-height: 76px;
+  padding: 14px 16px 14px 20px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--stroke2) 86%, white);
+  background: rgba(255,255,255,.72);
+}
+
+.artwork-folder-kpi::before{
+  content:"";
+  position:absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: rgba(148,163,184,.45);
+}
+
+.artwork-folder-kpi-blue::before{ background: rgba(37,99,235,.72); }
+.artwork-folder-kpi-slate::before{ background: rgba(100,116,139,.72); }
+.artwork-folder-kpi-green::before{ background: rgba(22,163,74,.72); }
+.artwork-folder-kpi-amber::before{ background: rgba(217,119,6,.72); }
+
+.artwork-folder-kpi span{
+  display:block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: .45px;
+  font-weight: 820;
+}
+
+.artwork-folder-kpi strong{
+  display:block;
+  margin-top: 8px;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: -.03em;
+  font-weight: 880;
+}
+
+.artwork-folder-panel .panel-body{
+  padding: 0;
+}
+
+.artwork-folder-panelHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--stroke2);
+}
+
+.artwork-folder-panelTitle{
+  font-size: 16px;
+  font-weight: 860;
+  letter-spacing: -.12px;
+}
+
+.artwork-folder-panelSub{
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 680;
+}
+
+.artwork-folder-sections{
+  padding: 16px;
+  display:flex;
+  flex-direction:column;
+  gap: 16px;
+}
+
+.artwork-folder-variant{
+  border: 1px solid var(--stroke2);
+  border-radius: 18px;
+  overflow:hidden;
+  background: rgba(255,255,255,.62);
+}
+
+.artwork-folder-variantHead{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--stroke2);
+  background: linear-gradient(180deg, rgba(37,99,235,.055), rgba(37,99,235,.018));
+}
+
+.artwork-folder-variantTitleGroup{
+  display:flex;
+  align-items:center;
+  gap: 11px;
+  min-width:0;
+}
+
+.artwork-folder-dot{
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(15,23,42,.12);
+  flex: 0 0 auto;
+}
+
+.artwork-folder-variantTitle{
+  font-size: 14px;
+  font-weight: 860;
+}
+
+.artwork-folder-variantSub{
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.artwork-folder-variantStats{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap: 8px;
+}
+
+.artwork-folder-variantStats span{
+  display:inline-flex;
+  align-items:center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke2);
+  background: rgba(255,255,255,.64);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 790;
+}
+
+.artwork-folder-variantBody{
+  display:grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+}
+
+.artwork-folder-variantGuide{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 14px;
+  margin: 12px 14px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--stroke2);
+  background: rgba(148,163,184,.06);
+}
+
+.artwork-folder-variantGuide-warning{
+  border-color: rgba(217,119,6,.18);
+  background: rgba(245,158,11,.08);
+}
+
+.artwork-folder-variantGuide-progress{
+  border-color: rgba(37,99,235,.16);
+  background: rgba(37,99,235,.06);
+}
+
+.artwork-folder-variantGuide-success{
+  border-color: rgba(22,163,74,.16);
+  background: rgba(22,163,74,.06);
+}
+
+.artwork-folder-variantGuideLabel{
+  font-size: 12px;
+  font-weight: 840;
+  letter-spacing: .02em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.artwork-folder-variantGuideBody{
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 680;
+}
+
+.artwork-folder-variantGuideEmphasis{
+  color: color-mix(in srgb, var(--text) 78%, rgba(37,99,235,.96));
+  font-weight: 840;
+}
+
+.artwork-folder-drop{
+  min-height: 156px;
+  border: 1px dashed rgba(37,99,235,.28);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(37,99,235,.055), rgba(37,99,235,.018));
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:flex-start;
+  gap: 8px;
+  padding: 18px;
+  transition:
+    border-color .16s ease,
+    background-color .16s ease,
+    box-shadow .16s ease;
+}
+
+.artwork-folder-drop.is-dragover{
+  border-color: rgba(37,99,235,.62);
+  background: rgba(37,99,235,.08);
+  box-shadow: inset 0 0 0 1px rgba(37,99,235,.16);
+}
+
+.artwork-folder-dropTitle{
+  font-size: 14px;
+  font-weight: 860;
+}
+
+.artwork-folder-dropSub{
+  max-width: 280px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 680;
+}
+
+.artwork-folder-fileList{
+  display:flex;
+  flex-direction:column;
+  gap: 10px;
+  min-width:0;
+}
+
+.artwork-folder-empty{
+  min-height: 156px;
+  border: 1px solid var(--stroke2);
+  border-radius: 16px;
+  background: rgba(148,163,184,.055);
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  padding: 18px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.artwork-folder-empty span{
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.artwork-folder-fileRow{
+  display:grid;
+  grid-template-columns: 96px minmax(0, 1fr) max-content max-content;
+  gap: 13px;
+  align-items:center;
+  border: 1px solid var(--stroke2);
+  border-radius: 16px;
+  background: rgba(255,255,255,.72);
+  padding: 10px 12px 10px 10px;
+}
+
+.artwork-folder-thumbBtn{
+  position:relative;
+  width: 96px;
+  height: 64px;
+  padding:0;
+  border: 1px solid var(--stroke2);
+  border-radius: 13px;
+  background: rgba(15,23,42,.04);
+  overflow:hidden;
+  cursor: zoom-in;
+}
+
+.artwork-folder-thumbBtn img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display:block;
+}
+
+.artwork-folder-thumbBtn span{
+  width:100%;
+  height:100%;
+  display:grid;
+  place-items:center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 860;
+}
+
+.artwork-folder-thumbBtn i{
+  position:absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius:999px;
+  border: 1px solid rgba(255,255,255,.75);
+}
+
+.artwork-folder-fileMain{
+  min-width:0;
+}
+
+.artwork-folder-fileName{
+  font-size: 13px;
+  font-weight: 840;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.artwork-folder-fileMeta{
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 660;
+}
+
+.artwork-folder-fileStatus{
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+  text-align:right;
+}
+
+.artwork-folder-fileActions{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  justify-content:flex-end;
+}
+
+.artwork-folder-replace,
+.artwork-folder-delete{
+  min-width: 84px;
+}
+
+.artwork-folder-scrim{
+  position:fixed;
+  inset:0;
+  z-index: 90;
+  background: rgba(15,23,42,.48);
+  display:flex;
+  align-items:stretch;
+  justify-content:center;
+  padding: 22px;
+}
+
+.artwork-folder-modal{
+  width: min(1680px, 100%);
+  min-height:0;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,.42);
+  background: var(--bg);
+  box-shadow: 0 28px 80px rgba(15,23,42,.26);
+  overflow:auto;
+}
+
+.artwork-folder-modalBody{
+  padding: 20px;
+}
+
+.artwork-folder-modalHeader{
+  margin-bottom: 12px !important;
+}
+
+@media (max-width: 980px){
+  .artwork-folder-kpis{
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .artwork-folder-panelHead,
+  .artwork-folder-variantHead{
+    flex-direction:column;
+    align-items:stretch;
+  }
+
+  .artwork-folder-variantStats{
+    justify-content:flex-start;
+  }
+
+  .artwork-folder-variantBody{
+    grid-template-columns: 1fr;
+  }
+
+  .artwork-folder-variantGuide{
+    flex-direction: column;
+  }
+
+  .artwork-folder-fileRow{
+    grid-template-columns: 82px minmax(0, 1fr);
+  }
+
+  .artwork-folder-fileStatus{
+    grid-column: 2;
+    text-align:left;
+  }
+
+  .artwork-folder-fileActions{
+    grid-column: 2;
+    justify-content:flex-start;
+    flex-wrap: wrap;
+  }
+
+  .artwork-folder-delete{
+    justify-self: start;
+  }
+}
+
+@media (max-width: 640px){
+  .artwork-folder-kpis{
+    grid-template-columns: 1fr;
+  }
+
+  .artwork-folder-scrim{
+    padding: 10px;
+  }
+
+  .artwork-folder-modalBody{
+    padding: 14px;
+  }
+
+  .artwork-folder-fileRow{
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: 14px 16px;
+    align-items: start;
+    padding: 14px;
+    border-radius: 20px;
+  }
+
+  .artwork-folder-thumbBtn{
+    width: 112px;
+    height: 80px;
+    border-radius: 16px;
+  }
+
+  .artwork-folder-fileMain{
+    min-width: 0;
+    padding-top: 4px;
+  }
+
+  .artwork-folder-fileName{
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.18;
+    overflow-wrap: anywhere;
+  }
+
+  .artwork-folder-fileMeta{
+    margin-top: 7px;
+    line-height: 1.32;
+  }
+
+  .artwork-folder-fileStatus{
+    grid-column: 2;
+    margin-top: 4px;
+  }
+
+  .artwork-folder-fileActions{
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    width: min(100%, 180px);
+  }
+
+  .artwork-folder-replace,
+  .artwork-folder-delete{
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 380px){
+  .artwork-folder-fileRow{
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 12px 14px;
+    padding: 12px;
+  }
+
+  .artwork-folder-thumbBtn{
+    width: 96px;
+    height: 72px;
+  }
+}

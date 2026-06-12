@@ -1,0 +1,248 @@
+.share-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(6px);
+}
+
+.share-identityCard,
+.share-config {
+  width: min(100%, 560px);
+  border: 1px solid var(--stroke);
+  border-radius: 22px;
+  background: var(--panel);
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
+}
+
+.share-identityCard {
+  padding: 26px;
+}
+
+.share-config {
+  width: min(100%, 980px);
+  max-height: min(820px, calc(100vh - 56px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.share-configHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid var(--stroke);
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 36%),
+    rgba(255, 255, 255, 0.92);
+}
+
+.share-kicker {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--primary);
+  text-transform: uppercase;
+}
+
+.share-title {
+  margin-top: 4px;
+  font-size: 1.35rem;
+  font-weight: 850;
+  color: var(--text);
+  letter-spacing: -0.03em;
+}
+
+.share-copy {
+  margin-top: 6px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.share-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.share-field input,
+.share-createInput,
+.share-createSelect {
+  height: 44px;
+  min-width: 0;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  padding: 0 14px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+}
+
+.share-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.share-create {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 220px auto;
+  gap: 10px;
+  padding: 18px 26px;
+  border-bottom: 1px solid var(--stroke);
+  background: rgba(248, 250, 252, 0.74);
+}
+
+.share-linkList {
+  display: grid;
+  gap: 12px;
+  padding: 18px 26px 24px;
+  overflow: auto;
+}
+
+.share-linkCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 16px;
+  align-items: center;
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  padding: 16px;
+  background: #fff;
+}
+
+.share-linkCard.is-revoked {
+  opacity: 0.66;
+}
+
+.share-linkTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-linkTitle {
+  font-weight: 850;
+  color: var(--text);
+}
+
+.share-linkMeta {
+  margin-top: 3px;
+  font-size: 0.82rem;
+  font-weight: 750;
+  color: var(--muted);
+}
+
+.share-linkUrl {
+  margin-top: 8px;
+  max-width: 540px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-status {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+
+.share-status.is-active {
+  border: 1px solid rgba(22, 163, 74, 0.22);
+  background: rgba(22, 163, 74, 0.08);
+  color: #166534;
+}
+
+.share-status.is-revoked {
+  border: 1px solid rgba(220, 38, 38, 0.18);
+  background: rgba(220, 38, 38, 0.07);
+  color: #991b1b;
+}
+
+.share-linkStats {
+  display: grid;
+  gap: 5px;
+  min-width: 145px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.share-linkStats strong {
+  color: var(--text);
+}
+
+.share-linkActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.share-activity {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--stroke);
+}
+
+.share-activityRow {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.share-activityRow span:first-child {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.share-denied {
+  max-width: 680px;
+  margin: 60px auto;
+  padding: 28px;
+  border: 1px solid var(--stroke);
+  border-radius: 24px;
+  background: var(--panel);
+  box-shadow: var(--shadow2);
+}
+
+.share-deniedTitle {
+  font-size: 1.5rem;
+  font-weight: 850;
+  color: var(--text);
+}
+
+.share-deniedBody {
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .share-create,
+  .share-linkCard {
+    grid-template-columns: 1fr;
+  }
+
+  .share-linkActions {
+    justify-content: flex-start;
+  }
+}

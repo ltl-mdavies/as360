@@ -1,0 +1,1621 @@
+import { buildDocumentThumbUrl } from "../logic/imageUrls";
+import type { CreativeAsset, InventoryItem, MapLayer, MediaVariant } from "../logic/mockAssignment";
+
+export type ApiClientLike = {
+  request<T>(path: string, options?: Omit<RequestInit, "headers"> & { headers?: HeadersInit }): Promise<T>;
+};
+
+export type ApiProjectWorkspaceResponse = {
+  project: {
+    id: string;
+    projectMode?: "live" | "internal_sandbox";
+    customerId: string;
+    customerName: string;
+    customerLogoUrl?: string | null;
+    sourceCustomerId?: string | null;
+    sourceCustomerName?: string | null;
+    marketId: string;
+    marketName: string;
+    venueId: string;
+    venueName: string;
+    documentSourceMode?: "adspace" | "external" | "hybrid";
+    documentLibraryUrl?: string;
+    title: string;
+    poNumber?: string;
+    adspaceOrderNumber?: string;
+    extId: string;
+    liftOrderId?: string | null;
+    liftOrderUrl?: string | null;
+    liftOrderLookupSource?: "create_order" | "fallback_lookup" | "manual_override" | null;
+    liftOrderOverriddenAt?: string | null;
+    liftOrderOverriddenByName?: string | null;
+    liftOrderOverrideNote?: string | null;
+    orderSubmittedAt?: string | null;
+    orderSubmittedByName?: string | null;
+    orderSubmissionNote?: string | null;
+    productionReleasedAt?: string | null;
+    productionReleasedByName?: string | null;
+    productionReleaseNote?: string | null;
+    artworkDueDate?: string;
+    postDate?: string;
+    endClientName?: string;
+    contractNumber?: string;
+    createdAt: string;
+    updatedAt: string;
+    assignment?: {
+      required: number;
+      assigned: number;
+      complete: boolean;
+    };
+    proofs?: {
+      total: number;
+      approved: number;
+      pending: number;
+      revised: number;
+      waitingForProof: number;
+    };
+    transit?: {
+      enabled: boolean;
+      status: "not_required" | "not_started" | "pending" | "approved" | "rejected" | "changes_requested";
+    };
+    production?: {
+      policy: "direct" | "hold_for_release";
+      ready: boolean;
+      awaitingRelease: boolean;
+      released: boolean;
+    };
+    needsAttention?: boolean;
+  };
+  scope: {
+    includedIds: string[];
+  };
+  workspace: {
+    maps: Array<{
+      id: string;
+      name: string;
+      assigned: number;
+      total: number;
+      imageUrl: string;
+    }>;
+    variants: Array<{
+      key: string;
+      mediaName: string;
+      w: number;
+      h: number;
+      shortLabel?: string;
+      color?: string;
+      label?: string;
+      unitNumber?: string;
+    }>;
+    inventory: Array<{
+      id: string;
+      recordId?: string;
+      locationName?: string;
+      mapId: string;
+      mediaVariantKey: string;
+      unitNumber?: string;
+      x: number;
+      y: number;
+      assignedCreativeId?: string | null;
+      assignmentUpdatedAt?: string | null;
+    }>;
+    creatives: Array<{
+      id: string;
+      filename: string;
+      fileMeta: string;
+      mediaVariantKey: string;
+      color: string;
+      contentType?: string | null;
+      createdAt?: string;
+      thumbUrl?: string | null;
+      fullUrl?: string | null;
+      assignedInventoryIds?: string[];
+    }>;
+  };
+};
+
+export type ApiProjectHubBootstrapResponse = ApiProjectWorkspaceResponse & {
+  viewer: {
+    isPlatformAdmin: boolean;
+    role: "platform_admin" | "customer_admin";
+    customerIds: string[];
+  };
+  transit: ApiProjectTransitResponse;
+  events: ApiProjectAuditEvent[];
+};
+
+export type ApiSignedUploadResponse = {
+  bucket: string;
+  key: string;
+  assetKind: string;
+  retentionClass: string;
+  uploadUrl: string;
+  expiresInSeconds: number;
+};
+
+export type ProjectAssetKind =
+  | "artwork"
+  | "proof"
+  | "projectDocument"
+  | "customerBranding"
+  | "map"
+  | "venueImport"
+  | "venueDocument"
+  | "allocationReport"
+  | "orderPackage"
+  | "reconciliation"
+  | "liftPayload";
+
+export type ApiProjectProofLineResponse = {
+  lineItemId: string;
+  lineNumber: number;
+  liftOrderLineId?: number | null;
+  liftProofingId?: number | null;
+  mediaVariantKey: string;
+  mediaVariantLabel?: string;
+  mediaName: string;
+  w: number;
+  h: number;
+  unitNumber?: string | null;
+  quantity?: number | null;
+  assignedLocations?: string[];
+  locations: string[];
+  clientCreativeId: string;
+  clientFileName: string;
+  clientThumbUrl?: string | null;
+  clientFullUrl?: string | null;
+  proofThumbUrl?: string | null;
+  proofFullUrl?: string | null;
+  status: "waiting" | "pending" | "approved";
+  revised: boolean;
+  printTeamFeedback?: string | null;
+  proofComments?: ApiProjectProofComment[];
+  proofCommentCount?: number;
+  proofCommentAttachmentCount?: number;
+  latestProofCommentAt?: string | null;
+  proofVersions?: ApiProjectProofVersion[];
+  updatedAt?: string;
+  updatedByName?: string | null;
+};
+
+export type ApiProjectProofCommentAttachment = {
+  url: string;
+  createdAt?: string | null;
+  filename?: string | null;
+};
+
+export type ApiProjectProofComment = {
+  id: string;
+  body: string;
+  createdAt?: string | null;
+  attachments: ApiProjectProofCommentAttachment[];
+};
+
+export type ApiProjectProofVersion = {
+  attachmentId?: number | null;
+  orderLineId?: number | null;
+  proofFilename?: string | null;
+  proofThumbUrl?: string | null;
+  proofFullUrl?: string | null;
+  status?: string | null;
+  createdAt?: string | null;
+  replacedAt?: string | null;
+  current?: boolean;
+  comments: ApiProjectProofComment[];
+};
+
+export type ApiProjectProofsResponse = {
+  proofs: ApiProjectProofLineResponse[];
+  sync?: {
+    attempted: boolean;
+    ok: boolean;
+    message?: string | null;
+    syncedAt?: string | null;
+    lastLiftProofSyncAt?: string | null;
+    lastLiftProofChangeAt?: string | null;
+    autoRefreshEligible?: boolean;
+    autoRefreshRecommended?: boolean;
+    autoRefreshPausedReason?: string | null;
+  };
+};
+
+export type ApiAllocationOverrideInventoryItem = ApiProjectWorkspaceResponse["workspace"]["inventory"][number] & {
+  isActive?: boolean;
+  isInScope?: boolean;
+};
+
+export type ApiAllocationOverrideRow = {
+  id: string;
+  projectId: string;
+  sourceType: "proof" | "creative" | "manual";
+  sourceProofLineId?: string | null;
+  sourceCreativeId?: string | null;
+  sourceLineNumber?: number | null;
+  sourceLiftOrderLineId?: number | null;
+  sourceLiftProofingId?: number | null;
+  productLabel: string;
+  dimensionsLabel: string;
+  quantity: number;
+  mediaVariantKey: string;
+  mediaVariantLabel?: string;
+  assignedInventoryIds: string[];
+  hidden: boolean;
+  hiddenAt?: string | null;
+  hiddenByName?: string | null;
+  liftSyncStatus: "not_supported" | "pending" | "synced" | "failed";
+  adminNote?: string | null;
+  createdAt: string;
+  createdByName: string;
+  updatedAt: string;
+  updatedByName: string;
+  asset: {
+    filename: string;
+    thumbUrl?: string | null;
+    fullUrl?: string | null;
+    source: "override" | "proof" | "creative" | "manual";
+    contentType?: string | null;
+  };
+};
+
+export type ApiAllocationOverrideResponse = {
+  project: ApiProjectWorkspaceResponse["project"];
+  scope: ApiProjectWorkspaceResponse["scope"];
+  workspace: Omit<ApiProjectWorkspaceResponse["workspace"], "inventory"> & {
+    inventory: ApiAllocationOverrideInventoryItem[];
+  };
+  proofLines: ApiProjectProofLineResponse[];
+  override: {
+    rows: ApiAllocationOverrideRow[];
+    activeCount: number;
+    hiddenCount: number;
+    liftSync: {
+      status: "not_supported" | "pending" | "synced" | "failed";
+      message?: string | null;
+    };
+  };
+};
+
+export type AllocationOverrideAssetInput = {
+  bucketName: string;
+  objectKey: string;
+  thumbObjectKey?: string | null;
+  filename: string;
+  contentType?: string | null;
+  thumbContentType?: string | null;
+  sizeBytes?: number | null;
+};
+
+export type AllocationOverrideRowInput = {
+  sourceType?: "proof" | "creative" | "manual";
+  sourceProofLineId?: string | null;
+  sourceCreativeId?: string | null;
+  sourceLineNumber?: number | null;
+  sourceLiftOrderLineId?: number | null;
+  sourceLiftProofingId?: number | null;
+  productLabel?: string;
+  dimensionsLabel?: string;
+  quantity?: number;
+  mediaVariantKey?: string;
+  assignedInventoryIds?: string[];
+  overrideAsset?: AllocationOverrideAssetInput | null;
+  adminNote?: string | null;
+  hidden?: boolean;
+};
+
+export type ApiProjectTransitResponse = {
+  projectId: string;
+  enabled: boolean;
+  status: "not_started" | "pending" | "approved" | "rejected";
+  submittedByName?: string | null;
+  submittedDate?: string | null;
+  comment?: string | null;
+  submittedAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type ApiProjectShareLink = {
+  id: string;
+  projectId: string;
+  label: string;
+  accessType: "collaboration" | "artwork_upload" | "transit_approval" | "view_only";
+  status: "active" | "revoked";
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string | null;
+  shortCode?: string | null;
+  shortUrl?: string | null;
+  participantCount: number;
+  actionCount: number;
+  lastActivityAt?: string | null;
+  recentActivity: Array<{
+    eventType: string;
+    createdAt: string;
+    actorName: string;
+    actorType: string;
+    shareLinkId?: string | null;
+    detail?: Record<string, unknown>;
+  }>;
+};
+
+export type ApiShareParticipant = {
+  id: string;
+  shareLinkId: string;
+  displayName: string;
+  email: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+};
+
+export type ApiProjectAuditEvent = {
+  eventType: string;
+  createdAt: string;
+  actorType: string;
+  actorId: string;
+  actorName: string;
+  shareLinkId?: string | null;
+  detail?: Record<string, unknown>;
+};
+
+export type ApiProjectDocument = {
+  id: string;
+  projectId: string;
+  category: "project_document" | "lift_payload" | "allocation_report" | "order_package" | "reconciliation";
+  assetKind: "projectDocument" | "liftPayload" | "allocationReport" | "orderPackage" | "reconciliation";
+  filename: string;
+  contentType?: string | null;
+  thumbContentType?: string | null;
+  sizeBytes?: number | null;
+  source: "uploaded" | "generated";
+  uploadedByName: string;
+  createdAt: string;
+  updatedAt: string;
+  thumbUrl?: string | null;
+  fullUrl: string;
+};
+
+export type ApiLiftPayloadPreviewLine = {
+  lineNumber: number;
+  mediaVariantLabel: string;
+  filename: string;
+  unitNumber: string;
+  quantity: number;
+  assignedLocations: string[];
+  trimHeight: string;
+  trimWidth: string;
+  safeHeight: string;
+  safeWidth: string;
+};
+
+export type ApiLiftPayloadPreview = {
+  payload: {
+    ext_id: string;
+    po_number: string;
+    contract_no?: string;
+    customer_id: string;
+    order_title: string;
+    order_note?: string;
+    product_data: Array<{
+      productSku: string;
+      productCategory: "Art";
+      productQty: number;
+      file_name: string;
+      art_file: string;
+      trim_height: string;
+      trim_width: string;
+      safe_height: string;
+      safe_width: string;
+      assigned_Locations: string;
+      mediaVariantLabel: string;
+    }>;
+  };
+  validation: {
+    ok: boolean;
+    errors: string[];
+    warnings: string[];
+  };
+  completeness: {
+    required: number;
+    assigned: number;
+    remaining: number;
+  };
+  lines: ApiLiftPayloadPreviewLine[];
+  snapshotDocument?: ApiProjectDocument | null;
+};
+
+export type ApiAdminSettings = {
+  entityType: "AppSettings";
+  id: "global";
+  shareDefaults: {
+    collaboration: { enabled: boolean; defaultExpiresInDays: number | null };
+    artworkUpload: { enabled: boolean; defaultExpiresInDays: number | null };
+    transitApproval: { enabled: boolean; defaultExpiresInDays: number | null };
+    viewOnly: { enabled: boolean; defaultExpiresInDays: number | null };
+    requireParticipantIdentity: boolean;
+  };
+  notifications: {
+    proofApproved: boolean;
+    transitDecision: boolean;
+    productionReleased: boolean;
+    workflowErrors: boolean;
+    emailRecipients: string;
+  };
+  workflowPolicies: {
+    productionApprovalMode: "hold_for_release";
+    transitRunsInParallel: boolean;
+    lockProofUndoAfterRelease: boolean;
+  };
+  dataDefaults: {
+    projectScopeDefault: "all_active_visible";
+    inactiveInventoryVisibilityDefault: "hidden" | "show_unavailable";
+    respectVenueMapSortOrder: boolean;
+  };
+  files: {
+    previewPdfInLightbox: boolean;
+    replaceFilePreservesAssignments: boolean;
+    projectDocumentRetentionDays: number;
+    generatedDocumentRetentionDays: number;
+  };
+  integrations: {
+    liftOrderIntegrationEnabled: boolean;
+    liftProofSyncEnabled: boolean;
+    retryOnTransientLiftFailure: boolean;
+    primaryPrintVendor: {
+      enabled: boolean;
+      vendorName: string;
+      platformLabel: string;
+      activeEnvironment: "prod" | "qa1";
+      environments: {
+        prod: ApiLiftEnvironmentConfig;
+        qa1: ApiLiftEnvironmentConfig;
+      };
+      companyId: string;
+      createOrderUsername: string;
+      createOrderPassword: string;
+      proofClientId: string;
+      proofClientSecret: string;
+      defaultHeaders: string;
+      payloadNotes: string;
+    };
+  };
+  updatedAt: string;
+  updatedByName: string;
+};
+
+export type ApiLiftEnvironmentConfig = {
+  baseUrl: string;
+  orderEndpointUrl: string;
+  fallbackOrderLookupUrl: string;
+  orderUrlResolverUrl: string;
+  customerContactListUrl: string;
+  proofEndpointUrlTemplate: string;
+  flushSyncUrl: string;
+  proofUrlResolverUrl: string;
+};
+
+export type NotificationEventType =
+  | "artwork_uploaded"
+  | "creatives_assigned"
+  | "all_inventory_assigned"
+  | "order_submitted"
+  | "proofs_ready"
+  | "revised_art_uploaded"
+  | "all_proofs_approved"
+  | "transit_accepted"
+  | "transit_rejected"
+  | "production_release_ready"
+  | "workflow_errors";
+
+export type NotificationRule = {
+  id: string;
+  label: string;
+  eventTypes: NotificationEventType[];
+  recipients: string;
+  deliveryMode: "instant" | "digest";
+  isActive: boolean;
+};
+
+export type CustomerStatus = "active" | "suspended" | "inactive";
+
+export type ApiLiftCustomerContact = {
+  customerId: string;
+  customerName: string;
+  customerNumber: string;
+  customerType: string;
+  customerStatus: string;
+  salesRep: string;
+  defaultInvoiceEmailAddress: string;
+  createdDate: string;
+};
+
+export type ApiCustomerSettings = {
+  entityType: "CustomerSettings";
+  id: string;
+  customerId: string;
+  notifications: {
+    proofApproved: boolean;
+    transitDecision: boolean;
+    productionReleased: boolean;
+    workflowErrors: boolean;
+    emailRecipients: string;
+    rules: NotificationRule[];
+  };
+  transitApproval: {
+    defaultMode: "enabled_all_orders" | "manual_per_project";
+    allowProjectOverride: boolean;
+  };
+  collaboration: {
+    collaborationLinksEnabled: boolean;
+    artworkUploadLinksEnabled: boolean;
+    transitApprovalLinksEnabled: boolean;
+    viewOnlyLinksEnabled: boolean;
+    requireParticipantIdentity: boolean;
+  };
+  updatedAt: string;
+  updatedByName: string;
+};
+
+export type ApiCustomerVendor = {
+  id: string;
+  customerId: string;
+  name: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  notes: string;
+  isActive: boolean;
+  updatedAt: string;
+  updatedByName: string;
+};
+
+export type ApiCustomerAccount = {
+  id: string;
+  name: string;
+  status: CustomerStatus;
+  isActive: boolean;
+  isInternalSandbox?: boolean;
+  liftCustomerId?: string;
+  logoUrl?: string | null;
+  marketCount: number;
+  venueCount: number;
+  projectCount: number;
+  updatedAt: string;
+};
+
+export type ApiAdminSettingsResponse = {
+  settings: ApiAdminSettings;
+  viewer: {
+    isPlatformAdmin: boolean;
+    role: "platform_admin" | "customer_admin";
+    customerIds: string[];
+  };
+  users: Array<{
+    id: string;
+    displayName: string;
+    email: string;
+    role: "platform_admin" | "customer_admin";
+    customerIds: string[];
+    isActive: boolean;
+    updatedAt: string;
+  }>;
+  customers: Array<{
+    id: string;
+    name: string;
+    status: CustomerStatus;
+    isActive: boolean;
+    isInternalSandbox?: boolean;
+    liftCustomerId?: string;
+    logoUrl?: string | null;
+  }>;
+};
+
+export type ApiAdminBrandingResponse = {
+  viewer: {
+    isPlatformAdmin: boolean;
+    role: "platform_admin" | "customer_admin";
+    customerIds: string[];
+    displayName?: string | null;
+    email?: string | null;
+  };
+  brand: {
+    name: string;
+    logoUrl?: string | null;
+    alt: string;
+    companyName: string;
+  };
+};
+
+export type ApiAdminUser = ApiAdminSettingsResponse["users"][number];
+
+export type ApiCustomerSettingsResponse = {
+  customer: {
+    id: string;
+    name: string;
+    status: CustomerStatus;
+    isActive: boolean;
+    isInternalSandbox?: boolean;
+    liftCustomerId?: string;
+    logoUrl?: string | null;
+  };
+  viewer: {
+    isPlatformAdmin: boolean;
+    role: "platform_admin" | "customer_admin";
+    customerIds: string[];
+  };
+  settings: ApiCustomerSettings;
+  users: ApiAdminSettingsResponse["users"];
+  vendors: ApiCustomerVendor[];
+};
+
+export type ApiNotificationPreviewResponse = {
+  customer: {
+    id: string;
+    name: string;
+  };
+  eventType: NotificationEventType;
+  sent: boolean;
+  sentCount: number;
+  defaultTestRecipient?: string | null;
+  projectSample: {
+    id?: string | null;
+    title: string;
+    venueName: string;
+    source: "existing" | "synthetic";
+    projectMode: "live" | "internal_sandbox";
+  };
+  previews: Array<{
+    ruleId: string;
+    ruleLabel: string;
+    deliveryMode: "instant" | "digest";
+    configuredRecipients: string[];
+    effectiveRecipients: string[];
+    subject: string;
+    html: string;
+    text: string;
+  }>;
+};
+
+export type ApiRecentWorkflowIssue = {
+  projectId: string;
+  projectTitle: string;
+  projectMode: "live" | "internal_sandbox";
+  customerId: string;
+  customerName: string;
+  sourceCustomerName?: string | null;
+  venueName: string;
+  createdAt: string;
+  actorName: string;
+  severity: "info" | "warning" | "error";
+  errorCode: string;
+  message: string;
+  surface: string;
+  metadata?: Record<string, unknown>;
+  isDrill?: boolean;
+};
+
+export type ApiLiftSmokeEndpointResult = {
+  label: string;
+  configured: boolean;
+  ok: boolean;
+  status?: number;
+  durationMs?: number;
+  message: string;
+  urlHost?: string | null;
+  rowCount?: number;
+  lineCount?: number;
+  completeRowCount?: number;
+  requiredFieldsPresent?: string[];
+  requiredFieldsMissing?: string[];
+  sample?: Record<string, unknown>;
+};
+
+export type ApiLiftReadinessSmokeResponse = {
+  orderNumber: string;
+  activeEnvironment: "prod" | "qa1";
+  testedAt: string;
+  enabled: boolean;
+  endpoints: {
+    orderSync: ApiLiftSmokeEndpointResult;
+    proofReport: ApiLiftSmokeEndpointResult;
+    orderUrl: ApiLiftSmokeEndpointResult;
+  };
+};
+
+export type ApiErrorDrillResponse = {
+  ok: true;
+  customer: {
+    id: string;
+    name: string;
+  };
+  project: {
+    id: string;
+    title: string;
+    venueName: string;
+    projectMode: "live" | "internal_sandbox";
+  };
+  issue: {
+    drillType: string;
+    severity: "warning" | "error";
+    errorCode: string;
+    message: string;
+    surface: string;
+  };
+};
+
+export type ProjectErrorEventPayload = {
+  actionType?: string;
+  severity?: "info" | "warning" | "error";
+  errorCode?: string;
+  message: string;
+  surface: string;
+  workspace?: "hub" | "artwork" | "assignment" | "proofs" | "transit";
+  metadata?: Record<string, unknown>;
+};
+
+export type CustomerBranding = {
+  id: string;
+  name: string;
+  logoUrl?: string | null;
+};
+
+type CacheEntry<T> = {
+  value?: T;
+  fetchedAt: number;
+  inflight?: Promise<T>;
+};
+
+const WORKSPACE_CACHE_TTL_MS = 30_000;
+const PROOFS_CACHE_TTL_MS = 15_000;
+const ADMIN_SETTINGS_CACHE_TTL_MS = 60_000;
+
+const workspaceCache = new Map<string, CacheEntry<ApiProjectWorkspaceResponse>>();
+const proofsCache = new Map<string, CacheEntry<ApiProjectProofsResponse>>();
+let adminSettingsCache: CacheEntry<ApiAdminSettingsResponse> | null = null;
+let adminBrandingCache: CacheEntry<ApiAdminBrandingResponse> | null = null;
+
+function projectCacheKey(projectId: string, shareMode = false) {
+  return `${shareMode ? "share" : "auth"}:${projectId}`;
+}
+
+function readFreshCache<T>(entry: CacheEntry<T> | null | undefined, ttlMs: number) {
+  if (!entry?.value) return null;
+  if (Date.now() - entry.fetchedAt > ttlMs) return null;
+  return entry.value;
+}
+
+export function peekProjectWorkspaceCache(projectId: string, shareMode = false) {
+  return readFreshCache(workspaceCache.get(projectCacheKey(projectId, shareMode)), WORKSPACE_CACHE_TTL_MS);
+}
+
+export function peekProjectProofsCache(projectId: string, shareMode = false) {
+  return readFreshCache(proofsCache.get(projectCacheKey(projectId, shareMode)), PROOFS_CACHE_TTL_MS);
+}
+
+export function peekAdminSettingsCache() {
+  return readFreshCache(adminSettingsCache, ADMIN_SETTINGS_CACHE_TTL_MS);
+}
+
+export function invalidateProjectWorkspaceCache(projectId: string, shareMode = false) {
+  workspaceCache.delete(projectCacheKey(projectId, shareMode));
+}
+
+export function invalidateProjectProofsCache(projectId: string, shareMode = false) {
+  proofsCache.delete(projectCacheKey(projectId, shareMode));
+}
+
+export function invalidateAdminSettingsCache() {
+  adminSettingsCache = null;
+  adminBrandingCache = null;
+}
+
+function projectPath(projectId: string, suffix: string, shareMode = false) {
+  return `${shareMode ? "/api/share/projects" : "/api/projects"}/${projectId}${suffix}`;
+}
+
+export async function fetchProjectWorkspace(api: ApiClientLike, projectId: string, shareMode = false) {
+  const key = projectCacheKey(projectId, shareMode);
+  const cached = readFreshCache(workspaceCache.get(key), WORKSPACE_CACHE_TTL_MS);
+  if (cached) return cached;
+
+  const inflight = workspaceCache.get(key)?.inflight;
+  if (inflight) return inflight;
+
+  const previous = workspaceCache.get(key);
+  const request = api
+    .request<ApiProjectWorkspaceResponse>(projectPath(projectId, "/workspace", shareMode))
+    .then((response) => {
+      workspaceCache.set(key, { value: response, fetchedAt: Date.now() });
+      return response;
+    })
+    .catch((error) => {
+      if (previous?.value) {
+        workspaceCache.set(key, { value: previous.value, fetchedAt: previous.fetchedAt });
+      } else {
+        workspaceCache.delete(key);
+      }
+      throw error;
+    });
+
+  workspaceCache.set(key, {
+    value: previous?.value,
+    fetchedAt: previous?.fetchedAt || 0,
+    inflight: request,
+  });
+
+  return request;
+}
+
+export async function fetchProjectHubBootstrap(api: ApiClientLike, projectId: string) {
+  const response = await api.request<ApiProjectHubBootstrapResponse>(`/api/projects/${projectId}?hub=1`);
+  workspaceCache.set(projectCacheKey(projectId, false), {
+    value: {
+      project: response.project,
+      scope: response.scope,
+      workspace: response.workspace,
+    },
+    fetchedAt: Date.now(),
+  });
+  return response;
+}
+
+export async function fetchProjectLiftOrderUrl(api: ApiClientLike, projectId: string) {
+  return api.request<{ url: string }>(projectPath(projectId, "/lift-order-url", false));
+}
+
+export async function fetchProjectAllocationOverride(api: ApiClientLike, projectId: string) {
+  return api.request<ApiAllocationOverrideResponse>(`/api/projects/${projectId}?allocationOverride=1`);
+}
+
+export async function createProjectAllocationOverrideRow(
+  api: ApiClientLike,
+  projectId: string,
+  payload: AllocationOverrideRowInput
+) {
+  const response = await api.request<{ row: ApiAllocationOverrideRow }>(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ ...payload, action: "allocation_override_create" }),
+  });
+  invalidateProjectWorkspaceCache(projectId, false);
+  invalidateProjectProofsCache(projectId, false);
+  return response;
+}
+
+export async function updateProjectAllocationOverrideRow(
+  api: ApiClientLike,
+  projectId: string,
+  rowId: string,
+  payload: AllocationOverrideRowInput
+) {
+  const response = await api.request<{ row: ApiAllocationOverrideRow }>(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ ...payload, action: "allocation_override_update", rowId }),
+  });
+  invalidateProjectWorkspaceCache(projectId, false);
+  invalidateProjectProofsCache(projectId, false);
+  return response;
+}
+
+export async function removeProjectAllocationOverrideRow(
+  api: ApiClientLike,
+  projectId: string,
+  rowId: string,
+  adminNote: string
+) {
+  const response = await api.request<{ row: ApiAllocationOverrideRow }>(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action: "allocation_override_remove", rowId, adminNote }),
+  });
+  invalidateProjectWorkspaceCache(projectId, false);
+  invalidateProjectProofsCache(projectId, false);
+  return response;
+}
+
+export async function requestArtworkUploadUrl(
+  api: ApiClientLike,
+  args: {
+    projectId?: string;
+    filename: string;
+    contentType?: string;
+    customerId?: string;
+    venueId?: string;
+    assetKind?: ProjectAssetKind;
+    shareMode?: boolean;
+  }
+) {
+  return api.request<ApiSignedUploadResponse>(args.shareMode ? "/api/share/uploads/sign" : "/api/uploads/sign", {
+    method: "POST",
+    body: JSON.stringify({
+      assetKind: args.assetKind || "artwork",
+      projectId: args.projectId,
+      venueId: args.venueId,
+      customerId: args.customerId,
+      filename: args.filename,
+      contentType: args.contentType || "application/octet-stream",
+    }),
+  });
+}
+
+export async function requestCustomerBrandUploadUrl(
+  api: ApiClientLike,
+  args: {
+    customerId: string;
+    filename: string;
+    contentType?: string;
+  }
+) {
+  return requestArtworkUploadUrl(api, {
+    customerId: args.customerId,
+    filename: args.filename,
+    contentType: args.contentType,
+    assetKind: "customerBranding",
+  });
+}
+
+export async function updateProjectCreativeAsset(
+  api: ApiClientLike,
+  projectId: string,
+  creativeId: string,
+  payload: {
+    bucketName: string;
+    objectKey: string;
+    thumbObjectKey?: string;
+    filename?: string;
+    fileMeta?: string;
+    contentType?: string;
+    thumbContentType?: string;
+    sizeBytes?: number;
+  },
+  shareMode = false
+) {
+  const response = await api.request<{ creative: ApiProjectWorkspaceResponse["workspace"]["creatives"][number] }>(
+    projectPath(projectId, `/creatives/${creativeId}`, shareMode),
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+  invalidateProjectWorkspaceCache(projectId, shareMode);
+  return normalizeCreativeAsset(response.creative);
+}
+
+export async function createProjectCreativeAsset(
+  api: ApiClientLike,
+  projectId: string,
+  payload: {
+    bucketName: string;
+    objectKey: string;
+    thumbObjectKey?: string;
+    filename: string;
+    fileMeta: string;
+    mediaVariantKey: string;
+    color: string;
+    contentType?: string;
+    thumbContentType?: string;
+    sizeBytes?: number;
+  },
+  shareMode = false
+) {
+  const response = await api.request<{ creative: ApiProjectWorkspaceResponse["workspace"]["creatives"][number] }>(
+    projectPath(projectId, `/creatives`, shareMode),
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+  invalidateProjectWorkspaceCache(projectId, shareMode);
+  return normalizeCreativeAsset(response.creative);
+}
+
+export async function deleteProjectCreativeAsset(
+  api: ApiClientLike,
+  projectId: string,
+  creativeId: string,
+  shareMode = false
+) {
+  const response = await api.request<{
+    deletedCreativeId: string;
+    clearedAssignmentIds: string[];
+    deletedProofLineIds: string[];
+  }>(projectPath(projectId, `/creatives/${creativeId}`, shareMode), {
+    method: "DELETE",
+  });
+  invalidateProjectWorkspaceCache(projectId, shareMode);
+  invalidateProjectProofsCache(projectId, shareMode);
+  return response;
+}
+
+export async function submitProjectOrder(
+  api: ApiClientLike,
+  projectId: string,
+  payload: {
+    note?: string;
+    payload?: Record<string, unknown>;
+  },
+  shareMode = false
+) {
+  const response = await api.request<{
+    project: ApiProjectWorkspaceResponse["project"];
+    submission: {
+      liftOrderId: string;
+      submittedAt: string;
+      submittedByName: string;
+      note?: string | null;
+    };
+    documents?: ApiProjectDocument[];
+  }>(projectPath(projectId, `/submit`, shareMode), {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  invalidateProjectWorkspaceCache(projectId, shareMode);
+  invalidateProjectProofsCache(projectId, shareMode);
+  return response;
+}
+
+export async function previewProjectOrderSubmission(
+  api: ApiClientLike,
+  projectId: string,
+  payload: {
+    note?: string;
+    persistSnapshot?: boolean;
+  },
+  shareMode = false
+) {
+  return api.request<{
+    project: ApiProjectWorkspaceResponse["project"];
+    preview: ApiLiftPayloadPreview;
+  }>(projectPath(projectId, "/submit", shareMode), {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      previewOnly: true,
+    }),
+  });
+}
+
+export async function fetchProjectProofs(api: ApiClientLike, projectId: string, shareMode = false, forceRefresh = false) {
+  const key = projectCacheKey(projectId, shareMode);
+  const cached = readFreshCache(proofsCache.get(key), PROOFS_CACHE_TTL_MS);
+  if (!forceRefresh && cached) return cached;
+
+  const inflight = proofsCache.get(key)?.inflight;
+  if (!forceRefresh && inflight) return inflight;
+
+  const previous = proofsCache.get(key);
+  const request = api
+    .request<ApiProjectProofsResponse>(projectPath(projectId, forceRefresh ? "/proofs?refresh=1" : "/proofs", shareMode))
+    .then((response) => {
+      proofsCache.set(key, { value: response, fetchedAt: Date.now() });
+      return response;
+    })
+    .catch((error) => {
+      if (previous?.value) {
+        proofsCache.set(key, { value: previous.value, fetchedAt: previous.fetchedAt });
+      } else {
+        proofsCache.delete(key);
+      }
+      throw error;
+    });
+
+  proofsCache.set(key, {
+    value: previous?.value,
+    fetchedAt: previous?.fetchedAt || 0,
+    inflight: request,
+  });
+
+  return request;
+}
+
+export async function updateProjectProofLine(
+  api: ApiClientLike,
+  projectId: string,
+  lineItemId: string,
+  payload: {
+    status?: "waiting" | "pending" | "approved";
+    revised?: boolean;
+    printTeamFeedback?: string | null;
+    proofDecisionComment?: string | null;
+    clientFileName?: string | null;
+    proofObjectKey?: string | null;
+    proofThumbObjectKey?: string | null;
+    useClientCreativeAsProof?: boolean;
+    expectedUpdatedAt?: string | null;
+  },
+  shareMode = false
+) {
+  const response = await api.request<{ proof: ApiProjectProofLineResponse }>(projectPath(projectId, `/proofs/${lineItemId}`, shareMode), {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  invalidateProjectProofsCache(projectId, shareMode);
+  return response;
+}
+
+export async function fetchProjectTransit(api: ApiClientLike, projectId: string, shareMode = false) {
+  return api.request<{ transit: ApiProjectTransitResponse }>(projectPath(projectId, "/transit", shareMode));
+}
+
+export async function updateProjectTransit(
+  api: ApiClientLike,
+  projectId: string,
+  payload: {
+    status?: "not_started" | "pending" | "approved" | "rejected";
+    submittedByName?: string | null;
+    submittedDate?: string | null;
+    comment?: string | null;
+    submittedAt?: string | null;
+    expectedUpdatedAt?: string | null;
+  },
+  shareMode = false
+) {
+  const response = await api.request<{ transit: ApiProjectTransitResponse }>(projectPath(projectId, "/transit", shareMode), {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+  invalidateProjectWorkspaceCache(projectId, shareMode);
+  return response;
+}
+
+export async function updateProjectAssignment(
+  api: ApiClientLike,
+  projectId: string,
+  inventoryRecordId: string,
+  creativeId: string | null,
+  expectedUpdatedAt?: string | null,
+  shareMode = false
+) {
+  const response = await api.request<{
+    assignment: {
+      id: string;
+      projectId: string;
+      inventoryId: string;
+      inventoryLabel: string;
+      creativeId: string | null;
+      updatedAt: string;
+      updatedByName: string;
+    };
+  }>(projectPath(projectId, `/assignments/${inventoryRecordId}`, shareMode), {
+    method: "PATCH",
+    body: JSON.stringify({ creativeId, expectedUpdatedAt: expectedUpdatedAt ?? null }),
+  });
+  invalidateProjectWorkspaceCache(projectId, shareMode);
+  return response;
+}
+
+export async function releaseProjectProduction(
+  api: ApiClientLike,
+  projectId: string,
+  payload?: { note?: string }
+) {
+  return api.request<{
+    project: ApiProjectWorkspaceResponse["project"] & {
+      production: {
+        policy: "direct" | "hold_for_release";
+        ready: boolean;
+        awaitingRelease: boolean;
+        released: boolean;
+      };
+    };
+    release: {
+      releasedAt: string;
+      releasedByName: string;
+      note?: string | null;
+    };
+  }>(`/api/projects/${projectId}/release-production`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function resolveShareLink(api: ApiClientLike, token: string) {
+  return api.request<{
+    shareLink: {
+      id: string;
+      projectId: string;
+      label: string;
+      customerName?: string;
+      customerLogoUrl?: string | null;
+      accessType: ApiProjectShareLink["accessType"];
+      status: ApiProjectShareLink["status"];
+      expiresAt?: string | null;
+      shortUrl?: string | null;
+    };
+  }>(`/api/share-links/resolve?token=${encodeURIComponent(token)}`);
+}
+
+export async function identifyShareParticipant(
+  api: ApiClientLike,
+  payload: { token: string; displayName: string; email: string }
+) {
+  return api.request<{ participant: ApiShareParticipant }>(`/api/share-links/identify`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchProjectShareLinks(api: ApiClientLike, projectId: string) {
+  return api.request<{ shareLinks: ApiProjectShareLink[] }>(`/api/projects/${projectId}/share-links`);
+}
+
+export async function createProjectShareLink(
+  api: ApiClientLike,
+  projectId: string,
+  payload: { label: string; accessType: ApiProjectShareLink["accessType"]; expiresAt?: string | null }
+) {
+  return api.request<{ shareLink: ApiProjectShareLink }>(`/api/projects/${projectId}/share-links`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateProjectShareLink(
+  api: ApiClientLike,
+  shareLinkId: string,
+  payload: { label?: string; status?: ApiProjectShareLink["status"]; regenerate?: boolean }
+) {
+  return api.request<{ shareLink: ApiProjectShareLink }>(`/api/share-links/${shareLinkId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchProjectActivity(api: ApiClientLike, projectId: string) {
+  return api.request<{ events: ApiProjectAuditEvent[] }>(`/api/projects/${projectId}/activity`);
+}
+
+export async function fetchProjectDocuments(api: ApiClientLike, projectId: string, shareMode = false) {
+  return api.request<{ documents: ApiProjectDocument[] }>(projectPath(projectId, "/documents", shareMode));
+}
+
+export async function createProjectDocument(
+  api: ApiClientLike,
+  projectId: string,
+  payload: {
+    bucketName: string;
+    objectKey: string;
+    thumbObjectKey?: string;
+    filename: string;
+    contentType?: string;
+    thumbContentType?: string;
+    sizeBytes?: number;
+  }
+) {
+  return api.request<{ document: ApiProjectDocument }>(`/api/projects/${projectId}/documents`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function generateProjectCreativePackage(api: ApiClientLike, projectId: string) {
+  return api.request<{
+    document: ApiProjectDocument;
+    manifestSummary: {
+      artworkFileCount: number;
+      packagedFileCount: number;
+      missingFileCount: number;
+      includedInventoryCount: number;
+      assignedInventoryCount: number;
+      unassignedInventoryCount: number;
+      unassignedArtworkCount: number;
+    };
+  }>(`/api/projects/${projectId}/documents`, {
+    method: "POST",
+    body: JSON.stringify({ action: "generate_creative_package" }),
+  });
+}
+
+export async function fetchAdminSettings(api: ApiClientLike) {
+  const cached = readFreshCache(adminSettingsCache, ADMIN_SETTINGS_CACHE_TTL_MS);
+  if (cached) return cached;
+
+  if (adminSettingsCache?.inflight) return adminSettingsCache.inflight;
+
+  const request = api.request<ApiAdminSettingsResponse>("/api/admin/settings").then((response) => {
+    adminSettingsCache = { value: response, fetchedAt: Date.now() };
+    return response;
+  });
+
+  adminSettingsCache = {
+    value: adminSettingsCache?.value,
+    fetchedAt: adminSettingsCache?.fetchedAt || 0,
+    inflight: request,
+  };
+
+  return request;
+}
+
+export async function fetchAdminBranding(api: ApiClientLike) {
+  const cached = readFreshCache(adminBrandingCache, ADMIN_SETTINGS_CACHE_TTL_MS);
+  if (cached) return cached;
+
+  if (adminBrandingCache?.inflight) return adminBrandingCache.inflight;
+
+  const request = api.request<ApiAdminBrandingResponse>("/api/admin/settings?branding=1").then((response) => {
+    adminBrandingCache = { value: response, fetchedAt: Date.now() };
+    return response;
+  });
+
+  adminBrandingCache = {
+    value: adminBrandingCache?.value,
+    fetchedAt: adminBrandingCache?.fetchedAt || 0,
+    inflight: request,
+  };
+
+  return request;
+}
+
+export async function fetchRecentWorkflowIssues(api: ApiClientLike, limit = 10) {
+  return api.request<{ issues: ApiRecentWorkflowIssue[] }>(`/api/admin/settings?recentWorkflowErrors=${encodeURIComponent(String(limit))}`);
+}
+
+export async function runLiftReadinessSmokeTest(api: ApiClientLike, orderNumber: string) {
+  return api.request<ApiLiftReadinessSmokeResponse>(
+    `/api/admin/settings?liftSmokeOrder=${encodeURIComponent(orderNumber)}`
+  );
+}
+
+export async function fetchCustomers(api: ApiClientLike) {
+  return api.request<{ customers: ApiCustomerAccount[] }>("/api/customers");
+}
+
+export async function createCustomerAccount(
+  api: ApiClientLike,
+  payload: {
+    id: string;
+    name: string;
+    liftCustomerId?: string;
+    status?: CustomerStatus;
+    isActive?: boolean;
+  }
+) {
+  const response = await api.request<{ customer: ApiCustomerAccount }>("/api/customers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  invalidateAdminSettingsCache();
+  return response;
+}
+
+export async function updateCustomerAccount(
+  api: ApiClientLike,
+  customerId: string,
+  payload: {
+    name?: string;
+    liftCustomerId?: string;
+    status?: CustomerStatus;
+    isActive?: boolean;
+    logoBucketName?: string | null;
+    logoObjectKey?: string | null;
+    logoContentType?: string | null;
+  }
+) {
+  const response = await api.request<{ customer: ApiCustomerAccount }>(`/api/customers/${customerId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  invalidateAdminSettingsCache();
+  return response;
+}
+
+export async function updateAdminSettings(
+  api: ApiClientLike,
+  payload: Record<string, unknown>
+) {
+  const response = await api.request<ApiAdminSettingsResponse>("/api/admin/settings", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  adminSettingsCache = { value: response, fetchedAt: Date.now() };
+  return response;
+}
+
+export async function previewNotificationTest(
+  api: ApiClientLike,
+  payload: {
+    customerId: string;
+    eventType: NotificationEventType;
+    recipientsOverride?: string;
+  }
+) {
+  return api.request<ApiNotificationPreviewResponse>("/api/admin/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      adminAction: "notification_preview",
+      ...payload,
+    }),
+  });
+}
+
+export async function sendNotificationTest(
+  api: ApiClientLike,
+  payload: {
+    customerId: string;
+    eventType: NotificationEventType;
+    recipientsOverride?: string;
+  }
+) {
+  return api.request<ApiNotificationPreviewResponse>("/api/admin/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      adminAction: "notification_test_send",
+      ...payload,
+    }),
+  });
+}
+
+export async function runControlledErrorDrill(
+  api: ApiClientLike,
+  payload: {
+    customerId: string;
+    projectId?: string;
+    drillType: "proof_sync_mismatch" | "missing_proof_url" | "flush_sync_failure" | "notification_delivery_failure";
+  }
+) {
+  return api.request<ApiErrorDrillResponse>("/api/admin/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      adminAction: "run_error_drill",
+      ...payload,
+    }),
+  });
+}
+
+export async function updateAdminUser(
+  api: ApiClientLike,
+  payload: {
+    userId: string;
+    displayName?: string;
+    isActive?: boolean;
+  }
+) {
+  return api.request<ApiAdminSettingsResponse>("/api/admin/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      userAction: "update_user",
+      ...payload,
+    }),
+  });
+}
+
+export async function fetchCustomerSettings(api: ApiClientLike, customerId: string) {
+  return api.request<ApiCustomerSettingsResponse>(`/api/admin/settings?customerId=${encodeURIComponent(customerId)}`);
+}
+
+export async function fetchLiftCustomerContacts(api: ApiClientLike, search: string) {
+  return api.request<{ customers: ApiLiftCustomerContact[] }>(
+    `/api/admin/settings?liftCustomerSearch=${encodeURIComponent(search)}`
+  );
+}
+
+export async function updateCustomerSettings(
+  api: ApiClientLike,
+  customerId: string,
+  payload: Record<string, unknown>
+) {
+  return api.request<ApiCustomerSettingsResponse>(`/api/admin/settings`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      customerId,
+      ...payload,
+    }),
+  });
+}
+
+export async function createCustomerVendor(
+  api: ApiClientLike,
+  customerId: string,
+  payload: {
+    name: string;
+    contactName?: string;
+    email?: string;
+    phone?: string;
+    notes?: string;
+    isActive?: boolean;
+  }
+) {
+  return api.request<{ vendor: ApiCustomerVendor }>(`/api/admin/settings`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      customerId,
+      vendorAction: "create_vendor",
+      ...payload,
+    }),
+  });
+}
+
+export async function updateCustomerVendor(
+  api: ApiClientLike,
+  customerId: string,
+  vendorId: string,
+  payload: {
+    name?: string;
+    contactName?: string;
+    email?: string;
+    phone?: string;
+    notes?: string;
+    isActive?: boolean;
+  }
+) {
+  return api.request<{ vendor: ApiCustomerVendor }>(`/api/admin/settings`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      customerId,
+      vendorId,
+      vendorAction: "update_vendor",
+      ...payload,
+    }),
+  });
+}
+
+export async function logProjectErrorEvent(
+  api: ApiClientLike,
+  projectId: string,
+  payload: ProjectErrorEventPayload,
+  shareMode = false
+) {
+  return api.request<{ ok: true }>(projectPath(projectId, "/errors", shareMode), {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function normalizeCreativeAsset(
+  creative: ApiProjectWorkspaceResponse["workspace"]["creatives"][number]
+): CreativeAsset {
+  const isImage = Boolean(creative.contentType?.startsWith("image/"));
+  const fallbackThumb = isImage
+    ? creative.fullUrl || ""
+    : buildDocumentThumbUrl({ label: creative.contentType === "application/pdf" ? "PDF" : "FILE", accent: creative.color });
+  return {
+    id: creative.id,
+    filename: creative.filename,
+    fileMeta: creative.fileMeta,
+    mediaVariantKey: creative.mediaVariantKey,
+    color: creative.color,
+    assignedInventoryIds: creative.assignedInventoryIds || [],
+    thumbUrl: creative.thumbUrl || fallbackThumb,
+    fullUrl: creative.fullUrl || creative.thumbUrl || fallbackThumb,
+  };
+}
+
+export function normalizeWorkspaceInventory(
+  items: ApiProjectWorkspaceResponse["workspace"]["inventory"]
+): InventoryItem[] {
+  return items.map((item) => ({
+    id: item.id,
+    recordId: item.recordId,
+    locationName: item.locationName,
+    mapId: item.mapId,
+    mediaVariantKey: item.mediaVariantKey,
+    unitNumber: item.unitNumber || "",
+    x: item.x,
+    y: item.y,
+    assignedCreativeId: item.assignedCreativeId ?? null,
+    assignmentUpdatedAt: item.assignmentUpdatedAt ?? null,
+    isActive: true,
+  }));
+}
+
+export function normalizeWorkspaceMaps(
+  maps: ApiProjectWorkspaceResponse["workspace"]["maps"]
+): MapLayer[] {
+  return maps.map((map) => ({
+    id: map.id,
+    name: map.name,
+    assigned: map.assigned,
+    total: map.total,
+    imageUrl: map.imageUrl,
+  }));
+}
+
+export function normalizeWorkspaceVariants(
+  variants: ApiProjectWorkspaceResponse["workspace"]["variants"]
+): MediaVariant[] {
+  return variants.map((variant) => ({
+    key: variant.key,
+    mediaName: variant.mediaName,
+    w: Number(variant.w || 0),
+    h: Number(variant.h || 0),
+    shortLabel: variant.shortLabel || variant.mediaName.slice(0, 2).toUpperCase(),
+    color: variant.color || "#60a5fa",
+  }));
+}

@@ -1,0 +1,10 @@
+{
+  "app": "node --loader ts-node/esm bin/adspace360.ts",
+  "context": {
+    "stageName": "dev",
+    "appDomainName": "app.adspace360.com",
+    "shortDomainName": "go.adspace360.com",
+    "appCertificateArn": "arn:aws:acm:us-east-1:744016783602:certificate/6fac710e-2faf-4de0-aef9-55429a1fe800",
+    "apiCertificateArn": "arn:aws:acm:us-east-1:744016783602:certificate/6fac710e-2faf-4de0-aef9-55429a1fe800"
+  }
+}
