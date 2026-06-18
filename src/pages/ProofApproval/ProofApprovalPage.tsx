@@ -1030,6 +1030,8 @@ export default function ProofApprovalPage() {
   const requiresFeedbackAcknowledgement = !!selected && lineRequiresFeedbackAcknowledgement(selected);
   const showSelectedLineNote = !!selected && (!requiresFeedbackAcknowledgement || isApproved);
   const remainingProofActions = counts.pending + counts.waiting;
+  const proofsComplete = counts.total > 0 && remainingProofActions === 0;
+  const proofsCompleteInProduction = proofsComplete && (productionReleased || liftLinesBeyondProofReview);
   const proofSummaryTitle =
     counts.total === 0
       ? "No proofs available yet"
@@ -1045,10 +1047,8 @@ export default function ProofApprovalPage() {
       ? `${counts.pending} proof${counts.pending === 1 ? "" : "s"} are ready for review and approval.`
       : counts.waiting > 0
       ? `${counts.waiting} proof${counts.waiting === 1 ? "" : "s"} are still waiting for Lift to publish the current proof file and are not ready to approve yet.`
-      : productionReleased
-      ? "All proofs are approved and the project has been released to production."
-      : liftLinesBeyondProofReview
-      ? "All proofs are approved. Lift shows these order lines have moved beyond proof review, so this page remains available as a production reference."
+      : proofsCompleteInProduction
+      ? "All proofs are approved and the order is now in production."
       : "All proof approvals are complete.";
   const selectedNextStep =
     !selected
@@ -1057,9 +1057,9 @@ export default function ProofApprovalPage() {
       ? "This line is still processing in Lift or waiting on a regenerated proof file before it can be approved."
       : isApproved
       ? selectedBeyondProofReview
-        ? "This proof is approved. Lift shows this order line has moved beyond proof review, so the proof remains available here as a production reference."
+        ? "This proof is approved and the order is now in production."
         : canUndoApproval
-        ? "This proof is approved. It remains available as a reference while the project moves through the remaining order workflow."
+        ? "This proof is approved and remains available for reference."
         : "This proof is already approved."
       : "Review the proof image, confirm any print feedback is resolved, then approve for print or upload a revision.";
   const selectedCompactNextStep =
@@ -1709,29 +1709,29 @@ export default function ProofApprovalPage() {
         </div>
       )}
 
-      {counts.total > 0 && remainingProofActions === 0 && (
+      {proofsComplete && (
         <div className="proof-completeBanner">
           <div className="proof-completeBannerMain">
             <div className="proof-completeKicker">Proof Approval Complete</div>
             <div className="proof-completeTitle">All proofs have been approved.</div>
             <div className="proof-completeBody">
-              {productionReleased
-                ? "Proof approval is complete and the project has been released to production."
-                : liftLinesBeyondProofReview
-                ? "Proof approval is complete. Lift shows these order lines have moved beyond proof review, so this packet remains available as a production reference."
-                : "Proof approval is complete. This packet remains available as a reference while the project moves through the remaining order workflow."}
+              {proofsCompleteInProduction
+                ? "The order is now in production."
+                : "The proof packet remains available for reference."}
             </div>
           </div>
         </div>
       )}
 
       <div className="proof-mobileFeed" aria-label="Proof approval feed">
-        <div className="proof-mobileControls">
-          <div className="proof-summary proof-mobileSummary">
-            <div className="proof-summary-title">{proofSummaryTitle}</div>
-            <div className="proof-summary-body">{proofSummaryBody}</div>
+        {!proofsComplete && (
+          <div className="proof-mobileControls">
+            <div className="proof-summary proof-mobileSummary">
+              <div className="proof-summary-title">{proofSummaryTitle}</div>
+              <div className="proof-summary-body">{proofSummaryBody}</div>
+            </div>
           </div>
-        </div>
+        )}
 
         <div
           className={`proof-mobileStickyTools ${mobileToolsExpanded ? "is-expanded" : "is-collapsed"} ${hasActiveMobileFilters ? "has-active-filters" : ""}`}
@@ -2070,10 +2070,12 @@ export default function ProofApprovalPage() {
 
       <div className="proof-layout">
         <Panel className="proof-left panel-tight">
-          <div className="proof-summary">
-            <div className="proof-summary-title">{proofSummaryTitle}</div>
-            <div className="proof-summary-body">{proofSummaryBody}</div>
-          </div>
+          {!proofsComplete && (
+            <div className="proof-summary">
+              <div className="proof-summary-title">{proofSummaryTitle}</div>
+              <div className="proof-summary-body">{proofSummaryBody}</div>
+            </div>
+          )}
 
           <div className="proof-tabs">
             <button className={`tab ${filter === "all" ? "tab-active" : ""}`} onClick={() => setFilter("all")}>
