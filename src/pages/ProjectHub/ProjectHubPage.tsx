@@ -169,7 +169,7 @@ function buildDemoStepperModel(ctx: any): HubStepperModel {
   const productionReleased = !!ctx?.productionReleased;
   const needsProofWork = proofsTotal > 0 && (proofsApproved < proofsTotal || proofsPending > 0 || proofsWaiting > 0);
 
-  let currentKey: "assignment" | "submit" | "proofs" | "transit" | "production" = "assignment";
+  let currentKey: StepKey = "assignment";
 
   if (!isSubmitted) {
     currentKey = "assignment";
@@ -180,7 +180,7 @@ function buildDemoStepperModel(ctx: any): HubStepperModel {
   } else if (!productionReleased) {
     currentKey = "production";
   } else {
-    currentKey = "production";
+    currentKey = "complete";
   }
 
   const mk = (key: StepKey, label: string, complete: boolean): StepperModel["steps"][number] => ({
@@ -199,6 +199,7 @@ function buildDemoStepperModel(ctx: any): HubStepperModel {
       mk("proofs", "Proof Approval", proofsTotal > 0 && proofsApproved === proofsTotal),
       mk("transit", "Transit Approval", transitStatus === "approved"),
       mk("production", "Production", productionReleased),
+      mk("complete", "Complete", false),
     ],
   };
 }
@@ -1128,7 +1129,9 @@ const primaryBanner = useMemo(() => {
     return {
       tone: "success" as const,
       title: isLiftOrderCompleted(rollup) ? "Order completed" : "Order in production",
-      body: "Proofs are approved and this project remains available as a production reference.",
+      body: isLiftOrderCompleted(rollup)
+        ? "Lift marks this order complete. Project records remain available for reference."
+        : "Proofs are approved and this project remains available as a production reference.",
       ctaKind: "open_proofs" as const,
       ctaLabel: "Open Proof Reference",
     };

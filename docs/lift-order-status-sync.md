@@ -14,14 +14,15 @@ Adspace treats Lift as the source of truth once an order has been submitted and 
 - If Lift reports every synced line at `10` or later, Adspace marks the project as `In Production`.
 - If Lift reports every synced line at `18` or later, Adspace marks the project as `Complete`.
 - Once a Lift order is in production or complete, Hub and Dashboard stop prompting local Transit Approval or Production Release actions. The project remains available as a production reference.
+- Complete is a derived Adspace state from Lift line/order status, not a separate manual Adspace approval action in v1.
 - Proof Approval continues to show synced proof files after production starts, but proof actions are locked unless Lift moves the line back into a proof-review step.
 - If Lift moves a line backward into proof review, Adspace should allow normal proof decisions again after the next proof sync.
 
 ## Display surfaces
 
-- Dashboard: production-reference projects appear in the Ready / Released bucket and no longer count as Transit Blocked.
-- Project Hub: the primary action becomes `Open Proof Reference`, and stale Transit Approval / Production Release prompts are suppressed.
-- Proof Approval: approved proof packets remain visible for reference, with messaging focused on proof approval and current production state.
+- Dashboard: in-production projects appear in the Ready / Released bucket; completed Lift orders appear in the Complete bucket. Neither state counts as Transit Blocked.
+- Project Hub: in-production jobs point to `Open Proof Reference`; completed jobs show the final Complete step and use reference/archive messaging.
+- Proof Approval: approved proof packets remain visible for reference, with messaging focused on proof approval, current production state, or Lift completion.
 
 ## Open notes
 

@@ -15,6 +15,7 @@ import {
   getAngieRowPrimaryAction,
   getProductionLabel,
   getTransitChip,
+  isLiftOrderCompleted,
   isLiftProductionReference,
 } from "../../logic/renderingRules";
 import type { Tone } from "../../logic/renderingRules";
@@ -28,8 +29,8 @@ import CreateProjectModal, {
 } from "../../components/projects/CreateProjectModal";
 import { useApiClient } from "../../api/useApiClient";
 
-type TabKey = "all" | "needs_attention" | "active" | "ready";
-type StatusFilter = "all" | "needs_attention" | "awaiting_proof" | "ready" | "transit_blocked";
+type TabKey = "all" | "needs_attention" | "active" | "ready" | "complete";
+type StatusFilter = "all" | "needs_attention" | "awaiting_proof" | "ready" | "transit_blocked" | "complete";
 type ProjectModeFilter = "all" | "live" | "internal_sandbox";
 
 type ActiveFilterChip = {
@@ -169,13 +170,17 @@ function matchesTab(r: ProjectRollup, tab: TabKey) {
 
   if (tab === "needs_attention") return r.needsAttention;
 
+  if (tab === "complete") return isLiftOrderCompleted(r);
+
   if (tab === "ready") {
+    if (isLiftOrderCompleted(r)) return false;
     if (isLiftProductionReference(r)) return true;
     if (r.production.policy === "hold_for_release") return !!r.production.released;
     return r.production.ready;
   }
 
   if (tab === "active") {
+    if (isLiftOrderCompleted(r)) return false;
     const isReady =
       isLiftProductionReference(r) ||
       (r.production.policy === "hold_for_release" && !!r.production.released) ||
@@ -191,8 +196,9 @@ function matchesStatusFilter(r: ProjectRollup, f: StatusFilter) {
   if (f === "all") return true;
   if (f === "needs_attention") return r.needsAttention;
   if (f === "awaiting_proof") return r.proofs.total > 0 && (r.proofs.pending > 0 || (r.proofs.waitingForProof || 0) > 0);
-  if (f === "ready") return r.production.ready === true || isLiftProductionReference(r);
+  if (f === "ready") return !isLiftOrderCompleted(r) && (r.production.ready === true || isLiftProductionReference(r));
   if (f === "transit_blocked") return !isLiftProductionReference(r) && r.transit.enabled && r.transit.status !== "approved";
+  if (f === "complete") return isLiftOrderCompleted(r);
   return true;
 }
 
@@ -200,6 +206,7 @@ function tabLabel(tab: TabKey) {
   if (tab === "needs_attention") return "Needs Attention";
   if (tab === "active") return "Active";
   if (tab === "ready") return "Ready";
+  if (tab === "complete") return "Complete";
   return "All";
 }
 
@@ -208,6 +215,7 @@ function statusFilterLabel(filter: StatusFilter) {
   if (filter === "awaiting_proof") return "Awaiting Proof";
   if (filter === "ready") return "Ready / Released";
   if (filter === "transit_blocked") return "Transit Blocked";
+  if (filter === "complete") return "Complete";
   return "All";
 }
 
@@ -425,6 +433,7 @@ export default function AngieDashboardPage() {
       needs_attention: allRows.filter((r) => matchesTab(r, "needs_attention")).length,
       active: allRows.filter((r) => matchesTab(r, "active")).length,
       ready: allRows.filter((r) => matchesTab(r, "ready")).length,
+      complete: allRows.filter((r) => matchesTab(r, "complete")).length,
     };
   }, [allRows]);
 
@@ -436,8 +445,13 @@ export default function AngieDashboardPage() {
     const transitBlocked = allRows.filter(
       (r) => !isLiftProductionReference(r) && r.transit.enabled && r.transit.status !== "approved"
     ).length;
+    const complete = allRows.filter((r) => isLiftOrderCompleted(r)).length;
     const readyToRelease = allRows.filter(
-      (r) => isLiftProductionReference(r) || (r.production.policy === "hold_for_release" && !!r.production.released) || r.production.ready
+      (r) =>
+        !isLiftOrderCompleted(r) &&
+        (isLiftProductionReference(r) ||
+          (r.production.policy === "hold_for_release" && !!r.production.released) ||
+          r.production.ready)
     ).length;
 
     return [
@@ -445,6 +459,7 @@ export default function AngieDashboardPage() {
       { label: "Awaiting Proof", value: awaitingProofs, tone: "info", filter: "awaiting_proof" },
       { label: "Transit Blocked", value: transitBlocked, tone: "danger", filter: "transit_blocked" },
       { label: "Ready / Released", value: readyToRelease, tone: "success", filter: "ready" },
+      { label: "Complete", value: complete, tone: "success", filter: "complete" },
     ] satisfies PortfolioSummaryItem[];
   }, [allRows]);
 
@@ -642,6 +657,12 @@ export default function AngieDashboardPage() {
                   >
                     Ready ({tabCounts.ready})
                   </button>
+                  <button
+                    className={`tab ${tab === "complete" ? "tab-active" : ""}`}
+                    onClick={() => setTab("complete")}
+                  >
+                    Complete ({tabCounts.complete})
+                  </button>
                 </div>
 
                 {hasSandboxProjects ? (
@@ -715,6 +736,7 @@ export default function AngieDashboardPage() {
                     <option value="awaiting_proof">Awaiting Proof</option>
                     <option value="ready">Ready / Released</option>
                     <option value="transit_blocked">Transit Blocked</option>
+                    <option value="complete">Complete</option>
                   </select>
                 </div>
               </div>
@@ -931,7 +953,7 @@ function DashboardMobileCommandDock({
       {isOpen ? (
         <div className="dashboard-mobileDockExpanded">
           <div className="dashboard-mobileTabGrid" aria-label="Project views">
-            {(["all", "needs_attention", "active", "ready"] as TabKey[]).map((item) => (
+            {(["all", "needs_attention", "active", "ready", "complete"] as TabKey[]).map((item) => (
               <button
                 key={item}
                 type="button"
@@ -988,6 +1010,7 @@ function DashboardMobileCommandDock({
                 <option value="awaiting_proof">Awaiting Proof</option>
                 <option value="ready">Ready / Released</option>
                 <option value="transit_blocked">Transit Blocked</option>
+                <option value="complete">Complete</option>
               </select>
             </label>
           </div>

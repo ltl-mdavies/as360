@@ -39,6 +39,7 @@ type FilterKey = "all" | "pending" | "approved" | "revised";
 type BackgroundJobStatus = "processing" | "success" | "error";
 type FeedbackSortOrder = "newest" | "oldest";
 const LIFT_PROOF_REVIEW_STEP = 7.02;
+const LIFT_COMPLETED_STEP = 18;
 
 type RevisionBackgroundJob = {
   id: string;
@@ -83,6 +84,10 @@ function statusLabel(line: ProofLineMock) {
 
 function isPostProofReferenceLine(line?: ProofLineMock | null) {
   return typeof line?.lineStepNumber === "number" && line.lineStepNumber > LIFT_PROOF_REVIEW_STEP;
+}
+
+function isLiftCompletedLine(line?: ProofLineMock | null) {
+  return typeof line?.lineStepNumber === "number" && line.lineStepNumber >= LIFT_COMPLETED_STEP;
 }
 
 function isLiftApprovedLine(line?: ProofLineMock | null) {
@@ -754,8 +759,12 @@ export default function ProofApprovalPage() {
   const productionReleased = isDemo ? ctx.productionReleased : !!liveProject?.productionReleasedAt;
   const liftLinesBeyondProofReview =
     !isDemo && lines.length > 0 && lines.every((line) => isPostProofReferenceLine(line));
+  const liftLinesComplete =
+    !isDemo && lines.length > 0 && lines.every((line) => isLiftCompletedLine(line));
   const selectedBeyondProofReview =
     !isDemo && isPostProofReferenceLine(selected);
+  const selectedLiftComplete =
+    !isDemo && isLiftCompletedLine(selected);
   const selectedLiftControlledApproved =
     !isDemo && isLiftControlledApprovedLine(selected);
   const canUndoSelectedApproval =
@@ -1067,6 +1076,8 @@ export default function ProofApprovalPage() {
       ? `${counts.pending} proof${counts.pending === 1 ? "" : "s"} are ready for review and approval.`
       : counts.waiting > 0
       ? `${counts.waiting} proof${counts.waiting === 1 ? "" : "s"} are still waiting for Lift to publish the current proof file and are not ready to approve yet.`
+      : liftLinesComplete
+      ? "All proofs are approved and the order is complete in Lift."
       : proofsCompleteInProduction
       ? "All proofs are approved and the order is now in production."
       : "All proof approvals are complete.";
@@ -1076,7 +1087,9 @@ export default function ProofApprovalPage() {
       : selectedIsWaiting
       ? "This line is still processing in Lift or waiting on a regenerated proof file before it can be approved."
       : isApproved
-      ? selectedBeyondProofReview
+      ? selectedLiftComplete
+        ? "This proof is approved and the order is complete in Lift."
+        : selectedBeyondProofReview
         ? "This proof is approved and the order is now in production."
         : selectedLiftControlledApproved
         ? "This proof is approved in Lift and remains available as a reference."
@@ -1738,7 +1751,9 @@ export default function ProofApprovalPage() {
             <div className="proof-completeTitle">All proofs have been approved.</div>
             <div className="proof-completeBody">
               {proofsCompleteInProduction
-                ? "The order is now in production."
+                ? liftLinesComplete
+                  ? "The order is complete in Lift."
+                  : "The order is now in production."
                 : "The proof packet remains available for reference."}
             </div>
           </div>
@@ -2078,7 +2093,13 @@ export default function ProofApprovalPage() {
                         </>
                     ) : (
                         <div className="proof-approvedNote tone-success">
-                          {!isDemo && isPostProofReferenceLine(l) ? "Approved - order in production" : !isDemo && isLiftApprovedLine(l) ? "Approved in Lift" : "Approved for print"}
+                          {!isDemo && isLiftCompletedLine(l)
+                            ? "Approved - order complete"
+                            : !isDemo && isPostProofReferenceLine(l)
+                              ? "Approved - order in production"
+                              : !isDemo && isLiftApprovedLine(l)
+                                ? "Approved in Lift"
+                                : "Approved for print"}
                         </div>
                       )}
                     </div>
@@ -2400,7 +2421,13 @@ export default function ProofApprovalPage() {
                           </>
                       ) : (
                           <div className="proof-approvedNote tone-success">
-                            {selectedBeyondProofReview ? "Approved - order in production" : selectedLiftControlledApproved ? "Approved in Lift" : "Approved for print"}
+                            {selectedLiftComplete
+                              ? "Approved - order complete"
+                              : selectedBeyondProofReview
+                                ? "Approved - order in production"
+                                : selectedLiftControlledApproved
+                                  ? "Approved in Lift"
+                                  : "Approved for print"}
                           </div>
                         )}
                       </div>
@@ -2701,7 +2728,13 @@ export default function ProofApprovalPage() {
                           </>
                         ) : (
                           <div className="proof-approvedNote tone-success">
-                            {selectedBeyondProofReview ? "Approved - order in production" : selectedLiftControlledApproved ? "Approved in Lift" : "Approved for print"}
+                            {selectedLiftComplete
+                              ? "Approved - order complete"
+                              : selectedBeyondProofReview
+                                ? "Approved - order in production"
+                                : selectedLiftControlledApproved
+                                  ? "Approved in Lift"
+                                  : "Approved for print"}
                           </div>
                         )}
                       </>

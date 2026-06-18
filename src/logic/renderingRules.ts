@@ -15,7 +15,7 @@ export type PrimaryAction =
   | { kind: "view_transit_status"; label: string }
   | { kind: "approve_for_production"; label: string };
 
-export type StepKey = "assignment" | "submit" | "proofs" | "transit" | "production";
+export type StepKey = "assignment" | "submit" | "proofs" | "transit" | "production" | "complete";
 
 export type StepState = "complete" | "current" | "upcoming";
 
@@ -84,6 +84,10 @@ export function isLiftOrderCompleted(rollup: ProjectRollup): boolean {
   return !!rollup.liftSync?.completed || rollup.liftSync?.phase === "completed";
 }
 
+export function isProjectComplete(rollup: ProjectRollup): boolean {
+  return isLiftOrderCompleted(rollup);
+}
+
 export function proofsAllApproved(rollup: ProjectRollup): boolean {
   return (
     rollup.proofs.total > 0 &&
@@ -116,6 +120,10 @@ export function getAngieRowPrimaryAction(rollup: ProjectRollup, opts?: { canSubm
 
   // Lift can advance an order outside Adspace. Once the job is in production,
   // local assignment/transit/release prompts become stale; proofs become the reference surface.
+  if (isProjectComplete(rollup)) {
+    return { kind: "open_project", label: "Open Hub" };
+  }
+
   if (isLiftProductionReference(rollup)) {
     return { kind: "review_proofs", label: "Open Proof Reference" };
   }
@@ -193,7 +201,9 @@ export function getEndClientPrimaryActionCard(
     return {
       variant: "status",
       title: isLiftOrderCompleted(rollup) ? "Order completed" : "Order in production",
-      body: "Proofs are approved and this packet remains available as a production reference.",
+      body: isLiftOrderCompleted(rollup)
+        ? "Lift marks this order complete. Project records remain available for reference."
+        : "Proofs are approved and this packet remains available as a production reference.",
       tone: "success",
     };
   }
@@ -299,7 +309,13 @@ export function getEndClientStepperModel(rollup: ProjectRollup): StepperModel {
     { key: "proofs", label: "Proof Approval", state: "upcoming" },
     { key: "transit", label: "Transit Approval", state: "upcoming", hidden: !rollup.transit.enabled },
     { key: "production", label: "Production", state: "upcoming" },
+    { key: "complete", label: "Complete", state: "upcoming" },
   ];
+
+  if (isLiftOrderCompleted(rollup)) {
+    setStates(steps, "complete");
+    return { steps };
+  }
 
   if (isLiftProductionReference(rollup)) {
     setStates(steps, "production");
