@@ -672,6 +672,15 @@ type ProjectListItem = {
     awaitingRelease: boolean;
     released: boolean;
   };
+  liftSync?: {
+    phase: "not_submitted" | "waiting_for_proof" | "proof_review" | "proof_approved" | "in_production" | "completed" | "unknown";
+    label: string;
+    minLineStepNumber?: number | null;
+    maxLineStepNumber?: number | null;
+    proofActionable: boolean;
+    productionReference: boolean;
+    completed: boolean;
+  };
   needsAttention: boolean;
   scopeIncludedCount: number;
 };
@@ -5766,6 +5775,115 @@ type ProjectListItemOptions = {
   transit?: ProjectTransitApprovalItem | null;
 };
 
+const LIFT_PROOF_REVIEW_STEP = 7.02;
+const LIFT_IN_PRODUCTION_STEP = 10;
+const LIFT_COMPLETED_STEP = 18;
+
+type ProjectLiftSyncSummary = NonNullable<ProjectListItem["liftSync"]>;
+
+function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectProofLineItem[]): ProjectLiftSyncSummary {
+  if (!project.liftOrderId) {
+    return {
+      phase: "not_submitted",
+      label: "Not submitted",
+      minLineStepNumber: null,
+      maxLineStepNumber: null,
+      proofActionable: false,
+      productionReference: false,
+      completed: false,
+    };
+  }
+
+  const stepNumbers = proofLines
+    .map((line) => optionalNumber(line.lineStepNumber))
+    .filter((value): value is number => value != null);
+  const minLineStepNumber = stepNumbers.length ? Math.min(...stepNumbers) : null;
+  const maxLineStepNumber = stepNumbers.length ? Math.max(...stepNumbers) : null;
+  const knownStepCount = stepNumbers.length;
+  const allKnownLinesCompleted = knownStepCount > 0 && stepNumbers.every((step) => step >= LIFT_COMPLETED_STEP);
+  const allKnownLinesInProduction = knownStepCount > 0 && stepNumbers.every((step) => step >= LIFT_IN_PRODUCTION_STEP);
+  const anyKnownLineInProduction = stepNumbers.some((step) => step >= LIFT_IN_PRODUCTION_STEP);
+  const proofActionable = proofLines.some((line) => {
+    const step = optionalNumber(line.lineStepNumber);
+    return step === LIFT_PROOF_REVIEW_STEP && line.status === "pending";
+  });
+  const allProofsApproved =
+    proofLines.length > 0 &&
+    proofLines.every((line) => line.status === "approved" || String(line.liftProofStatus || "").toUpperCase() === "APPROVED");
+  const allKnownLinesPastProofReview =
+    knownStepCount > 0 && stepNumbers.every((step) => step > LIFT_PROOF_REVIEW_STEP);
+
+  if (allKnownLinesCompleted) {
+    return {
+      phase: "completed",
+      label: "Completed in Lift",
+      minLineStepNumber,
+      maxLineStepNumber,
+      proofActionable: false,
+      productionReference: true,
+      completed: true,
+    };
+  }
+
+  if (allKnownLinesInProduction || (allProofsApproved && anyKnownLineInProduction)) {
+    return {
+      phase: "in_production",
+      label: "In production",
+      minLineStepNumber,
+      maxLineStepNumber,
+      proofActionable: false,
+      productionReference: true,
+      completed: false,
+    };
+  }
+
+  if (allProofsApproved || allKnownLinesPastProofReview) {
+    return {
+      phase: "proof_approved",
+      label: "Proofs approved",
+      minLineStepNumber,
+      maxLineStepNumber,
+      proofActionable: false,
+      productionReference: false,
+      completed: false,
+    };
+  }
+
+  if (proofActionable || proofLines.some((line) => line.status === "pending")) {
+    return {
+      phase: "proof_review",
+      label: "Proof review",
+      minLineStepNumber,
+      maxLineStepNumber,
+      proofActionable: true,
+      productionReference: false,
+      completed: false,
+    };
+  }
+
+  if (proofLines.length === 0 || proofLines.every((line) => line.status === "waiting")) {
+    return {
+      phase: "waiting_for_proof",
+      label: "Waiting for proofs",
+      minLineStepNumber,
+      maxLineStepNumber,
+      proofActionable: false,
+      productionReference: false,
+      completed: false,
+    };
+  }
+
+  return {
+    phase: "unknown",
+    label: "Lift sync active",
+    minLineStepNumber,
+    maxLineStepNumber,
+    proofActionable,
+    productionReference: false,
+    completed: false,
+  };
+}
+
 async function toProjectListItem(
   project: ProjectItem,
   scope: ProjectScopeItem | null,
@@ -5788,6 +5906,7 @@ async function toProjectListItem(
   const proofsWaiting = proofLines.filter((line) => line.status === "waiting").length;
   const proofsRevised = proofLines.filter((line) => line.revised).length;
   const transitStatus = project.liftOrderId ? transit?.status || "not_started" : "not_required";
+  const liftSync = deriveProjectLiftSyncSummary(project, proofLines);
   const productionReady =
     !!project.liftOrderId &&
     proofLines.length > 0 &&
@@ -5848,9 +5967,12 @@ async function toProjectListItem(
       awaitingRelease: productionReady && !productionReleased,
       released: productionReleased,
     },
+    liftSync,
     needsAttention: !project.liftOrderId
       ? required > 0 && assigned < required
-      : !productionReleased && (proofsPending > 0 || proofsWaiting > 0 || transitStatus === "rejected"),
+      : !liftSync.productionReference &&
+        !productionReleased &&
+        (proofsPending > 0 || proofsWaiting > 0 || transitStatus === "rejected"),
     scopeIncludedCount: required,
   };
 }

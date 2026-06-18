@@ -15,6 +15,7 @@ import {
   getAngieRowPrimaryAction,
   getProductionLabel,
   getTransitChip,
+  isLiftProductionReference,
 } from "../../logic/renderingRules";
 import type { Tone } from "../../logic/renderingRules";
 import { buildAngieProjectTableColumns } from "../../logic/tableColumnDefs";
@@ -111,6 +112,7 @@ type ApiProjectSummary = {
     awaitingRelease: boolean;
     released: boolean;
   };
+  liftSync?: ProjectRollup["liftSync"];
   needsAttention: boolean;
 };
 
@@ -168,12 +170,14 @@ function matchesTab(r: ProjectRollup, tab: TabKey) {
   if (tab === "needs_attention") return r.needsAttention;
 
   if (tab === "ready") {
+    if (isLiftProductionReference(r)) return true;
     if (r.production.policy === "hold_for_release") return !!r.production.released;
     return r.production.ready;
   }
 
   if (tab === "active") {
     const isReady =
+      isLiftProductionReference(r) ||
       (r.production.policy === "hold_for_release" && !!r.production.released) ||
       (r.production.policy === "direct" && r.production.ready);
 
@@ -187,8 +191,8 @@ function matchesStatusFilter(r: ProjectRollup, f: StatusFilter) {
   if (f === "all") return true;
   if (f === "needs_attention") return r.needsAttention;
   if (f === "awaiting_proof") return r.proofs.total > 0 && (r.proofs.pending > 0 || (r.proofs.waitingForProof || 0) > 0);
-  if (f === "ready") return r.production.ready === true;
-  if (f === "transit_blocked") return r.transit.enabled && r.transit.status !== "approved";
+  if (f === "ready") return r.production.ready === true || isLiftProductionReference(r);
+  if (f === "transit_blocked") return !isLiftProductionReference(r) && r.transit.enabled && r.transit.status !== "approved";
   return true;
 }
 
@@ -263,6 +267,7 @@ function mapProjectSummaryToRow(project: ApiProjectSummary): ProjectRollup {
       awaitingRelease: project.production.awaitingRelease,
       released: project.production.released,
     },
+    liftSync: project.liftSync,
     needsAttention: project.needsAttention,
   };
 }
@@ -429,10 +434,10 @@ export default function AngieDashboardPage() {
       (r) => r.proofs.total > 0 && (r.proofs.pending > 0 || (r.proofs.waitingForProof || 0) > 0)
     ).length;
     const transitBlocked = allRows.filter(
-      (r) => r.transit.enabled && r.transit.status !== "approved"
+      (r) => !isLiftProductionReference(r) && r.transit.enabled && r.transit.status !== "approved"
     ).length;
     const readyToRelease = allRows.filter(
-      (r) => (r.production.policy === "hold_for_release" && !!r.production.released) || r.production.ready
+      (r) => isLiftProductionReference(r) || (r.production.policy === "hold_for_release" && !!r.production.released) || r.production.ready
     ).length;
 
     return [
@@ -1022,6 +1027,8 @@ function dashboardToneClass(tone?: string | null) {
 }
 
 function getDashboardProjectTone(row: ProjectRollup): Tone {
+  if (isLiftProductionReference(row)) return "success";
+
   if (row.transit.enabled && row.transit.status !== "approved" && row.transit.status !== "not_required") {
     return row.transit.status === "rejected" || row.transit.status === "changes_requested" ? "danger" : "warning";
   }

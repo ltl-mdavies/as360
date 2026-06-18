@@ -76,8 +76,21 @@ export function hasLiftOrder(rollup: ProjectRollup): boolean {
   return !!(rollup.liftOrderId && String(rollup.liftOrderId).trim().length > 0);
 }
 
+export function isLiftProductionReference(rollup: ProjectRollup): boolean {
+  return !!rollup.liftSync?.productionReference || rollup.liftSync?.phase === "in_production" || rollup.liftSync?.phase === "completed";
+}
+
+export function isLiftOrderCompleted(rollup: ProjectRollup): boolean {
+  return !!rollup.liftSync?.completed || rollup.liftSync?.phase === "completed";
+}
+
 export function proofsAllApproved(rollup: ProjectRollup): boolean {
-  return rollup.proofs.total > 0 && rollup.proofs.pending === 0;
+  return (
+    rollup.proofs.total > 0 &&
+    rollup.proofs.approved >= rollup.proofs.total &&
+    rollup.proofs.pending === 0 &&
+    (rollup.proofs.waitingForProof || 0) === 0
+  );
 }
 
 export function proofsInProgress(rollup: ProjectRollup): boolean {
@@ -85,6 +98,7 @@ export function proofsInProgress(rollup: ProjectRollup): boolean {
 }
 
 export function transitBlocks(rollup: ProjectRollup): boolean {
+  if (isLiftProductionReference(rollup)) return false;
   if (!rollup.transit.enabled) return false;
   return rollup.transit.status !== "approved";
 }
@@ -99,6 +113,12 @@ export function awaitingRelease(rollup: ProjectRollup): boolean {
 export function getAngieRowPrimaryAction(rollup: ProjectRollup, opts?: { canSubmit?: boolean; canRelease?: boolean }): PrimaryAction {
   const canSubmit = opts?.canSubmit ?? true;  // customer_manager/internal assumed true
   const canRelease = opts?.canRelease ?? true;
+
+  // Lift can advance an order outside Adspace. Once the job is in production,
+  // local assignment/transit/release prompts become stale; proofs become the reference surface.
+  if (isLiftProductionReference(rollup)) {
+    return { kind: "review_proofs", label: "Open Proof Reference" };
+  }
 
   // 1) assignment incomplete
   if (!rollup.assignment.complete) {
@@ -168,6 +188,15 @@ export function getEndClientPrimaryActionCard(
   opts?: { endClientCanSubmit?: boolean }
 ): PrimaryActionCardModel {
   const endClientCanSubmit = opts?.endClientCanSubmit ?? false;
+
+  if (isLiftProductionReference(rollup)) {
+    return {
+      variant: "status",
+      title: isLiftOrderCompleted(rollup) ? "Order completed" : "Order in production",
+      body: "Proofs are approved and this packet remains available as a production reference.",
+      tone: "success",
+    };
+  }
 
   // 1) assignment incomplete
   if (!rollup.assignment.complete) {
@@ -272,6 +301,11 @@ export function getEndClientStepperModel(rollup: ProjectRollup): StepperModel {
     { key: "production", label: "Production", state: "upcoming" },
   ];
 
+  if (isLiftProductionReference(rollup)) {
+    setStates(steps, "production");
+    return { steps };
+  }
+
   // Determine current stage
   if (!rollup.assignment.complete) {
     setStates(steps, "assignment");
@@ -337,6 +371,7 @@ export function isProofApprovalEnabled(rollup: ProjectRollup): boolean {
  * Whether to show a transit status banner on end-client hub.
  */
 export function getTransitBanner(rollup: ProjectRollup): null | { tone: Tone; text: string } {
+  if (isLiftProductionReference(rollup)) return null;
   if (!rollup.transit.enabled) return null;
   if (rollup.transit.status === "approved") return null;
 
@@ -394,6 +429,9 @@ export function getAngieRowHighlightTone(rollup: ProjectRollup): Tone | null {
  * Production column label + tone
  */
 export function getProductionLabel(rollup: ProjectRollup): { label: string; tone: Tone } {
+  if (isLiftOrderCompleted(rollup)) return { label: "Complete", tone: "success" };
+  if (isLiftProductionReference(rollup)) return { label: "In Production", tone: "success" };
+
   const policy = rollup.production.policy;
 
   if (policy === "direct") {
@@ -414,6 +452,7 @@ export function getProductionLabel(rollup: ProjectRollup): { label: string; tone
  */
 export function getTransitChip(rollup: ProjectRollup): { label: string; tone: Tone } | null {
   if (!rollup.transit.enabled) return null;
+  if (isLiftProductionReference(rollup) && rollup.transit.status !== "approved") return { label: "No Action", tone: "neutral" };
 
   const s = rollup.transit.status;
 
@@ -436,6 +475,14 @@ export function getAngieRowBadges(rollup: ProjectRollup): Array<{ label: string;
   const out: Array<{ label: string; tone: Tone }> = [];
   const waiting = rollup.proofs.waitingForProof || 0;
   const rem = remainingAssignments(rollup);
+
+  if (isLiftOrderCompleted(rollup)) {
+    return [{ label: "Complete", tone: "success" }];
+  }
+
+  if (isLiftProductionReference(rollup)) {
+    return [{ label: "In Production", tone: "success" }];
+  }
 
   // Show the operational blockers first.
   if (!rollup.assignment.complete && rollup.assignment.required > 0) {

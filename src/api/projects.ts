@@ -64,6 +64,22 @@ export type ApiProjectWorkspaceResponse = {
       awaitingRelease: boolean;
       released: boolean;
     };
+    liftSync?: {
+      phase:
+        | "not_submitted"
+        | "waiting_for_proof"
+        | "proof_review"
+        | "proof_approved"
+        | "in_production"
+        | "completed"
+        | "unknown";
+      label: string;
+      minLineStepNumber?: number | null;
+      maxLineStepNumber?: number | null;
+      proofActionable: boolean;
+      productionReference: boolean;
+      completed: boolean;
+    };
     needsAttention?: boolean;
   };
   scope: {

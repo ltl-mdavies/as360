@@ -46,6 +46,8 @@ import {
   getEndClientPrimaryActionCard,
   getEndClientStepperModel,
   isProofApprovalEnabled,
+  isLiftOrderCompleted,
+  isLiftProductionReference,
   getTransitBanner,
   type StepKey,
   type StepState,
@@ -898,6 +900,7 @@ export default function ProjectHubPage() {
           awaitingRelease: backendProject.production.awaitingRelease,
           released: backendProject.production.released,
         },
+        liftSync: backendProject.liftSync,
         needsAttention: backendProject.needsAttention,
       }
     : undefined;
@@ -1064,7 +1067,13 @@ const proofsBlocking = proofsPending > 0 || proofsWaiting > 0;
 const showApproveForProduction =
   isDemo
     ? ctx.productionApprovalMode === "project_release" && ctx.canReleaseProduction
-    : !!(rollup && rollup.production.policy === "hold_for_release" && rollup.production.ready && !rollup.production.released);
+    : !!(
+        rollup &&
+        !isLiftProductionReference(rollup) &&
+        rollup.production.policy === "hold_for_release" &&
+        rollup.production.ready &&
+        !rollup.production.released
+      );
 
 const productionReleased =
   isDemo ? ctx.productionReleased : !!rollup?.production.released;
@@ -1114,6 +1123,16 @@ const artworkNeedsCount = Math.max(0, artworkVariantKeys.size - artworkCoveredKe
  */
 const primaryBanner = useMemo(() => {
   if (!stepper) return null;
+
+  if (rollup && isLiftProductionReference(rollup)) {
+    return {
+      tone: "success" as const,
+      title: isLiftOrderCompleted(rollup) ? "Order completed" : "Order in production",
+      body: "Proofs are approved and this project remains available as a production reference.",
+      ctaKind: "open_proofs" as const,
+      ctaLabel: "Open Proof Reference",
+    };
+  }
 
   const proofsTotal = rollup?.proofs?.total ?? 0;
   const assignmentRequired = rollup?.assignment?.required ?? 0;
