@@ -207,6 +207,7 @@ Capabilities:
 - approve for print or upload revised artwork when permitted
 - preserve proof comments, historical proof versions, and feedback context
 - keep proof assets visible as read-only references even when the Lift order has moved beyond proof approval
+- recognize Lift production and complete states so Dashboard and Hub can show reference, ready/released, or complete status without prompting stale Adspace actions
 - mobile proof review with compact search/filter dock and next-pending navigation
 
 Business value:

@@ -70,6 +70,13 @@ Known frontend hosting:
 - S3 bucket: `adspace360foundationstack-frontendappbucket1870ce6-ynsurx2iz3vq`
 - CloudFront distribution: `EQ7MBUNOLLWGY`
 
+## Latest Dashboard / Lift Status Checkpoint
+
+- Dashboard now treats Lift-complete orders as a dedicated `Complete` bucket, separate from `Ready / Released`.
+- The desktop KPI strip is expected to render as one row with five cards: Needs Attention, Awaiting Proof, Transit Blocked, Ready / Released, and Complete.
+- Ready / Released remains green. Complete uses a distinct final-state accent so users can distinguish production-ready work from fully completed Lift work.
+- Hub, Dashboard, and Proof Approval should continue to suppress stale Transit Approval or Production Release prompts when Lift reports the order in production or complete.
+
 ## Venue Inventory Presets
 
 Venue Management now supports venue-level inventory presets/templates.

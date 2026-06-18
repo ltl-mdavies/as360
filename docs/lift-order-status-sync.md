@@ -20,7 +20,7 @@ Adspace treats Lift as the source of truth once an order has been submitted and 
 
 ## Display surfaces
 
-- Dashboard: in-production projects appear in the Ready / Released bucket; completed Lift orders appear in the Complete bucket. Neither state counts as Transit Blocked.
+- Dashboard: in-production projects appear in the Ready / Released bucket; completed Lift orders appear in the Complete bucket. Neither state counts as Transit Blocked. Ready / Released uses the green ready-state accent, while Complete uses a distinct final-state accent so the two states do not collapse visually.
 - Project Hub: in-production jobs point to `Open Proof Reference`; completed jobs show the final Complete step and use reference/archive messaging.
 - Proof Approval: approved proof packets remain visible for reference, with messaging focused on proof approval, current production state, or Lift completion.
 
