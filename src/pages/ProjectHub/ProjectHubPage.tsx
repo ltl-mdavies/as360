@@ -1134,6 +1134,8 @@ const primaryBanner = useMemo(() => {
         : "Proofs are approved and this project remains available as a production reference.",
       ctaKind: "open_proofs" as const,
       ctaLabel: "Open Proof Reference",
+      ctaSecondaryKind: "download_allocation_pdf" as const,
+      ctaSecondaryLabel: "Download Allocation PDF",
     };
   }
 
@@ -1486,6 +1488,12 @@ const currentVenueOption =
       }
     })();
   };
+  const allocationReportProjectId = isDemo ? "demo_001" : rollup?.projectId;
+  const handleDownloadAllocationPdf = useCallback(() => {
+    if (!allocationReportProjectId) return;
+    window.open(`/p/${allocationReportProjectId}/allocation-report?print=1`, "_blank");
+  }, [allocationReportProjectId]);
+
   const handlePrimaryBannerAction = () => {
     if (!("ctaKind" in primaryBanner)) return;
     if (primaryBanner.ctaKind === "get_started") {
@@ -1513,6 +1521,10 @@ const currentVenueOption =
     }
     if (primaryBanner.ctaSecondaryKind === "open_transit") {
       goTransit();
+      return;
+    }
+    if (primaryBanner.ctaSecondaryKind === "download_allocation_pdf") {
+      handleDownloadAllocationPdf();
       return;
     }
     if (canViewAssignment) goAssignment();
@@ -2017,49 +2029,24 @@ const currentVenueOption =
 				)}
 			  </>
 			) : (
-			  <button
-				className="btn btn-primary btn-lg"
-				type="button"
-				onClick={() => {
-				  if (primaryBanner.ctaKind === "continue_assignment") {
-					if (canViewAssignment) goAssignment();
-					else if (canViewArtwork) goArtwork();
-					else demoStore.actions.pushToast("warning", "This shared link does not allow assignment access");
-				  }
-				  if (primaryBanner.ctaKind === "open_proofs") {
-					if (canViewProofs) goProofs();
-					else demoStore.actions.pushToast("warning", "This shared link does not allow proof access");
-				  }
-				  if (primaryBanner.ctaKind === "open_transit") goTransit();
-				  if (primaryBanner.ctaKind === "approve_production") {
-            if (isDemo) {
-					  demoStore.actions.approveForProduction(demoActiveProjectId);
-            } else if (projectId) {
-              void (async () => {
-                try {
-                  const response = await releaseProjectProduction(api, projectId);
-                  setBackendProject(response.project);
-                  void loadProjectActivity();
-                  demoStore.actions.pushToast("success", "Project released to production");
-                } catch (error) {
-                  const message = error instanceof Error ? error.message : "We couldn't release the project yet.";
-                  demoStore.actions.pushToast("danger", message);
-                  void logProjectErrorEvent(api, projectId, {
-                    actionType: "project.release",
-                    errorCode: "production_release_failed",
-                    message,
-                    severity: "error",
-                    surface: "hub.production",
-                    workspace: "hub",
-                  }).catch(() => undefined);
-                }
-              })();
-            }
-				  }
-				}}
-			  >
-				{primaryBanner.ctaLabel}
-			  </button>
+			  <>
+				{"ctaSecondaryLabel" in primaryBanner && primaryBanner.ctaSecondaryLabel && (
+				  <button
+					className="btn btn-ghost btn-soft btn-lg"
+					type="button"
+					onClick={handlePrimaryBannerSecondaryAction}
+				  >
+					{primaryBanner.ctaSecondaryLabel}
+				  </button>
+				)}
+				<button
+				  className="btn btn-primary btn-lg"
+				  type="button"
+				  onClick={handlePrimaryBannerAction}
+				>
+				  {primaryBanner.ctaLabel}
+				</button>
+			  </>
 			)}
 		  </div>
 		)}
@@ -2683,7 +2670,7 @@ const currentVenueOption =
 		    : prev
 		);
 	  }}
-	  onDownloadPdf={() => window.open(`/p/${isDemo ? "demo_001" : rollup.projectId}/allocation-report?print=1`, "_blank")}
+	  onDownloadPdf={handleDownloadAllocationPdf}
 	/>
 
       <EditProjectDetailsModal
