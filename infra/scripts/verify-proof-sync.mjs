@@ -776,6 +776,73 @@ runCase("post-proof Lift steps keep proof assets visible as read-only references
   assert.deepEqual(merged.updatedProofs[0].locations, ["CW-001"]);
 });
 
+runCase("post-proof Lift steps reuse latest historical proof when current Lift row has no URL", () => {
+  const existingProof = makeProofLine({
+    id: "proof_historical_reference",
+    lineNumber: 1,
+    mediaVariantKey: "station_king_30x144",
+    mediaVariantLabel: 'Station King • 30"h x 144"w',
+    unitNumber: "SK-001",
+    locations: ["SK-001"],
+    clientCreativeId: "creative_station_king",
+    clientFileName: "StationKing-Proof.jpg",
+    liftOrderLineId: 9484266,
+  });
+  existingProof.proofVersions = [
+    {
+      attachmentId: 26230857,
+      orderLineId: 9484266,
+      proofFilename: null,
+      proofThumbUrl: null,
+      proofFullUrl: null,
+      status: null,
+      createdAt: null,
+      replacedAt: null,
+      current: true,
+      comments: [],
+    },
+    {
+      attachmentId: 26195439,
+      orderLineId: 9484266,
+      proofFilename: "A0223449_63_63_INX_PHI_NRG_StationKing_30x144_LEFT.jpg",
+      proofThumbUrl: "https://lift.example/thumbs/26195439",
+      proofFullUrl: "https://lift.example/originals/26195439",
+      status: "PENDING",
+      createdAt: "2026-06-15",
+      replacedAt: null,
+      current: false,
+      comments: [],
+    },
+  ];
+
+  const merged = mergeProjectProofLinesFromLift({
+    existingProofs: [existingProof],
+    rawLines: [
+      {
+        LINE_NUMBER: 1,
+        LINE_STEP_NUMBER: 8.01,
+        ORDER_LINE_ID: 9484266,
+        UNIT_NUMBER: "SK-001",
+        PROOFS: [
+          {
+            ATTACHMENT_ID: 26230857,
+            PROOF_APPROVAL_STATUS: "PENDING",
+          },
+        ],
+      },
+    ],
+    actorName: "Verifier",
+    syncedAt: "2026-06-18T02:45:00.000Z",
+  });
+
+  assert.equal(merged.issues.length, 0);
+  assert.equal(merged.updatedProofs[0].status, "approved");
+  assert.equal(merged.updatedProofs[0].liftProofingId, 26195439);
+  assert.equal(merged.updatedProofs[0].liftProofThumbUrl, "https://lift.example/thumbs/26195439");
+  assert.equal(merged.updatedProofs[0].liftProofFullUrl, "https://lift.example/originals/26195439");
+  assert.equal(merged.updatedProofs[0].proofVersions.find((version) => version.attachmentId === 26195439).current, true);
+});
+
 if (process.exitCode && process.exitCode !== 0) {
   process.exit(process.exitCode);
 }

@@ -3369,32 +3369,48 @@ export function mergeProjectProofLinesFromLift(args: {
       consumedExistingIds.add(existing.id);
 
       const liftStatus = optionalString(proofRecord?.PROOF_APPROVAL_STATUS) || null;
-      const nextProofThumbUrl =
+      const rawNextProofThumbUrl =
         canUseLiftProofAsset
           ? optionalString(proofRecord?.PROOF_LINK) || optionalString(proofRecord?.PROOF_LINK_LOW) || null
           : null;
-      const nextProofFullUrl =
+      const rawNextProofFullUrl =
         canUseLiftProofAsset
           ? optionalString(proofRecord?.HIRES_PDF_PROOF) ||
             optionalString(proofRecord?.PROOF_LINK_HIGH) ||
             optionalString(proofRecord?.PROOF_LINE_HIGH) ||
             null
           : null;
-      const nextProofingId = proofingId ?? existing.liftProofingId ?? null;
+      const historicalReferenceVersion =
+        isPostProofReferenceStep && !(rawNextProofThumbUrl || rawNextProofFullUrl)
+          ? latestUsableProofReferenceVersion(existing)
+          : null;
+      const nextProofThumbUrl = rawNextProofThumbUrl || historicalReferenceVersion?.proofThumbUrl || null;
+      const nextProofFullUrl = rawNextProofFullUrl || historicalReferenceVersion?.proofFullUrl || null;
+      const nextProofingId =
+        rawNextProofThumbUrl || rawNextProofFullUrl
+          ? proofingId ?? existing.liftProofingId ?? null
+          : historicalReferenceVersion?.attachmentId ?? proofingId ?? existing.liftProofingId ?? null;
       const hasLiftProofAsset = !!(nextProofThumbUrl || nextProofFullUrl);
       const proofComments = liftProofCommentsForRecord(proofRecord);
       const proofCommentCount = proofComments.length;
       const proofCommentAttachmentCount = proofComments.reduce((sum, comment) => sum + comment.attachments.length, 0);
       const latestProofCommentAt = latestProofCommentTimestamp(proofComments);
-      const proofVersion = buildProjectProofVersion({
-        proofRecord,
-        attachmentId: nextProofingId,
-        orderLineId: rawOrderLineId ?? existing.liftOrderLineId ?? null,
-        proofThumbUrl: nextProofThumbUrl,
-        proofFullUrl: nextProofFullUrl,
-        status: liftStatus,
-        comments: proofComments,
-      });
+      const proofVersion = historicalReferenceVersion
+        ? {
+            ...historicalReferenceVersion,
+            current: true,
+            replacedAt: null,
+            status: liftStatus || historicalReferenceVersion.status || null,
+          }
+        : buildProjectProofVersion({
+            proofRecord,
+            attachmentId: nextProofingId,
+            orderLineId: rawOrderLineId ?? existing.liftOrderLineId ?? null,
+            proofThumbUrl: nextProofThumbUrl,
+            proofFullUrl: nextProofFullUrl,
+            status: liftStatus,
+            comments: proofComments,
+          });
 
       if (isProofReviewStep && proofRecord && !nextProofingId) {
         issues.push({
@@ -3442,7 +3458,7 @@ export function mergeProjectProofLinesFromLift(args: {
         liftProofingId: nextProofingId,
         liftProofThumbUrl: nextProofThumbUrl,
         liftProofFullUrl: nextProofFullUrl,
-        liftProofStatus: liftStatus,
+        liftProofStatus: liftStatus || historicalReferenceVersion?.status || null,
         lastLiftSyncAt: syncedAt,
         status: nextStatus,
         printTeamFeedback:
@@ -3693,6 +3709,17 @@ function buildStoredProofVersionFromLine(proof: ProjectProofLineItem, replacedAt
     current: false,
     comments: proof.proofComments || [],
   } satisfies ProjectProofVersion;
+}
+
+function latestUsableProofReferenceVersion(proof: ProjectProofLineItem) {
+  const versions = Array.isArray(proof.proofVersions) ? proof.proofVersions : [];
+  const currentLineVersion =
+    proof.liftProofThumbUrl || proof.liftProofFullUrl
+      ? buildStoredProofVersionFromLine(proof, proof.updatedAt || proof.createdAt || "")
+      : null;
+  return [...versions, ...(currentLineVersion ? [currentLineVersion] : [])]
+    .filter((version) => !!(version.proofThumbUrl || version.proofFullUrl))
+    .sort((a, b) => parseLiftProofDate(b.createdAt || b.replacedAt) - parseLiftProofDate(a.createdAt || a.replacedAt))[0] || null;
 }
 
 function mergeStoredProofVersion(versions: ProjectProofVersion[], version: ProjectProofVersion) {
