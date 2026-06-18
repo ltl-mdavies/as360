@@ -2272,6 +2272,16 @@ html[data-theme="dark"] .proof-techClose{
   padding: 14px;
 }
 
+.proof-actionDock.is-approved{
+  width: min(calc(100% - 36px), 980px);
+  min-height: 92px;
+  grid-template-columns: minmax(360px, 1fr) minmax(240px, 330px);
+  align-items: stretch;
+  gap: 14px;
+  margin: 4px auto 18px;
+  padding: 14px;
+}
+
 .proof-actionDock.has-feedback{
   grid-template-columns: minmax(420px, 1.38fr) minmax(240px, .68fr) minmax(220px, .72fr);
   align-items:stretch;
@@ -2304,6 +2314,10 @@ html[data-theme="dark"] .proof-actionDock{
 }
 
 .proof-actionDock.is-simple .proof-actions{
+  justify-content:center;
+}
+
+.proof-actionDock.is-approved .proof-actions{
   justify-content:center;
 }
 

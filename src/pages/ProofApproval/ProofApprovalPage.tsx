@@ -38,6 +38,7 @@ import { useWorkspacePresence, type WorkspaceChangeEvent } from "../../realtime/
 type FilterKey = "all" | "pending" | "approved" | "revised";
 type BackgroundJobStatus = "processing" | "success" | "error";
 type FeedbackSortOrder = "newest" | "oldest";
+const LIFT_PROOF_REVIEW_STEP = 7.02;
 
 type RevisionBackgroundJob = {
   id: string;
@@ -78,6 +79,18 @@ function statusLabel(line: ProofLineMock) {
   if (!hasProof) return { label: "Waiting", tone: "neutral" as const };
   if (line.status === "approved") return { label: "Approved", tone: "success" as const };
   return { label: "Pending", tone: "warning" as const };
+}
+
+function isPostProofReferenceLine(line?: ProofLineMock | null) {
+  return typeof line?.lineStepNumber === "number" && line.lineStepNumber > LIFT_PROOF_REVIEW_STEP;
+}
+
+function isLiftApprovedLine(line?: ProofLineMock | null) {
+  return String(line?.liftProofStatus || "").toUpperCase() === "APPROVED";
+}
+
+function isLiftControlledApprovedLine(line?: ProofLineMock | null) {
+  return !!line && line.status === "approved" && (isPostProofReferenceLine(line) || isLiftApprovedLine(line));
 }
 
 function proofQuantity(line: ProofLineMock) {
@@ -739,12 +752,19 @@ export default function ProofApprovalPage() {
   const productionApprovalMode: "immediate" | "project_release" =
     isDemo ? ctx.productionApprovalMode : "project_release";
   const productionReleased = isDemo ? ctx.productionReleased : !!liveProject?.productionReleasedAt;
-  const canUndoApproval =
-    productionApprovalMode === "project_release" && !productionReleased;
   const liftLinesBeyondProofReview =
-    !isDemo && lines.length > 0 && lines.every((line) => typeof line.lineStepNumber === "number" && line.lineStepNumber > 7.02);
+    !isDemo && lines.length > 0 && lines.every((line) => isPostProofReferenceLine(line));
   const selectedBeyondProofReview =
-    !isDemo && typeof selected?.lineStepNumber === "number" && selected.lineStepNumber > 7.02;
+    !isDemo && isPostProofReferenceLine(selected);
+  const selectedLiftControlledApproved =
+    !isDemo && isLiftControlledApprovedLine(selected);
+  const canUndoSelectedApproval =
+    !!selected &&
+    isApproved &&
+    canEditProofs &&
+    productionApprovalMode === "project_release" &&
+    !productionReleased &&
+    !selectedLiftControlledApproved;
 
   const venueName = isDemo ? (ctx.venueName || "Penn Station") : (liveProject?.venueName || "Penn Station");
 
@@ -1058,8 +1078,10 @@ export default function ProofApprovalPage() {
       : isApproved
       ? selectedBeyondProofReview
         ? "This proof is approved and the order is now in production."
-        : canUndoApproval
-        ? "This proof is approved and remains available for reference."
+        : selectedLiftControlledApproved
+        ? "This proof is approved in Lift and remains available as a reference."
+        : canUndoSelectedApproval
+        ? "This proof is approved and awaiting production release."
         : "This proof is already approved."
       : "Review the proof image, confirm any print feedback is resolved, then approve for print or upload a revision.";
   const selectedCompactNextStep =
@@ -1068,7 +1090,7 @@ export default function ProofApprovalPage() {
       : selectedIsWaiting
       ? "Waiting for Lift to publish the proof file."
       : isApproved
-      ? "Proof decision recorded."
+      ? "Approved."
       : "Review proof, resolve feedback if any, then approve or upload a revision.";
 
   useEffect(() => {
@@ -2003,9 +2025,9 @@ export default function ProofApprovalPage() {
                       onOpen={() => openFeedbackDrawer(l)}
                       onAcknowledge={(checked) => acknowledgeFeedbackForLine(l, checked)}
                     />
-                  ) : lineIsWaiting || lineIsApproved ? (
+                  ) : lineIsWaiting ? (
                     <div className="proof-dockHint">
-                      {lineIsWaiting ? "Approval unlocks after Lift publishes the proof file." : "Proof decision recorded."}
+                      Approval unlocks after Lift publishes the proof file.
                     </div>
                   ) : null}
 
@@ -2055,10 +2077,10 @@ export default function ProofApprovalPage() {
                           </button>
                         </>
                     ) : (
-                      <div className="proof-approvedNote tone-success">
-                        Approved for print.
-                      </div>
-                    )}
+                        <div className="proof-approvedNote tone-success">
+                          {!isDemo && isPostProofReferenceLine(l) ? "Approved - order in production" : !isDemo && isLiftApprovedLine(l) ? "Approved in Lift" : "Approved for print"}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </footer>
@@ -2330,9 +2352,9 @@ export default function ProofApprovalPage() {
                         onOpen={() => setFeedbackDrawerOpen(true)}
                         onAcknowledge={(checked) => acknowledgeFeedbackForLine(selected, checked)}
                       />
-                    ) : selectedIsWaiting || isApproved ? (
+                    ) : selectedIsWaiting ? (
                       <div className="proof-dockHint">
-                        {selectedIsWaiting ? "Approval unlocks after Lift publishes the proof file." : "Proof decision recorded."}
+                        Approval unlocks after Lift publishes the proof file.
                       </div>
                     ) : null}
 
@@ -2377,10 +2399,10 @@ export default function ProofApprovalPage() {
                             </button>
                           </>
                       ) : (
-                        <div className="proof-approvedNote tone-success">
-                          Approved for print.
-                        </div>
-                      )}
+                          <div className="proof-approvedNote tone-success">
+                            {selectedBeyondProofReview ? "Approved - order in production" : selectedLiftControlledApproved ? "Approved in Lift" : "Approved for print"}
+                          </div>
+                        )}
                       </div>
                     ) : null}
                   </footer>
@@ -2600,8 +2622,8 @@ export default function ProofApprovalPage() {
               )}
               </div>
 
-              <div className={`proof-actionDock ${hasPrintFeedback && !isApproved && !selectedIsWaiting ? "has-feedback" : ""} ${requiresFeedbackAcknowledgement ? "is-locked" : ""} ${selectedUsesSimpleDecisionDock ? "is-simple" : ""}`}>
-                {!selectedUsesSimpleDecisionDock ? (
+              <div className={`proof-actionDock ${hasPrintFeedback && !isApproved && !selectedIsWaiting ? "has-feedback" : ""} ${requiresFeedbackAcknowledgement ? "is-locked" : ""} ${selectedUsesSimpleDecisionDock ? "is-simple" : ""} ${isApproved ? "is-approved" : ""}`}>
+                {!selectedUsesSimpleDecisionDock && !isApproved ? (
                 <div className="proof-dockDecision">
                   {hasPrintFeedback && !isApproved && !selectedIsWaiting ? (
                     <FeedbackGate
@@ -2611,9 +2633,9 @@ export default function ProofApprovalPage() {
                       onOpen={() => setFeedbackDrawerOpen(true)}
                       onAcknowledge={(checked) => selected && acknowledgeFeedbackForLine(selected, checked)}
                     />
-                  ) : selectedIsWaiting || isApproved ? (
+                  ) : selectedIsWaiting ? (
                     <div className="proof-dockHint">
-                      {selectedIsWaiting ? "Approval unlocks after Lift publishes the proof file." : "Proof decision recorded."}
+                      Approval unlocks after Lift publishes the proof file.
                     </div>
                   ) : null}
                 </div>
@@ -2662,7 +2684,7 @@ export default function ProofApprovalPage() {
                       </>
                     ) : (
                       <>
-                        {canUndoApproval ? (
+                        {canUndoSelectedApproval ? (
                           <>
                             <button
                               className="btn btn-ghost btn-soft btn-lg"
@@ -2674,12 +2696,12 @@ export default function ProofApprovalPage() {
                             </button>
 
                             <div className="proof-approvedNote tone-success">
-                              {selectedBeyondProofReview ? "Approved - production reference" : "Approved - workflow reference"}
+                              Approved - awaiting release
                             </div>
                           </>
                         ) : (
                           <div className="proof-approvedNote tone-success">
-                            Approved for print. Contact the project manager for changes.
+                            {selectedBeyondProofReview ? "Approved - order in production" : selectedLiftControlledApproved ? "Approved in Lift" : "Approved for print"}
                           </div>
                         )}
                       </>
