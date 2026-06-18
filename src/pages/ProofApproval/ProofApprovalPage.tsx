@@ -361,8 +361,10 @@ function toLiveProofLine(line: any): ProofLineMock {
   return {
     lineItemId: line.lineItemId,
     lineNumber: line.lineNumber,
+    lineStepNumber: line.lineStepNumber ?? null,
     liftOrderLineId: line.liftOrderLineId ?? null,
     liftProofingId: line.liftProofingId ?? null,
+    liftProofStatus: line.liftProofStatus ?? null,
     clientCreativeId: line.clientCreativeId,
     mediaVariantLabel: line.mediaVariantLabel,
     mediaName: line.mediaName,
@@ -739,6 +741,10 @@ export default function ProofApprovalPage() {
   const productionReleased = isDemo ? ctx.productionReleased : !!liveProject?.productionReleasedAt;
   const canUndoApproval =
     productionApprovalMode === "project_release" && !productionReleased;
+  const liftLinesBeyondProofReview =
+    !isDemo && lines.length > 0 && lines.every((line) => typeof line.lineStepNumber === "number" && line.lineStepNumber > 7.02);
+  const selectedBeyondProofReview =
+    !isDemo && typeof selected?.lineStepNumber === "number" && selected.lineStepNumber > 7.02;
 
   const venueName = isDemo ? (ctx.venueName || "Penn Station") : (liveProject?.venueName || "Penn Station");
 
@@ -1039,8 +1045,10 @@ export default function ProofApprovalPage() {
       ? `${counts.pending} proof${counts.pending === 1 ? "" : "s"} are ready for review and approval.`
       : counts.waiting > 0
       ? `${counts.waiting} proof${counts.waiting === 1 ? "" : "s"} are still waiting for Lift to publish the current proof file and are not ready to approve yet.`
-      : productionApprovalMode === "project_release" && !productionReleased
-      ? "All proofs are approved. The project can now move to transit approval or production release."
+      : productionReleased
+      ? "All proofs are approved and the project has been released to production."
+      : liftLinesBeyondProofReview
+      ? "All proofs are approved. Lift shows these order lines have moved beyond proof review, so this page remains available as a production reference."
       : "All proof approvals are complete.";
   const selectedNextStep =
     !selected
@@ -1048,8 +1056,10 @@ export default function ProofApprovalPage() {
       : selectedIsWaiting
       ? "This line is still processing in Lift or waiting on a regenerated proof file before it can be approved."
       : isApproved
-      ? canUndoApproval
-        ? "This proof is approved and currently held until final production release."
+      ? selectedBeyondProofReview
+        ? "This proof is approved. Lift shows this order line has moved beyond proof review, so the proof remains available here as a production reference."
+        : canUndoApproval
+        ? "This proof is approved. It remains available as a reference while the project moves through the remaining order workflow."
         : "This proof is already approved."
       : "Review the proof image, confirm any print feedback is resolved, then approve for print or upload a revision.";
   const selectedCompactNextStep =
@@ -1705,7 +1715,11 @@ export default function ProofApprovalPage() {
             <div className="proof-completeKicker">Proof Approval Complete</div>
             <div className="proof-completeTitle">All proofs have been approved.</div>
             <div className="proof-completeBody">
-              Proof approval is complete. Transit approval may already be in progress, and once both are complete the campaign can be released to production.
+              {productionReleased
+                ? "Proof approval is complete and the project has been released to production."
+                : liftLinesBeyondProofReview
+                ? "Proof approval is complete. Lift shows these order lines have moved beyond proof review, so this packet remains available as a production reference."
+                : "Proof approval is complete. This packet remains available as a reference while the project moves through the remaining order workflow."}
             </div>
           </div>
         </div>
@@ -2658,7 +2672,7 @@ export default function ProofApprovalPage() {
                             </button>
 
                             <div className="proof-approvedNote tone-success">
-                              Approved (held until production release)
+                              {selectedBeyondProofReview ? "Approved - production reference" : "Approved - workflow reference"}
                             </div>
                           </>
                         ) : (

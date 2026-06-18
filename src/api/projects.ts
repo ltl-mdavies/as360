@@ -159,6 +159,7 @@ export type ProjectAssetKind =
 export type ApiProjectProofLineResponse = {
   lineItemId: string;
   lineNumber: number;
+  lineStepNumber?: number | null;
   liftOrderLineId?: number | null;
   liftProofingId?: number | null;
   mediaVariantKey: string;
@@ -176,6 +177,7 @@ export type ApiProjectProofLineResponse = {
   clientFullUrl?: string | null;
   proofThumbUrl?: string | null;
   proofFullUrl?: string | null;
+  liftProofStatus?: string | null;
   status: "waiting" | "pending" | "approved";
   revised: boolean;
   printTeamFeedback?: string | null;

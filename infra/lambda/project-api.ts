@@ -516,6 +516,7 @@ type ProjectProofLineItem = {
   id: string;
   projectId: string;
   lineNumber: number;
+  lineStepNumber?: number | null;
   liftOrderLineId?: number | null;
   // Lift's proof approval API uses ATTACHMENT_ID as the proofing id.
   liftProofingId?: number | null;
@@ -3452,6 +3453,7 @@ export function mergeProjectProofLinesFromLift(args: {
       const nextProof: ProjectProofLineItem = {
         ...existing,
         lineNumber,
+        lineStepNumber: lineStepNumber ?? existing.lineStepNumber ?? null,
         liftOrderLineId: rawOrderLineId ?? existing.liftOrderLineId ?? null,
         unitNumber: rawUnitNumber || existing.unitNumber || null,
         quantity: rawQuantity ?? existing.quantity ?? null,
@@ -3776,6 +3778,7 @@ function buildLiftProofLineShell(args: {
   preserveExistingId?: boolean;
 }) {
   const lineNumber = optionalNumber(args.rawLine.LINE_NUMBER) || args.existing?.lineNumber || 0;
+  const lineStepNumber = optionalNumber(args.rawLine.LINE_STEP_NUMBER) ?? optionalNumber(args.rawLine.STEP_NUMBER) ?? args.existing?.lineStepNumber ?? null;
   const orderLineId = optionalNumber(args.rawLine.ORDER_LINE_ID) ?? args.existing?.liftOrderLineId ?? null;
   const productName = optionalString(args.rawLine.PRODUCT_NAME) || args.existing?.mediaVariantLabel || `Lift line ${lineNumber}`;
   const printH = optionalNumber(args.rawLine.PRINT_H_IN) || 0;
@@ -3797,6 +3800,7 @@ function buildLiftProofLineShell(args: {
     id: args.preserveExistingId === false ? makeId("proof") : args.existing?.id || makeId("proof"),
     projectId: args.projectId,
     lineNumber,
+    lineStepNumber,
     liftOrderLineId: orderLineId,
     liftProofingId: optionalNumber(proofRecord?.ATTACHMENT_ID) ?? args.existing?.liftProofingId ?? null,
     mediaVariantKey,
@@ -7978,6 +7982,7 @@ async function toProjectProofLineResponse(
   return {
     lineItemId: proof.id,
     lineNumber: proof.lineNumber,
+    lineStepNumber: proof.lineStepNumber ?? null,
     liftOrderLineId: proof.liftOrderLineId ?? null,
     liftProofingId: proof.liftProofingId ?? null,
     mediaVariantKey: proof.mediaVariantKey,
@@ -7995,6 +8000,7 @@ async function toProjectProofLineResponse(
     clientFullUrl,
     proofThumbUrl,
     proofFullUrl,
+    liftProofStatus: proof.liftProofStatus || null,
     status: proof.status,
     revised: proof.revised,
     printTeamFeedback: proof.printTeamFeedback || null,

@@ -771,6 +771,7 @@ runCase("post-proof Lift steps keep proof assets visible as read-only references
 
   assert.equal(merged.issues.length, 0);
   assert.equal(merged.updatedProofs[0].status, "approved");
+  assert.equal(merged.updatedProofs[0].lineStepNumber, 8.01);
   assert.equal(merged.updatedProofs[0].liftProofThumbUrl, "https://lift.example/reference-preview");
   assert.equal(merged.updatedProofs[0].liftProofFullUrl, "https://lift.example/reference-proof");
   assert.deepEqual(merged.updatedProofs[0].locations, ["CW-001"]);
@@ -837,6 +838,7 @@ runCase("post-proof Lift steps reuse latest historical proof when current Lift r
 
   assert.equal(merged.issues.length, 0);
   assert.equal(merged.updatedProofs[0].status, "approved");
+  assert.equal(merged.updatedProofs[0].lineStepNumber, 8.01);
   assert.equal(merged.updatedProofs[0].liftProofingId, 26195439);
   assert.equal(merged.updatedProofs[0].liftProofThumbUrl, "https://lift.example/thumbs/26195439");
   assert.equal(merged.updatedProofs[0].liftProofFullUrl, "https://lift.example/originals/26195439");

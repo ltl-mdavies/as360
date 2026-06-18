@@ -5,8 +5,10 @@ export type ProofUIStatus = "waiting" | "pending" | "approved";
 export type ProofLineMock = {
   lineItemId: string; // stable id (use Lift ORDER_LINE_ID later)
   lineNumber: number;
+  lineStepNumber?: number | null;
   liftOrderLineId?: number | null;
   liftProofingId?: number | null;
+  liftProofStatus?: string | null;
   clientCreativeId?: string;
 
   mediaVariantLabel?: string;
