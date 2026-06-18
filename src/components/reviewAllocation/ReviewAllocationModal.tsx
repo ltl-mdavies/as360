@@ -765,9 +765,82 @@ function AllocationDetailsTab({
     assetType: "image" | "document";
   }) => void;
 }) {
+  const [query, setQuery] = useState("");
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const totalCreativeRows = useMemo(
+    () => sections.reduce((sum, section) => sum + section.creatives.length, 0),
+    [sections]
+  );
+
+  const filteredSections = useMemo(() => {
+    if (!normalizedQuery) return sections;
+
+    return sections
+      .map((section) => {
+        const sectionMatches = [
+          section.label,
+          section.variantKey,
+          `${section.assignedInventoryForVariant}/${section.totalInventoryForVariant}`,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery);
+
+        if (sectionMatches) return section;
+
+        const matchingCreatives = section.creatives.filter((creative) => {
+          const haystack = [
+            creative.filename,
+            creative.fileMeta,
+            creative.mediaVariantKey,
+            creative.assignedIds.join(" "),
+            String(creative.assignedCount),
+          ]
+            .join(" ")
+            .toLowerCase();
+
+          return haystack.includes(normalizedQuery);
+        });
+
+        if (!matchingCreatives.length && !section.hasNoCreatives) return null;
+        if (!matchingCreatives.length) return null;
+
+        return {
+          ...section,
+          hasNoCreatives: false,
+          creatives: matchingCreatives,
+        };
+      })
+      .filter((section): section is (typeof sections)[number] => Boolean(section));
+  }, [normalizedQuery, sections]);
+
+  const visibleCreativeRows = useMemo(
+    () => filteredSections.reduce((sum, section) => sum + section.creatives.length, 0),
+    [filteredSections]
+  );
+
   return (
     <div className="review-section">
-      {sections.map((sec) => (
+      <div className="review-detailsToolbar">
+        <div className="invtab-search review-detailsSearch">
+          <span className="invtab-searchIcon">⌕</span>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search files or inventory IDs..."
+          />
+        </div>
+        <div className="review-detailsCount">
+          {normalizedQuery ? `${visibleCreativeRows} of ${totalCreativeRows} files shown` : `${totalCreativeRows} files`}
+        </div>
+      </div>
+
+      {filteredSections.length === 0 ? (
+        <div className="review-emptyRow review-emptyRow-large">
+          No allocation details match "{query.trim()}". Try a creative filename, media type, or inventory ID.
+        </div>
+      ) : filteredSections.map((sec) => (
         <div key={sec.variantKey} className="review-variant">
           <div className="review-variant-head">
             <div className="review-variant-title">{sec.label}</div>
