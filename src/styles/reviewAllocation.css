@@ -12,8 +12,8 @@
 }
 
 .review-modal{
-  width: min(1100px, calc(100vw - 28px));
-  height: min(820px, calc(100dvh - 28px));
+  width: min(1680px, calc(100vw - 28px));
+  height: min(980px, calc(100dvh - 28px));
   max-height: calc(100dvh - 28px);
   background: var(--panel);
   border: 1px solid var(--stroke2);
