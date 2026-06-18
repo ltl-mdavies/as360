@@ -325,6 +325,19 @@ html[data-theme="dark"] .hub-stepper-wrap2{
   font-weight: 840;
 }
 
+html[data-theme="dark"] .hub-step2-pairJoin{
+  background: color-mix(in srgb, var(--surface-raised) 88%, white 2%);
+  border-color: var(--stroke-strong);
+  color: color-mix(in srgb, var(--muted) 78%, white 16%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+html[data-theme="dark"] .hub-step2-pair.complete .hub-step2-pairJoin{
+  background: color-mix(in srgb, var(--brand-green) 16%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--brand-green) 44%, var(--stroke));
+  color: color-mix(in srgb, var(--brand-green) 68%, white 22%);
+}
+
 /* ---------------------------
    Section rhythm
    FIX: consistent spacing between Stepper and Share Links
