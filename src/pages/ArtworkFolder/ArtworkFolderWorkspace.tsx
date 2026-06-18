@@ -84,6 +84,7 @@ export default function ArtworkFolderWorkspace({
   const [dragVariantKey, setDragVariantKey] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{
     src: string;
+    fallbackSrc?: string;
     title?: string;
     subtitle?: string;
     openUrl?: string;
@@ -362,7 +363,8 @@ export default function ArtworkFolderWorkspace({
                           type="button"
                           onClick={() =>
                             setLightbox({
-                              src: (creative as any).thumbUrl || (creative as any).fullUrl,
+                              src: (creative as any).fullUrl || (creative as any).thumbUrl,
+                              fallbackSrc: (creative as any).thumbUrl,
                               title: creative.filename,
                               subtitle: creative.fileMeta,
                               openUrl: (creative as any).fullUrl || (creative as any).thumbUrl,
@@ -441,6 +443,7 @@ export default function ArtworkFolderWorkspace({
       <Lightbox
         isOpen={!!lightbox}
         src={lightbox?.src || ""}
+        fallbackSrc={lightbox?.fallbackSrc}
         title={lightbox?.title}
         subtitle={lightbox?.subtitle}
         openInNewTabUrl={lightbox?.openUrl}

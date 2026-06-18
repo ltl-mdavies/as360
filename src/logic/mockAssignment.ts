@@ -37,7 +37,13 @@ export type InventoryItem = {
   locationName?: string;
   mapId: string; // which map layer
   mediaVariantKey: string;
+  mediaType?: string;
   unitNumber: string; // Lift ProductSKU / Unit#
+  trimHeight?: number | null;
+  trimWidth?: number | null;
+  safeHeight?: number | null;
+  safeWidth?: number | null;
+  notes?: string;
   assignedCreativeId?: string | null;
   assignmentUpdatedAt?: string | null;
   isActive?: boolean;

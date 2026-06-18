@@ -38,13 +38,15 @@
 .documents-stat {
   padding: 16px 18px;
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--panel) 94%, white 6%);
+  border-left: 3px solid color-mix(in srgb, var(--brand-green) 68%, transparent);
 }
 
 .documents-statValue {
   font-size: 28px;
-  font-weight: 800;
+  font-weight: 700;
+  font-family: var(--font-brand);
 }
 
 .documents-statLabel,
@@ -84,8 +86,9 @@
   margin-top: 4px;
   color: var(--text);
   font-size: 24px;
-  font-weight: 850;
-  letter-spacing: -0.03em;
+  font-family: var(--font-brand);
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .documents-externalButton {
@@ -107,7 +110,7 @@
   width: 100%;
   padding: 14px;
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--panel) 96%, white 4%);
   text-align: left;
 }
@@ -117,7 +120,7 @@
 }
 
 .documents-row:hover {
-  border-color: color-mix(in srgb, var(--brand) 28%, var(--line) 72%);
+  border-color: color-mix(in srgb, var(--brand-green) 28%, var(--line) 72%);
   transform: translateY(-1px);
 }
 
@@ -152,7 +155,7 @@
 }
 
 .documents-fileName {
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.2;
   word-break: break-word;
 }

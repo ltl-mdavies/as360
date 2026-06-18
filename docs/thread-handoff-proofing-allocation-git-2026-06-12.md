@@ -12,6 +12,7 @@ The next thread should begin by reading:
 
 - `docs/thread-handoff-proof-approval-mobile-api-2026-05-26.md`
 - `docs/thread-handoff-proofing-allocation-git-2026-06-12.md`
+- `docs/thread-handoff-branding-mobile-realtime-proof-sync-2026-06-17.md`
 
 ## Current Git State
 
@@ -359,6 +360,7 @@ We are continuing Adspace360 development in /Users/marcusdavies/Projects/adspace
 Please read:
 - docs/thread-handoff-proof-approval-mobile-api-2026-05-26.md
 - docs/thread-handoff-proofing-allocation-git-2026-06-12.md
+- docs/thread-handoff-branding-mobile-realtime-proof-sync-2026-06-17.md
 
 Git is now recovered and pushed to git@github.com:ltl-mdavies/as360.git on main.
 

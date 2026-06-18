@@ -14,8 +14,10 @@ import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambdaNode from "aws-cdk-lib/aws-lambda-nodejs";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import { Construct } from "constructs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -169,6 +171,33 @@ export class Adspace360FoundationStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
+    const presenceTable = new dynamodb.Table(this, "WorkspacePresenceTable", {
+      partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "expiresAt",
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    presenceTable.addGlobalSecondaryIndex({
+      indexName: "byChannel",
+      partitionKey: { name: "gsi1pk", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "gsi1sk", type: dynamodb.AttributeType.STRING },
+    });
+
+    const presenceBroadcastDlq = new sqs.Queue(this, "WorkspaceBroadcastDeadLetterQueue", {
+      retentionPeriod: Duration.days(14),
+    });
+
+    const presenceBroadcastQueue = new sqs.Queue(this, "WorkspaceBroadcastQueue", {
+      visibilityTimeout: Duration.seconds(20),
+      retentionPeriod: Duration.days(1),
+      deadLetterQueue: {
+        queue: presenceBroadcastDlq,
+        maxReceiveCount: 3,
+      },
+    });
+
     const userPool = new cognito.UserPool(this, "AdminUserPool", {
       selfSignUpEnabled: false,
       signInAliases: { email: true },
@@ -255,6 +284,81 @@ export class Adspace360FoundationStack extends Stack {
       integration: new integrations.HttpLambdaIntegration("ShareUploadUrlIntegration", uploadUrlFn),
     });
 
+    const presenceFn = new lambdaNode.NodejsFunction(this, "WorkspacePresenceFunction", {
+      entry: lambdaEntry("workspace-presence.ts"),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
+      bundling: { minify: true, target: "node20", sourceMap: true },
+      timeout: Duration.seconds(10),
+      memorySize: 256,
+      environment: {
+        CORE_TABLE_NAME: coreTable.tableName,
+        PRESENCE_TABLE_NAME: presenceTable.tableName,
+        WEBSOCKET_MANAGEMENT_ENDPOINT: "",
+      },
+    });
+
+    const webSocketApi = new apigwv2.WebSocketApi(this, "WorkspaceRealtimeApi", {
+      apiName: `adspace360-workspace-realtime-${stageName}`,
+      routeSelectionExpression: "$request.body.type",
+    });
+
+    const presenceIntegration = new integrations.WebSocketLambdaIntegration("WorkspacePresenceIntegration", presenceFn);
+    webSocketApi.addRoute("$connect", { integration: presenceIntegration });
+    webSocketApi.addRoute("$disconnect", { integration: presenceIntegration });
+    webSocketApi.addRoute("$default", { integration: presenceIntegration });
+
+    const webSocketStage = new apigwv2.WebSocketStage(this, "WorkspaceRealtimeStage", {
+      webSocketApi,
+      stageName,
+      autoDeploy: true,
+    });
+
+    presenceFn.addEnvironment("WEBSOCKET_MANAGEMENT_ENDPOINT", webSocketStage.url);
+    coreTable.grantReadData(presenceFn);
+    presenceTable.grantReadWriteData(presenceFn);
+    webSocketApi.grantManageConnections(presenceFn);
+
+    const presenceBroadcastFn = new lambdaNode.NodejsFunction(this, "WorkspaceBroadcastFunction", {
+      entry: lambdaEntry("workspace-broadcast.ts"),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
+      bundling: { minify: true, target: "node20", sourceMap: true },
+      timeout: Duration.seconds(15),
+      memorySize: 256,
+      environment: {
+        PRESENCE_TABLE_NAME: presenceTable.tableName,
+        WEBSOCKET_MANAGEMENT_ENDPOINT: webSocketStage.url,
+      },
+    });
+
+    presenceTable.grantReadWriteData(presenceBroadcastFn);
+    webSocketApi.grantManageConnections(presenceBroadcastFn);
+    presenceBroadcastFn.addEventSource(new lambdaEventSources.SqsEventSource(presenceBroadcastQueue, {
+      batchSize: 10,
+      maxBatchingWindow: Duration.seconds(1),
+      reportBatchItemFailures: true,
+    }));
+
+    const realtimeConfigFn = new lambdaNode.NodejsFunction(this, "RealtimeConfigFunction", {
+      entry: lambdaEntry("realtime-config.ts"),
+      runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
+      bundling: { minify: true, target: "node20", sourceMap: true },
+      environment: {
+        PRESENCE_WS_URL: webSocketStage.url,
+        APP_ORIGIN: appOrigin,
+      },
+    });
+
+    for (const path of ["/api/realtime/config", "/api/share/realtime/config"]) {
+      api.addRoutes({
+        path,
+        methods: [apigwv2.HttpMethod.GET],
+        integration: new integrations.HttpLambdaIntegration(`RealtimeConfig${path}`.replace(/[^A-Za-z0-9]/g, ""), realtimeConfigFn),
+      });
+    }
+
     const venueApiFn = new lambdaNode.NodejsFunction(this, "VenueApiFunction", {
       entry: lambdaEntry("venue-api.ts"),
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -284,6 +388,9 @@ export class Adspace360FoundationStack extends Stack {
       { path: "/api/markets/{marketId}", method: apigwv2.HttpMethod.PATCH },
       { path: "/api/venues", method: apigwv2.HttpMethod.POST },
       { path: "/api/venues/{venueId}", method: apigwv2.HttpMethod.PATCH },
+      { path: "/api/venues/{venueId}/inventory-presets", method: apigwv2.HttpMethod.POST },
+      { path: "/api/venues/{venueId}/inventory-presets/{presetId}", method: apigwv2.HttpMethod.PATCH },
+      { path: "/api/venues/{venueId}/inventory-presets/{presetId}", method: apigwv2.HttpMethod.DELETE },
       { path: "/api/venues/{venueId}/maps", method: apigwv2.HttpMethod.POST },
       { path: "/api/venues/{venueId}/maps/{mapId}", method: apigwv2.HttpMethod.PATCH },
       { path: "/api/venues/{venueId}/maps/{mapId}", method: apigwv2.HttpMethod.DELETE },
@@ -317,6 +424,10 @@ export class Adspace360FoundationStack extends Stack {
         VENUE_ASSETS_BUCKET_NAME: venueAssetsBucket.bucketName,
         GENERATED_DOCS_BUCKET_NAME: generatedDocsBucket.bucketName,
         SHORT_LINKS_TABLE_NAME: shortLinksTable.tableName,
+        PRESENCE_TABLE_NAME: presenceTable.tableName,
+        PRESENCE_WS_URL: webSocketStage.url,
+        PRESENCE_WS_MANAGEMENT_ENDPOINT: webSocketStage.url,
+        PRESENCE_BROADCAST_QUEUE_URL: presenceBroadcastQueue.queueUrl,
         APP_BASE_URL: appOrigin,
         SHORT_BASE_URL: `https://${shortDomainName}`,
         NOTIFICATIONS_FROM_EMAIL: notificationsFromEmail,
@@ -329,6 +440,9 @@ export class Adspace360FoundationStack extends Stack {
     venueAssetsBucket.grantRead(projectApiFn);
     generatedDocsBucket.grantReadWrite(projectApiFn);
     shortLinksTable.grantReadWriteData(projectApiFn);
+    presenceTable.grantReadWriteData(projectApiFn);
+    presenceBroadcastQueue.grantSendMessages(projectApiFn);
+    webSocketApi.grantManageConnections(projectApiFn);
     projectApiFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ses:SendEmail", "ses:SendRawEmail"],
@@ -466,6 +580,7 @@ export class Adspace360FoundationStack extends Stack {
     new cdk.CfnOutput(this, "ShortLinkDomain", { value: `https://${shortDomainName}` });
     new cdk.CfnOutput(this, "ApiEndpoint", { value: api.apiEndpoint });
     new cdk.CfnOutput(this, "ShortLinkRedirectEndpoint", { value: redirectApi.apiEndpoint });
+    new cdk.CfnOutput(this, "WorkspaceRealtimeEndpoint", { value: webSocketStage.url });
     new cdk.CfnOutput(this, "FrontendBucketName", { value: appBucket.bucketName });
     new cdk.CfnOutput(this, "VenueAssetsBucketName", { value: venueAssetsBucket.bucketName });
     new cdk.CfnOutput(this, "ProjectAssetsBucketName", { value: projectAssetsBucket.bucketName });
@@ -474,6 +589,8 @@ export class Adspace360FoundationStack extends Stack {
     new cdk.CfnOutput(this, "CoreTableName", { value: coreTable.tableName });
     new cdk.CfnOutput(this, "AuditTableName", { value: auditTable.tableName });
     new cdk.CfnOutput(this, "ShortLinksTableName", { value: shortLinksTable.tableName });
+    new cdk.CfnOutput(this, "WorkspacePresenceTableName", { value: presenceTable.tableName });
+    new cdk.CfnOutput(this, "WorkspaceBroadcastQueueName", { value: presenceBroadcastQueue.queueName });
     new cdk.CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
     new cdk.CfnOutput(this, "UserPoolClientId", { value: userPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, "GoDaddyAppCnameName", { value: appDomainName });

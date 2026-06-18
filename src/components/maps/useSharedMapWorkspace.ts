@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
 import "./sharedMapWorkspace.css";
 
@@ -34,6 +35,63 @@ export function useSharedMapWorkspace({
   const [isPanning, setIsPanning] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
   const [mapError, setMapError] = useState(false);
+  const [mapFrame, setMapFrame] = useState({ left: 0, top: 0, width: 0, height: 0 });
+
+  const updateMapFrame = useCallback(() => {
+    const viewport = viewportRef.current;
+    const image = imageRef.current;
+    if (!viewport || !image) return false;
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const viewportWidth = viewportRect.width || viewport.clientWidth;
+    const viewportHeight = viewportRect.height || viewport.clientHeight;
+    const naturalWidth = image.naturalWidth || image.clientWidth;
+    const naturalHeight = image.naturalHeight || image.clientHeight;
+
+    if (viewportWidth < 8 || viewportHeight < 8 || naturalWidth < 8 || naturalHeight < 8) {
+      return false;
+    }
+
+    const imageAspect = naturalWidth / naturalHeight;
+    const viewportAspect = viewportWidth / viewportHeight;
+    const width = imageAspect > viewportAspect ? viewportWidth : viewportHeight * imageAspect;
+    const height = imageAspect > viewportAspect ? viewportWidth / imageAspect : viewportHeight;
+    const next = {
+      left: (viewportWidth - width) / 2,
+      top: (viewportHeight - height) / 2,
+      width,
+      height,
+    };
+
+    setMapFrame((current) => {
+      const changed =
+        Math.abs(current.left - next.left) > 0.5 ||
+        Math.abs(current.top - next.top) > 0.5 ||
+        Math.abs(current.width - next.width) > 0.5 ||
+        Math.abs(current.height - next.height) > 0.5;
+      return changed ? next : current;
+    });
+
+    return true;
+  }, []);
+
+  const mapFrameStyle = useMemo<CSSProperties>(
+    () =>
+      mapFrame.width > 0 && mapFrame.height > 0
+        ? {
+            left: `${mapFrame.left}px`,
+            top: `${mapFrame.top}px`,
+            width: `${mapFrame.width}px`,
+            height: `${mapFrame.height}px`,
+          }
+        : {
+            left: 0,
+            top: 0,
+            width: "100%",
+            height: "100%",
+          },
+    [mapFrame.height, mapFrame.left, mapFrame.top, mapFrame.width]
+  );
 
   const canUseCurrentImage = useCallback(() => {
     const image = imageRef.current;
@@ -50,27 +108,14 @@ export function useSharedMapWorkspace({
   }, []);
 
   const fitMapToView = useCallback(() => {
-    const viewport = viewportRef.current;
-    const image = imageRef.current;
-    if (!viewport || !image) return false;
-
-    const viewportRect = viewport.getBoundingClientRect();
-    const imageRect = image.getBoundingClientRect();
-    const viewportWidth = viewportRect.width || viewport.clientWidth;
-    const viewportHeight = viewportRect.height || viewport.clientHeight;
-    const imageWidth = imageRect.width || image.clientWidth;
-    const imageHeight = imageRect.height || image.clientHeight;
-
-    if (viewportWidth < 8 || viewportHeight < 8 || imageWidth < 8 || imageHeight < 8) {
+    if (!updateMapFrame()) {
       return false;
     }
 
-    const fit = Math.min(viewportWidth / imageWidth, viewportHeight / imageHeight, 1);
-
-    setZoom(clampMapZoom(fit, minZoom, maxZoom));
+    setZoom(clampMapZoom(1, minZoom, maxZoom));
     setPan({ x: 0, y: 0 });
     return true;
-  }, [maxZoom, minZoom]);
+  }, [maxZoom, minZoom, updateMapFrame]);
 
   const finalizeLoadedMap = useCallback(() => {
     if (!enabled || !mapSrc) return false;
@@ -95,6 +140,7 @@ export function useSharedMapWorkspace({
       setMapError(false);
       setZoom(1);
       setPan({ x: 0, y: 0 });
+      setMapFrame({ left: 0, top: 0, width: 0, height: 0 });
       return;
     }
 
@@ -124,6 +170,7 @@ export function useSharedMapWorkspace({
     let observer: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined" && viewportRef.current) {
       observer = new ResizeObserver(() => {
+        updateMapFrame();
         tryFinalize();
       });
       observer.observe(viewportRef.current);
@@ -135,7 +182,7 @@ export function useSharedMapWorkspace({
       window.cancelAnimationFrame(raf);
       observer?.disconnect();
     };
-  }, [activeKey, enabled, finalizeLoadedMap, fitDelayMs, mapSrc]);
+  }, [activeKey, enabled, finalizeLoadedMap, fitDelayMs, mapSrc, updateMapFrame]);
 
   const onImageLoad = useCallback(() => {
     if (finalizeLoadedMap()) return;
@@ -201,23 +248,21 @@ export function useSharedMapWorkspace({
   }
 
   function clientPointToNormalized(clientX: number, clientY: number) {
-    const viewport = viewportRef.current;
-    if (!viewport) return null;
-    const rect = viewport.getBoundingClientRect();
+    const image = imageRef.current;
+    if (!image) return null;
+    const rect = image.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
 
-    const localX = (clientX - rect.left - pan.x) / zoom;
-    const localY = (clientY - rect.top - pan.y) / zoom;
-
     return {
-      x: clampMapZoom(localX / rect.width, 0.02, 0.98),
-      y: clampMapZoom(localY / rect.height, 0.02, 0.98),
+      x: clampMapZoom((clientX - rect.left) / rect.width, 0.02, 0.98),
+      y: clampMapZoom((clientY - rect.top) / rect.height, 0.02, 0.98),
     };
   }
 
   return {
     viewportRef,
     imageRef,
+    mapFrameStyle,
     zoom,
     pan,
     isPanning,

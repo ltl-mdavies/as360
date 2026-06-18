@@ -366,14 +366,13 @@ export default function AllocationOverridePage() {
                 >
                   <div
                     className="alloc-override-thumb"
-                    style={
-                      assetPreviewUrl(row.asset)
-                        ? { backgroundImage: `url("${assetPreviewUrl(row.asset).replace(/"/g, "%22")}")` }
-                        : undefined
-                    }
                     aria-label={row.asset.filename || "Artwork preview"}
                   >
-                    {!assetPreviewUrl(row.asset) ? <span>Art</span> : null}
+                    {assetPreviewUrl(row.asset) ? (
+                      <img className="alloc-override-thumbImg" src={assetPreviewUrl(row.asset)} alt="" loading="lazy" />
+                    ) : (
+                      <span>Art</span>
+                    )}
                   </div>
                   <div className="alloc-override-rowMain">
                     <div className="alloc-override-rowTop">

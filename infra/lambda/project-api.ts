@@ -5,7 +5,9 @@ import {
   QueryCommand,
   ScanCommand,
 } from "@aws-sdk/client-dynamodb";
+import { ApiGatewayManagementApiClient, GoneException, PostToConnectionCommand } from "@aws-sdk/client-apigatewaymanagementapi";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -239,8 +241,27 @@ type ProjectScopeItem = {
   id: string;
   projectId: string;
   includedIds: string[];
+  sourceType?: "full_venue" | "venue_preset" | "manual";
+  presetId?: string | null;
+  presetName?: string | null;
+  appliedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type VenueInventoryPresetItem = {
+  entityType: "VenueInventoryPreset";
+  id: string;
+  venueId: string;
+  name: string;
+  description?: string;
+  includedIds: string[];
+  knownInventoryIds?: string[];
+  status: "active" | "archived";
+  createdAt: string;
+  createdByName: string;
+  updatedAt: string;
+  updatedByName: string;
 };
 
 type ProjectAssignmentItem = {
@@ -656,6 +677,7 @@ type ProjectListItem = {
 
 const client = new DynamoDBClient({});
 const s3 = new S3Client({});
+const sqs = new SQSClient({});
 const CORE_TABLE_NAME = requiredEnv("CORE_TABLE_NAME");
 const AUDIT_TABLE_NAME = requiredEnv("AUDIT_TABLE_NAME");
 const PROJECT_ASSETS_BUCKET_NAME = requiredEnv("PROJECT_ASSETS_BUCKET_NAME");
@@ -665,6 +687,13 @@ const SHORT_LINKS_TABLE_NAME = process.env.SHORT_LINKS_TABLE_NAME || "";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://app.adspace360.com";
 const SHORT_BASE_URL = process.env.SHORT_BASE_URL || "https://go.adspace360.com";
 const NOTIFICATIONS_FROM_EMAIL = process.env.NOTIFICATIONS_FROM_EMAIL || "noreply@adspace360.com";
+const PRESENCE_TABLE_NAME = process.env.PRESENCE_TABLE_NAME || "";
+const PRESENCE_WS_URL = process.env.PRESENCE_WS_URL || "";
+const PRESENCE_WS_MANAGEMENT_ENDPOINT = process.env.PRESENCE_WS_MANAGEMENT_ENDPOINT?.replace(/^wss:/, "https:") || "";
+const PRESENCE_BROADCAST_QUEUE_URL = process.env.PRESENCE_BROADCAST_QUEUE_URL || "";
+const presenceManagement = PRESENCE_WS_MANAGEMENT_ENDPOINT
+  ? new ApiGatewayManagementApiClient({ endpoint: PRESENCE_WS_MANAGEMENT_ENDPOINT })
+  : null;
 const INTERNAL_SANDBOX_CUSTOMER_ID = "ltl_demo";
 const INTERNAL_SANDBOX_CUSTOMER_NAME = "LTL Demo";
 const INTERNAL_SANDBOX_LIFT_CUSTOMER_ID = "1249";
@@ -699,6 +728,8 @@ export async function handler(event: ApiEvent) {
     if (method === "OPTIONS") return noContent();
 
     switch (routeKey) {
+      case "GET /api/share/realtime/config":
+        return ok(getRealtimeConfig());
       case "GET /api/share-links/resolve":
         return ok(await resolveShareLink(event));
       case "POST /api/share-links/identify":
@@ -755,6 +786,8 @@ export async function handler(event: ApiEvent) {
     const auth = await requireUserAuthContext(event);
 
     switch (routeKey) {
+      case "GET /api/realtime/config":
+        return ok(getRealtimeConfig());
       case "GET /api/projects":
         return ok({ projects: await listProjects(event.queryStringParameters?.customerId, auth) });
       case "GET /api/projects/{projectId}":
@@ -969,6 +1002,16 @@ function emptyProjectSummaryChildCollections(): ProjectSummaryChildCollections {
   };
 }
 
+function toProjectScopeResponse(scope: ProjectScopeItem | null | undefined) {
+  return {
+    includedIds: scope?.includedIds || [],
+    sourceType: scope?.sourceType || "manual",
+    presetId: scope?.presetId || null,
+    presetName: scope?.presetName || null,
+    appliedAt: scope?.appliedAt || null,
+  };
+}
+
 async function loadProjectSummaryChildCollections(projectIds: string[]) {
   const entries = await Promise.all(
     projectIds.map(async (projectId) => {
@@ -995,9 +1038,7 @@ async function getProjectDetail(projectId: string, auth: AuthContext) {
   });
   const response = {
     project: projectSummary,
-    scope: {
-      includedIds: bundle.scope?.includedIds || [],
-    },
+    scope: toProjectScopeResponse(bundle.scope),
   };
   logPerf("getProjectDetail", startedAt, {
     projectId,
@@ -1049,9 +1090,7 @@ async function getProjectWorkspace(projectId: string, auth: AuthContext) {
       documentSourceMode: normalizeDocumentSourceMode(venue?.documentSourceMode, venue?.documentLibraryUrl),
       documentLibraryUrl: venue?.documentLibraryUrl || "",
     },
-    scope: {
-      includedIds: scope?.includedIds || [],
-    },
+    scope: toProjectScopeResponse(scope),
     workspace: {
       maps: buildWorkspaceMaps(maps, workspaceInventory),
       variants: buildWorkspaceVariants(variants, scopedInventory),
@@ -1072,6 +1111,12 @@ async function getProjectWorkspace(projectId: string, auth: AuthContext) {
   });
   projectWorkspaceResponseCache.set(cacheKey, makeLocalCacheEntry(response, SHORT_CACHE_TTL_MS));
   return response;
+}
+
+function getRealtimeConfig() {
+  return {
+    websocketUrl: PRESENCE_WS_URL,
+  };
 }
 
 async function getProjectAllocationOverrideResponse(projectId: string, auth: AuthContext) {
@@ -1117,7 +1162,7 @@ async function getProjectAllocationOverrideResponse(projectId: string, auth: Aut
       documentSourceMode: normalizeDocumentSourceMode(venue?.documentSourceMode, venue?.documentLibraryUrl),
       documentLibraryUrl: venue?.documentLibraryUrl || "",
     },
-    scope: { includedIds: bundle.scope?.includedIds || [] },
+    scope: toProjectScopeResponse(bundle.scope),
     workspace: {
       maps: buildWorkspaceMaps(maps, buildWorkspaceInventory(venueInventory, assignmentMap, buildAssignmentStateMap(bundle.assignments))),
       variants: buildWorkspaceVariants(variants, venueInventory),
@@ -1938,9 +1983,8 @@ async function createProject(payload: Record<string, unknown>, auth: AuthContext
     throw new HttpError(400, `Venue ${venueId} does not belong to the selected customer and market`);
   }
 
-  const includedIds = (await listInventoryForVenue(venueId))
-    .filter((item) => item.isActive)
-    .map((item) => item.id);
+  const presetScope = await resolveVenuePresetScope(venueId, optionalString(payload.inventoryPresetId));
+  const includedIds = presetScope.includedIds;
 
   const now = isoNow();
   const projectId = makeId("proj");
@@ -1982,6 +2026,10 @@ async function createProject(payload: Record<string, unknown>, auth: AuthContext
     id: projectId,
     projectId,
     includedIds,
+    sourceType: presetScope.sourceType,
+    presetId: presetScope.presetId,
+    presetName: presetScope.presetName,
+    appliedAt: now,
     createdAt: now,
     updatedAt: now,
   };
@@ -1996,11 +2044,13 @@ async function createProject(payload: Record<string, unknown>, auth: AuthContext
     projectMode,
     sourceCustomerId: project.sourceCustomerId || null,
     includedCount: includedIds.length,
+    scopeSourceType: presetScope.sourceType,
+    inventoryPresetId: presetScope.presetId,
   });
 
   return {
     project: await toProjectListItem(project, scope),
-    scope: { includedIds },
+    scope: toProjectScopeResponse(scope),
   };
 }
 
@@ -2066,6 +2116,8 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
         )
       )
     : null;
+  const hasPresetRequest = hasOwn(payload, "inventoryPresetId");
+  let shouldPruneAssignments = false;
 
   const requestedVenueId = optionalString(payload.venueId);
   const isVenueChange = !!requestedVenueId && requestedVenueId !== existing.venueId;
@@ -2090,9 +2142,7 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
     const market = await findMarketById(venue.marketId);
     if (!market) throw new HttpError(404, `Market ${venue.marketId} not found`);
 
-    const includedIds = (await listInventoryForVenue(venue.id))
-      .filter((item) => item.isActive)
-      .map((item) => item.id);
+    const presetScope = await resolveVenuePresetScope(venue.id, optionalString(payload.inventoryPresetId));
 
     nextProject = {
       ...nextProject,
@@ -2106,12 +2156,33 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
 
     nextScope = {
       ...nextScope,
-      includedIds,
+      includedIds: presetScope.includedIds,
+      sourceType: presetScope.sourceType,
+      presetId: presetScope.presetId,
+      presetName: presetScope.presetName,
+      appliedAt: nextProject.updatedAt,
       updatedAt: nextProject.updatedAt,
     };
+    shouldPruneAssignments = true;
   }
 
-  if (requestedIncludedIds) {
+  if (!isVenueChange && hasPresetRequest) {
+    if (existing.liftOrderId) {
+      throw new HttpError(400, "Included inventory cannot be edited after the order has been submitted.");
+    }
+
+    const presetScope = await resolveVenuePresetScope(nextProject.venueId, optionalString(payload.inventoryPresetId));
+    nextScope = {
+      ...nextScope,
+      includedIds: presetScope.includedIds,
+      sourceType: presetScope.sourceType,
+      presetId: presetScope.presetId,
+      presetName: presetScope.presetName,
+      appliedAt: nextProject.updatedAt,
+      updatedAt: nextProject.updatedAt,
+    };
+    shouldPruneAssignments = true;
+  } else if (requestedIncludedIds) {
     if (existing.liftOrderId) {
       throw new HttpError(400, "Included inventory cannot be edited after the order has been submitted.");
     }
@@ -2125,12 +2196,20 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
     nextScope = {
       ...nextScope,
       includedIds: requestedIncludedIds,
+      sourceType: "manual",
+      presetId: null,
+      presetName: "Custom Scope",
+      appliedAt: nextProject.updatedAt,
       updatedAt: nextProject.updatedAt,
     };
+    shouldPruneAssignments = true;
   }
 
   await putCore(buildProjectRecord(nextProject));
   await putCore(buildProjectScopeRecord(nextScope));
+  if (shouldPruneAssignments) {
+    await deleteAssignmentsOutsideScope(projectId, new Set(nextScope.includedIds));
+  }
   if (liftOrderOverride) {
     const staleProofs = await listProjectProofLines(projectId);
     await Promise.all(staleProofs.map((proof) => deleteProjectProofLine(proof)));
@@ -2152,7 +2231,7 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
 
   return {
     project: await toProjectListItem(nextProject, nextScope),
-    scope: { includedIds: nextScope.includedIds },
+    scope: toProjectScopeResponse(nextScope),
   };
 }
 
@@ -3260,6 +3339,8 @@ export function mergeProjectProofLinesFromLift(args: {
 
     const lineStepNumber = optionalNumber(rawLine.LINE_STEP_NUMBER) ?? optionalNumber(rawLine.STEP_NUMBER);
     const isProofReviewStep = lineStepNumber === 7.02;
+    const isPostProofReferenceStep = lineStepNumber != null && lineStepNumber > 7.02;
+    const canUseLiftProofAsset = isProofReviewStep || isPostProofReferenceStep;
     const proofRecords = normalizeLiftProofRecordsForLine(liftProofRecordsForLine(rawLine));
     const consumedExistingIds = new Set<string>();
 
@@ -3289,11 +3370,11 @@ export function mergeProjectProofLinesFromLift(args: {
 
       const liftStatus = optionalString(proofRecord?.PROOF_APPROVAL_STATUS) || null;
       const nextProofThumbUrl =
-        isProofReviewStep
+        canUseLiftProofAsset
           ? optionalString(proofRecord?.PROOF_LINK) || optionalString(proofRecord?.PROOF_LINK_LOW) || null
           : null;
       const nextProofFullUrl =
-        isProofReviewStep
+        canUseLiftProofAsset
           ? optionalString(proofRecord?.HIRES_PDF_PROOF) ||
             optionalString(proofRecord?.PROOF_LINK_HIGH) ||
             optionalString(proofRecord?.PROOF_LINE_HIGH) ||
@@ -3344,8 +3425,10 @@ export function mergeProjectProofLinesFromLift(args: {
       }
 
       const nextStatus: ProofLineStatus =
-        !isProofReviewStep || !proofRecord || !hasLiftProofAsset
+        !canUseLiftProofAsset || !proofRecord || !hasLiftProofAsset
           ? "waiting"
+          : isPostProofReferenceStep
+          ? "approved"
           : liftStatus === "APPROVED"
           ? "approved"
           : "pending";
@@ -3882,14 +3965,14 @@ async function fetchLiftProofSyncLines(
   const resolverUrl = resolveLiftEnvironmentUrl(config, getLiftEnvironmentConfig(config).proofUrlResolverUrl);
   if (!resolverUrl) return orderLines;
 
-  const proofReadyLines = orderLines.filter((line) => {
+  const proofReadableLines = orderLines.filter((line) => {
     const lineStepNumber = optionalNumber(line.LINE_STEP_NUMBER) ?? optionalNumber(line.STEP_NUMBER);
-    return lineStepNumber === 7.02 && optionalNumber(line.ORDER_LINE_ID) != null;
+    return lineStepNumber != null && lineStepNumber >= 7.02 && optionalNumber(line.ORDER_LINE_ID) != null;
   });
-  if (!proofReadyLines.length) return orderLines;
+  if (!proofReadableLines.length) return orderLines;
 
   let failedLineReads = 0;
-  const proofRows = await mapWithConcurrency(proofReadyLines, 5, async (line) => {
+  const proofRows = await mapWithConcurrency(proofReadableLines, 5, async (line) => {
     const orderLineId = optionalNumber(line.ORDER_LINE_ID);
     if (orderLineId == null) return [];
     try {
@@ -4554,6 +4637,23 @@ async function updateProjectAssignment(
       },
     });
   }
+  await broadcastWorkspaceChangeBestEffort({
+    projectId,
+    workspace: "assignment",
+    eventType: creativeId ? "assignment.updated" : "assignment.cleared",
+    summary: creativeId && creative
+      ? `${auth.actorName} assigned ${inventory.inventoryId} to ${creative.filename}.`
+      : `${auth.actorName} cleared ${inventory.inventoryId}.`,
+    auth,
+    originSessionId: optionalString(payload.clientSessionId) || null,
+    occurredAt: now,
+    detail: {
+      inventoryId,
+      inventoryLabel: inventory.inventoryId,
+      creativeId,
+      creativeFilename: creative?.filename || null,
+    },
+  });
 
   const response = {
     assignment: toWorkspaceAssignment(assignment, inventory.inventoryId),
@@ -4763,6 +4863,26 @@ async function updateProjectProofLine(
       }
     }
   }
+  await broadcastWorkspaceChangeBestEffort({
+    projectId,
+    workspace: "proofs",
+    eventType: nextProofLine.status === "approved" ? "proof.approved" : nextProofLine.revised ? "proof.revised" : "proof.updated",
+    summary:
+      nextProofLine.status === "approved"
+        ? `${auth.actorName} approved line ${nextProofLine.lineNumber}.`
+        : nextProofLine.revised
+        ? `${auth.actorName} uploaded a revision for line ${nextProofLine.lineNumber}.`
+        : `${auth.actorName} updated line ${nextProofLine.lineNumber}.`,
+    auth,
+    originSessionId: optionalString(payload.clientSessionId) || null,
+    occurredAt: nextProofLine.updatedAt,
+    detail: {
+      lineItemId,
+      lineNumber: nextProofLine.lineNumber,
+      status: nextProofLine.status,
+      revised: nextProofLine.revised,
+    },
+  });
 
   const variants = await listVariantsForVenue(project.venueId);
   const latest = (await findProjectProofLineById(projectId, lineItemId)) || nextProofLine;
@@ -5266,6 +5386,40 @@ async function listInventoryForVenue(venueId: string) {
   return items.filter((item): item is InventoryItem => item.entityType === "InventoryItem");
 }
 
+async function resolveVenuePresetScope(venueId: string, inventoryPresetId?: string | null) {
+  const inventory = await listInventoryForVenue(venueId);
+  const activeInventoryIds = inventory.filter((item) => item.isActive).map((item) => item.id).sort();
+  const presetId = inventoryPresetId || "full_venue";
+  if (presetId === "full_venue") {
+    return {
+      includedIds: activeInventoryIds,
+      sourceType: "full_venue" as const,
+      presetId: "full_venue",
+      presetName: "Full Venue",
+    };
+  }
+
+  const items = await queryByPk(`VENUE#${venueId}`, `PRESET#${presetId}`);
+  const preset = items.find(
+    (item): item is VenueInventoryPresetItem =>
+      item.entityType === "VenueInventoryPreset" && item.status !== "archived"
+  );
+  if (!preset) throw new HttpError(404, `Inventory preset ${presetId} not found for venue ${venueId}`);
+
+  const activeIdSet = new Set(activeInventoryIds);
+  const includedIds = preset.includedIds.filter((id) => activeIdSet.has(id)).sort();
+  if (!includedIds.length) {
+    throw new HttpError(400, `Inventory preset "${preset.name}" does not include any active inventory.`);
+  }
+
+  return {
+    includedIds,
+    sourceType: "venue_preset" as const,
+    presetId: preset.id,
+    presetName: preset.name,
+  };
+}
+
 async function listMapsForVenue(venueId: string) {
   const items = await queryByPk(`VENUE#${venueId}`, "MAP#");
   return items
@@ -5299,6 +5453,21 @@ async function listProjectAssignments(projectId: string) {
   return items
     .filter((item): item is ProjectAssignmentItem => item.entityType === "ProjectAssignment")
     .sort((a, b) => a.inventoryId.localeCompare(b.inventoryId));
+}
+
+async function deleteAssignmentsOutsideScope(projectId: string, includedIds: Set<string>) {
+  const assignments = await listProjectAssignments(projectId);
+  const staleAssignments = assignments.filter((assignment) => !includedIds.has(assignment.inventoryId));
+  await Promise.all(
+    staleAssignments.map((assignment) =>
+      client.send(
+        new DeleteItemCommand({
+          TableName: CORE_TABLE_NAME,
+          Key: marshall({ pk: `PROJECT#${projectId}`, sk: `ASSIGNMENT#${assignment.inventoryId}` }),
+        })
+      )
+    )
+  );
 }
 
 async function findProjectNotificationDispatch(projectId: string, eventType: NotificationEventType) {
@@ -7142,6 +7311,137 @@ async function deleteCore(pk: string, sk: string) {
   );
 }
 
+type WorkspaceChangeBroadcast = {
+  projectId: string;
+  workspace: "assignment" | "proofs";
+  eventType: string;
+  summary: string;
+  auth: AuthContext;
+  originSessionId?: string | null;
+  occurredAt: string;
+  detail?: Record<string, unknown>;
+};
+
+async function broadcastWorkspaceChange(change: WorkspaceChangeBroadcast) {
+  if (!PRESENCE_TABLE_NAME || !presenceManagement) return;
+  const payload = JSON.stringify({
+    type: "workspace.change",
+    ...toWorkspaceChangeMessage(change),
+  });
+  const records = await listPresenceConnections(change.projectId, change.workspace);
+  emitRealtimeMetric("WorkspaceBroadcastDirectFanout", records.length, { Workspace: change.workspace });
+  await Promise.allSettled(records.map((record) => postPresenceMessage(record.connectionId, payload)));
+}
+
+async function broadcastWorkspaceChangeBestEffort(change: WorkspaceChangeBroadcast) {
+  if (PRESENCE_BROADCAST_QUEUE_URL) {
+    let queueFailed = false;
+    await Promise.race([
+      enqueueWorkspaceChange(change).catch((error) => {
+        queueFailed = true;
+        emitRealtimeMetric("WorkspaceBroadcastQueueFailure", 1, { Workspace: change.workspace }, { errorMessage: errorMessage(error) });
+        console.warn("Workspace change enqueue failed", error);
+      }),
+      sleep(180),
+    ]);
+    if (!queueFailed) return;
+  }
+
+  if (!PRESENCE_TABLE_NAME || !presenceManagement) return;
+  emitRealtimeMetric("WorkspaceBroadcastDirectFallback", 1, { Workspace: change.workspace });
+  await Promise.race([
+    broadcastWorkspaceChange(change).catch((error) => {
+      emitRealtimeMetric("WorkspaceBroadcastDirectFailure", 1, { Workspace: change.workspace }, { errorMessage: errorMessage(error) });
+      console.warn("Workspace change broadcast failed", error);
+    }),
+    sleep(250),
+  ]);
+}
+
+async function enqueueWorkspaceChange(change: WorkspaceChangeBroadcast) {
+  await sqs.send(new SendMessageCommand({
+    QueueUrl: PRESENCE_BROADCAST_QUEUE_URL,
+    MessageBody: JSON.stringify(toWorkspaceChangeMessage(change)),
+  }));
+  emitRealtimeMetric("WorkspaceBroadcastEnqueued", 1, { Workspace: change.workspace, EventType: change.eventType });
+}
+
+function toWorkspaceChangeMessage(change: WorkspaceChangeBroadcast) {
+  return {
+    projectId: change.projectId,
+    workspace: change.workspace,
+    eventType: change.eventType,
+    summary: change.summary,
+    actorId: change.auth.actorId,
+    actorName: change.auth.actorName,
+    actorType: change.auth.actorType,
+    originSessionId: change.originSessionId || null,
+    occurredAt: change.occurredAt,
+    detail: change.detail || {},
+  };
+}
+
+async function listPresenceConnections(projectId: string, workspace: "assignment" | "proofs") {
+  const response = await client.send(new QueryCommand({
+    TableName: PRESENCE_TABLE_NAME,
+    IndexName: "byChannel",
+    KeyConditionExpression: "gsi1pk = :gsi1pk",
+    FilterExpression: "expiresAt > :now",
+    ExpressionAttributeValues: marshall({
+      ":gsi1pk": `CHANNEL#${projectId}#${workspace}`,
+      ":now": Math.floor(Date.now() / 1000),
+    }),
+    Limit: 100,
+  }));
+  if (response.LastEvaluatedKey) emitRealtimeMetric("WorkspaceBroadcastFanoutCapped", 1, { Workspace: workspace });
+  return (response.Items || []).map((item) => unmarshall(item) as { connectionId: string });
+}
+
+async function postPresenceMessage(connectionId: string, payload: string) {
+  if (!presenceManagement) return;
+  try {
+    await presenceManagement.send(new PostToConnectionCommand({
+      ConnectionId: connectionId,
+      Data: Buffer.from(payload),
+    }));
+  } catch (error) {
+    if (error instanceof GoneException || (error as any)?.$metadata?.httpStatusCode === 410) {
+      await client.send(new DeleteItemCommand({
+        TableName: PRESENCE_TABLE_NAME,
+        Key: marshall({ pk: `CONN#${connectionId}`, sk: "SESSION" }),
+      }));
+    }
+  }
+}
+
+function emitRealtimeMetric(
+  metricName: string,
+  value = 1,
+  dimensions: Record<string, string> = {},
+  properties: Record<string, unknown> = {}
+) {
+  const dimensionKeys = Object.keys(dimensions);
+  console.log(JSON.stringify({
+    _aws: {
+      Timestamp: Date.now(),
+      CloudWatchMetrics: [
+        {
+          Namespace: "Adspace360/Realtime",
+          Dimensions: [dimensionKeys],
+          Metrics: [{ Name: metricName, Unit: "Count" }],
+        },
+      ],
+    },
+    ...dimensions,
+    ...properties,
+    [metricName]: value,
+  }));
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function touchShareParticipant(participant: ShareParticipantItem) {
   const next = {
     ...participant,
@@ -7589,7 +7889,13 @@ function buildWorkspaceInventory(
       locationName: item.mapName || undefined,
       mapId: item.locationId,
       mediaVariantKey: item.mediaVariantKey,
+      mediaType: item.mediaType || undefined,
       unitNumber: item.unitNumber || "",
+      trimHeight: item.trimHeight ?? null,
+      trimWidth: item.trimWidth ?? null,
+      safeHeight: item.safeHeight ?? null,
+      safeWidth: item.safeWidth ?? null,
+      notes: item.notes || "",
       x: item.x ?? 0.5,
       y: item.y ?? 0.5,
       assignedCreativeId: assignmentMap.get(item.id) ?? null,

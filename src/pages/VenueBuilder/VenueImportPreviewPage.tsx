@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../../app/AppShell";
 import { useApiClient } from "../../api/useApiClient";
-import { fetchCustomerSettings, type ApiCustomerVendor } from "../../api/projects";
+import { fetchCustomerSettings, type ApiCustomerVendor, type ApiVenueInventoryPreset } from "../../api/projects";
 import Panel from "../../components/common/Panel";
 import PageHeader from "../../components/common/PageHeader";
+import InventoryScopeModal from "../../components/projects/InventoryScopeModal";
 import { useSharedMapWorkspace } from "../../components/maps/useSharedMapWorkspace";
 import { mockMaps } from "../../logic/mockAssignment";
 import {
@@ -104,11 +105,18 @@ type InventoryRecordOverride = {
   trimWidth?: number | null;
   safeHeight?: number | null;
   safeWidth?: number | null;
+  notes?: string;
   isActive?: boolean;
   mapVisibilityMode?: "hidden" | "show_unavailable";
   x?: number;
   y?: number;
   deleted?: boolean;
+};
+type PresetEditorState = {
+  mode: "create" | "edit";
+  preset?: ApiVenueInventoryPreset;
+  name: string;
+  description: string;
 };
 
 const PROFILE_STORAGE_KEY = "adspace360.venue-import-profiles";
@@ -251,6 +259,9 @@ export default function VenueImportPreviewPage() {
   const [rooms, setRooms] = useState<RoomRecord[]>(DEFAULT_ROOMS);
   const [liveVenueInventory, setLiveVenueInventory] = useState<any[]>([]);
   const [liveVenueVariants, setLiveVenueVariants] = useState<LiveVenueVariant[]>([]);
+  const [venueInventoryPresets, setVenueInventoryPresets] = useState<ApiVenueInventoryPreset[]>([]);
+  const [presetEditor, setPresetEditor] = useState<PresetEditorState | null>(null);
+  const [presetSaveError, setPresetSaveError] = useState("");
   const [apiError, setApiError] = useState("");
   const [, setIsVenueDataLoading] = useState(true);
   const [selectedVenueId, setSelectedVenueId] = useState(DEFAULT_VENUES[0]?.id ?? "");
@@ -306,7 +317,7 @@ export default function VenueImportPreviewPage() {
   const [headerOverrides, setHeaderOverrides] = useState<Partial<Record<string, VenueImportHeaderOverride>>>({});
   const [profileName, setProfileName] = useState("");
   const [profiles, setProfiles] = useState<ImportProfile[]>([]);
-  const variantPalette = ["#2563eb", "#0f766e", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#65a30d", "#ea580c"];
+  const variantPalette = ["#3F6ED8", "#0f766e", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#65a30d", "#ea580c"];
 
   const canonicalFieldOptions: VenueImportCanonicalField[] = [
     "CustomerName",
@@ -449,15 +460,17 @@ export default function VenueImportPreviewPage() {
       if (!venueId) {
         setRooms([]);
         setLiveVenueInventory([]);
+        setVenueInventoryPresets([]);
         return;
       }
 
       try {
-        const response = await request<{ venue: any; maps: any[]; variants: any[]; inventory: any[] }>(`/api/venues/${venueId}`);
+        const response = await request<{ venue: any; maps: any[]; variants: any[]; inventory: any[]; presets?: ApiVenueInventoryPreset[] }>(`/api/venues/${venueId}`);
 
         setRooms((response.maps || []).map(mapRoomRecordFromApi));
         setLiveVenueVariants(response.variants || []);
         setLiveVenueInventory(response.inventory || []);
+        setVenueInventoryPresets(response.presets || []);
         setVariantAppearanceOverrides(() => {
           const next: Record<string, VariantAppearance> = {};
           (response.variants || []).forEach((variant: any) => {
@@ -511,6 +524,7 @@ export default function VenueImportPreviewPage() {
       if (!selectedVenueId) {
         setRooms([]);
         setLiveVenueInventory([]);
+        setVenueInventoryPresets([]);
         return;
       }
       await loadVenueDetailData(selectedVenueId);
@@ -682,9 +696,40 @@ export default function VenueImportPreviewPage() {
     [activeVenueRooms, selectedRoomId]
   );
   const roomNameById = useMemo(() => new Map(activeVenueRooms.map((room) => [room.id, room.name])), [activeVenueRooms]);
+  const presetScopeMaps = useMemo(
+    () =>
+      activeVenueRooms.map((room) => ({
+        id: room.id,
+        name: room.name,
+        assigned: 0,
+        total: liveVenueInventory.filter((item) => item.locationId === room.id && item.isActive !== false).length,
+        imageUrl: room.mapUrl || "",
+      })),
+    [activeVenueRooms, liveVenueInventory]
+  );
+  const presetScopeInventory = useMemo(
+    () =>
+      liveVenueInventory
+        .filter((item) => item.isActive !== false)
+        .map((item) => ({
+          id: item.inventoryId || item.id,
+          recordId: item.id,
+          locationName: item.locationDetail || item.mapName || roomNameById.get(item.locationId) || "",
+          mapId: item.locationId,
+          mediaVariantKey: item.mediaVariantKey,
+          unitNumber: item.unitNumber || "",
+          assignedCreativeId: null,
+          assignmentUpdatedAt: null,
+          isActive: true,
+          x: typeof item.x === "number" ? item.x : 0.5,
+          y: typeof item.y === "number" ? item.y : 0.5,
+        })),
+    [liveVenueInventory, roomNameById]
+  );
   const {
     viewportRef: mapViewportRef,
     imageRef: mapImgRef,
+    mapFrameStyle,
     zoom,
     pan,
     mapError: mapLoadFailed,
@@ -928,6 +973,7 @@ export default function VenueImportPreviewPage() {
           trimWidth: recordOverride.trimWidth ?? record.trimWidth,
           safeHeight: recordOverride.safeHeight ?? record.safeHeight,
           safeWidth: recordOverride.safeWidth ?? record.safeWidth,
+          notes: recordOverride.notes ?? record.notes,
           isActive: recordOverride.isActive ?? record.isActive,
           mapVisibilityMode: recordOverride.mapVisibilityMode ?? record.mapVisibilityMode,
           x: recordOverride.x ?? record.x ?? (hasImportedPreview ? mapPinStyle(index).x : null),
@@ -1474,6 +1520,77 @@ export default function VenueImportPreviewPage() {
       setApiError(error instanceof Error ? error.message : "Unable to save venue");
       await loadVenueDashboardData();
       await loadVenueDetailData(venueId);
+    }
+  }
+
+  function openCreatePreset() {
+    if (!activeVenue) return;
+    setPresetSaveError("");
+    setPresetEditor({
+      mode: "create",
+      name: "",
+      description: "",
+    });
+  }
+
+  function openEditPreset(preset: ApiVenueInventoryPreset) {
+    if (preset.readOnly) return;
+    setPresetSaveError("");
+    setPresetEditor({
+      mode: "edit",
+      preset,
+      name: preset.name,
+      description: preset.description || "",
+    });
+  }
+
+  async function savePresetFromSelection(includedIds: string[]) {
+    if (!activeVenue || !presetEditor) return;
+    const name = presetEditor.name.trim();
+    if (!name) {
+      setPresetSaveError("Preset name is required.");
+      throw new Error("Preset name is required.");
+    }
+
+    try {
+      setPresetSaveError("");
+      if (presetEditor.mode === "edit" && presetEditor.preset) {
+        await request(`/api/venues/${activeVenue.id}/inventory-presets/${presetEditor.preset.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            name,
+            description: presetEditor.description.trim() || undefined,
+            includedIds,
+          }),
+        });
+      } else {
+        await request(`/api/venues/${activeVenue.id}/inventory-presets`, {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            description: presetEditor.description.trim() || undefined,
+            includedIds,
+          }),
+        });
+      }
+      setPresetEditor(null);
+      await loadVenueDetailData(activeVenue.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to save preset.";
+      setPresetSaveError(message);
+      throw error;
+    }
+  }
+
+  async function archivePreset(preset: ApiVenueInventoryPreset) {
+    if (!activeVenue || preset.readOnly) return;
+    const confirmed = window.confirm(`Archive ${preset.name}? Projects already using this preset will keep their current inventory scope.`);
+    if (!confirmed) return;
+    try {
+      await request(`/api/venues/${activeVenue.id}/inventory-presets/${preset.id}`, { method: "DELETE" });
+      await loadVenueDetailData(activeVenue.id);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to archive preset");
     }
   }
 
@@ -2810,6 +2927,96 @@ export default function VenueImportPreviewPage() {
                     </div>
                   )}
                 </Panel>
+
+                <Panel className="panel-tight venue-preview-panel venue-preview-presetsPanel">
+                  <div className="venue-preview-head">
+                    <div>
+                      <div className="venue-preview-title">Presets / Templates</div>
+                      <div className="venue-preview-sub">
+                        Save reusable inventory selections for seasonal or curated project scopes.
+                      </div>
+                    </div>
+                    <div className="venue-preview-headActions">
+                      <button className="btn btn-primary" type="button" onClick={openCreatePreset} disabled={!activeVenue || !presetScopeInventory.length}>
+                        Add Preset
+                      </button>
+                    </div>
+                  </div>
+
+                  {!activeVenue ? (
+                    <div className="venue-preview-empty">Select a venue to manage inventory presets.</div>
+                  ) : !venueInventoryPresets.length ? (
+                    <div className="venue-preview-empty">Full Venue will appear after venue inventory loads.</div>
+                  ) : (
+                    <div className="table-wrap venue-preview-tableWrap">
+                      <table className="data-table venue-preview-table venue-preview-presetTable">
+                        <thead>
+                          <tr>
+                            <th>Preset</th>
+                            <th>Included</th>
+                            <th>Excluded</th>
+                            <th>Status</th>
+                            <th>Updated</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {venueInventoryPresets.map((preset) => (
+                            <tr key={preset.id}>
+                              <td>
+                                <div className="venue-preview-cellStrong">{preset.name}</div>
+                                <div className="venue-preview-cellMeta">
+                                  {preset.isDefault ? "Auto generated default" : preset.description || "Custom inventory preset"}
+                                </div>
+                              </td>
+                              <td>
+                                <div className="venue-preview-cellStrong">
+                                  {preset.validation.includedActiveCount}/{preset.validation.activeInventoryCount}
+                                </div>
+                              </td>
+                              <td>
+                                <div className="venue-preview-cellStrong">{preset.validation.excludedActiveCount}</div>
+                              </td>
+                              <td>
+                                <div className="venue-preview-presetStatusStack">
+                                  <span className={`venue-preview-status ${preset.validation.newActiveCount || preset.validation.unavailableIncludedCount ? "is-warning" : "is-ok"}`}>
+                                    {preset.validation.newActiveCount
+                                      ? `${preset.validation.newActiveCount} new`
+                                      : preset.validation.unavailableIncludedCount
+                                        ? `${preset.validation.unavailableIncludedCount} unavailable`
+                                        : "Ready"}
+                                  </span>
+                                  {preset.readOnly ? <span className="venue-preview-cellMeta">Read only</span> : null}
+                                </div>
+                              </td>
+                              <td className="venue-preview-cellMeta">{(preset.updatedAt || "").slice(0, 10) || "—"}</td>
+                              <td>
+                                <div className="venue-preview-rowActions venue-preview-rowActions-wrap">
+                                  <button
+                                    className="btn btn-ghost btn-soft"
+                                    type="button"
+                                    onClick={() => openEditPreset(preset)}
+                                    disabled={preset.readOnly}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    className="btn btn-ghost btn-soft venue-preview-roomAction-destructive"
+                                    type="button"
+                                    onClick={() => void archivePreset(preset)}
+                                    disabled={preset.readOnly}
+                                  >
+                                    Archive
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </Panel>
               </div>
             </section>
             ) : null}
@@ -2938,7 +3145,10 @@ export default function VenueImportPreviewPage() {
                           onMouseUp={onMouseUpMap}
                           onMouseLeave={onMouseUpMap}
                         >
-                          <div className="map-transform" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+                          <div
+                            className="map-transform"
+                            style={{ ...mapFrameStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+                          >
                           {selectedRoom.mapUrl ? (
                             <img
                               key={`${selectedRoom.id}-${selectedRoom.mapUrl || "no-map"}`}
@@ -3151,6 +3361,7 @@ export default function VenueImportPreviewPage() {
                                 <th>Trim W</th>
                                 <th>Safe H</th>
                                 <th>Safe W</th>
+                                <th>Notes</th>
                                 <th>Status</th>
                                 <th>Map Visibility</th>
                                 <th>Actions</th>
@@ -3258,6 +3469,16 @@ export default function VenueImportPreviewPage() {
                                     <td><input className="field-input venue-preview-input" value={getNumericDraftValue(record.recordKey, "trimWidth", record.trimWidth)} onChange={(e) => updateNumericDraft(record.recordKey, "trimWidth", e.target.value)} onBlur={(e) => { const nextValue = parseEditableNumber(e.target.value); const nextPatch = buildInventoryVariantPatch(record, { trimWidth: nextValue }); updateRecordOverride(record.recordKey, nextPatch); clearNumericDraft(record.recordKey, "trimWidth"); void persistInventoryPatch(record.recordKey, nextPatch); }} placeholder="W" disabled={!inventoryEditMode} inputMode="decimal" /></td>
                                     <td><input className="field-input venue-preview-input" value={getNumericDraftValue(record.recordKey, "safeHeight", record.safeHeight)} onChange={(e) => updateNumericDraft(record.recordKey, "safeHeight", e.target.value)} onBlur={(e) => { const nextValue = parseEditableNumber(e.target.value); updateRecordOverride(record.recordKey, { safeHeight: nextValue }); clearNumericDraft(record.recordKey, "safeHeight"); void persistInventoryPatch(record.recordKey, { safeHeight: nextValue }); }} placeholder="H" disabled={!inventoryEditMode} inputMode="decimal" /></td>
                                     <td><input className="field-input venue-preview-input" value={getNumericDraftValue(record.recordKey, "safeWidth", record.safeWidth)} onChange={(e) => updateNumericDraft(record.recordKey, "safeWidth", e.target.value)} onBlur={(e) => { const nextValue = parseEditableNumber(e.target.value); updateRecordOverride(record.recordKey, { safeWidth: nextValue }); clearNumericDraft(record.recordKey, "safeWidth"); void persistInventoryPatch(record.recordKey, { safeWidth: nextValue }); }} placeholder="W" disabled={!inventoryEditMode} inputMode="decimal" /></td>
+                                    <td>
+                                      <textarea
+                                        className="field-input venue-preview-input venue-preview-notesInput"
+                                        value={record.notes || ""}
+                                        onChange={(e) => updateRecordOverride(record.recordKey, { notes: e.target.value })}
+                                        onBlur={(e) => void persistInventoryPatch(record.recordKey, { notes: e.target.value })}
+                                        placeholder="Add notes"
+                                        disabled={!inventoryEditMode}
+                                      />
+                                    </td>
                                     <td>
                                       <select
                                         className="select venue-preview-inlineSelect venue-preview-inlineSelect-compact"
@@ -3943,6 +4164,53 @@ export default function VenueImportPreviewPage() {
               </div>
             </div>
           </div>
+        ) : null}
+        {presetEditor && activeVenue ? (
+          <InventoryScopeModal
+            isOpen={!!presetEditor}
+            onClose={() => {
+              setPresetEditor(null);
+              setPresetSaveError("");
+            }}
+            title={presetEditor.mode === "edit" ? "Edit Inventory Preset" : "New Inventory Preset"}
+            subtitle={`${activeVenue.name} · ${presetEditor.mode === "edit" ? "Update reusable inventory selection" : "Create reusable inventory selection"}`}
+            inventoryLabel="Preset Inventory"
+            confirmLabel={presetEditor.mode === "edit" ? "Save Preset" : "Create Preset"}
+            savingLabel="Saving Preset..."
+            projectTitle={presetEditor.name || "Inventory preset"}
+            venueName={activeVenue.name}
+            maps={presetScopeMaps as any}
+            inventory={presetScopeInventory as any}
+            initialIncludedIds={
+              presetEditor.preset?.includedIds ||
+              presetScopeInventory.map((item) => item.recordId || item.id)
+            }
+            canConfirm={Boolean(presetEditor.name.trim())}
+            validationMessage={presetSaveError}
+            headerAddon={
+              <div className="scope-addonGrid">
+                <label className="venue-preview-field">
+                  <span className="venue-preview-fieldLabel">Preset Name</span>
+                  <input
+                    className="field-input venue-preview-input"
+                    value={presetEditor.name}
+                    onChange={(event) => setPresetEditor((current) => current ? { ...current, name: event.target.value } : current)}
+                    placeholder="Winter Inventory"
+                  />
+                </label>
+                <label className="venue-preview-field">
+                  <span className="venue-preview-fieldLabel">Description</span>
+                  <input
+                    className="field-input venue-preview-input"
+                    value={presetEditor.description}
+                    onChange={(event) => setPresetEditor((current) => current ? { ...current, description: event.target.value } : current)}
+                    placeholder="Optional internal/customer note"
+                  />
+                </label>
+              </div>
+            }
+            onConfirm={savePresetFromSelection}
+          />
         ) : null}
       </div>
     </AppShell>

@@ -9,11 +9,13 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
+import { Search, SlidersHorizontal, X } from "lucide-react";
 
 import AppShell from "../../app/AppShell";
 import { useApiClient } from "../../api/useApiClient";
 import {
   deleteProjectCreativeAsset,
+  fetchVenueDetail,
   fetchProjectWorkspace,
   invalidateProjectWorkspaceCache,
   logProjectErrorEvent,
@@ -23,12 +25,14 @@ import {
   normalizeWorkspaceVariants,
   peekProjectWorkspaceCache,
   updateProjectAssignment,
+  type ApiVenueDetailResponse,
   type ApiProjectWorkspaceResponse,
 } from "../../api/projects";
 import Panel from "../../components/common/Panel";
 import Portal from "../../components/common/Portal";
 import Lightbox from "../../components/common/Lightbox";
 import PageHeader from "../../components/common/PageHeader";
+import { WorkspacePresenceCluster } from "../../components/realtime/WorkspacePresenceCluster";
 import { ShareAccessDenied, useShareAccess } from "../../components/share/ShareAccess";
 import CreativeUploaderModal from "../../components/uploader/CreativeUploaderModal";
 import {
@@ -41,6 +45,8 @@ import ArtworkFolderWorkspace from "../ArtworkFolder/ArtworkFolderWorkspace";
 
 import ReviewAllocationModal from "../../components/reviewAllocation/ReviewAllocationModal";
 import { useSharedMapWorkspace } from "../../components/maps/useSharedMapWorkspace";
+import { useCollaborationToastQueue } from "../../realtime/useCollaborationToastQueue";
+import { useWorkspacePresence, type WorkspaceChangeEvent } from "../../realtime/useWorkspacePresence";
 
 import { buildDocumentThumbUrl, buildMockFullPreviewUrl, buildMockThumbUrl } from "../../logic/imageUrls";
 
@@ -64,7 +70,7 @@ import {
 import { endAssignMode, startAssignMode, type AssignModeState } from "../../logic/useAssignmentMode";
 
 const CREATIVE_DISPLAY_COLORS = [
-  "#2563eb",
+  "#3F6ED8",
   "#10b981",
   "#f97316",
   "#a855f7",
@@ -82,6 +88,54 @@ function hashCreativeId(input: string) {
   return hash;
 }
 
+function formatSpecNumber(value: number | string | null | undefined) {
+  if (value == null || value === "") return "";
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return `${numeric}"`;
+  return String(value);
+}
+
+function formatSpecDimensions(height: number | string | null | undefined, width: number | string | null | undefined, fallback = "Not specified") {
+  const formattedHeight = formatSpecNumber(height);
+  const formattedWidth = formatSpecNumber(width);
+  if (formattedHeight && formattedWidth) return `${formattedHeight}h x ${formattedWidth}w`;
+  return fallback;
+}
+
+function getInventoryMediaName(item: InventoryItem, variant?: any) {
+  return item.mediaType || variant?.mediaName || mediaLabelFromKey(item.mediaVariantKey).split(" • ")[0] || "Media";
+}
+
+function formatRemoteAssignmentSummary(event: WorkspaceChangeEvent) {
+  const actor = event.actorName || "Another user";
+  const detail = event.detail || {};
+  const inventoryLabel = typeof detail.inventoryLabel === "string" ? detail.inventoryLabel : "";
+  const creativeFilename = typeof detail.creativeFilename === "string" ? detail.creativeFilename : "";
+  if (event.eventType === "assignment.cleared" && inventoryLabel) return `${actor} cleared ${inventoryLabel}.`;
+  if (inventoryLabel && creativeFilename) return `${actor} assigned ${inventoryLabel} to ${creativeFilename}.`;
+  return event.summary || "Assignment updated by another user.";
+}
+
+function mergeInventoryVenueSpecs(inventory: InventoryItem[], venueDetail: ApiVenueDetailResponse | null) {
+  if (!venueDetail?.inventory?.length) return inventory;
+  const byRecordId = new Map(venueDetail.inventory.map((item) => [item.id, item]));
+  const byInventoryId = new Map(venueDetail.inventory.map((item) => [item.inventoryId, item]));
+
+  return inventory.map((item) => {
+    const venueItem = (item.recordId ? byRecordId.get(item.recordId) : undefined) || byInventoryId.get(item.id);
+    if (!venueItem) return item;
+    return {
+      ...item,
+      mediaType: item.mediaType || venueItem.mediaType || undefined,
+      trimHeight: item.trimHeight ?? venueItem.trimHeight ?? null,
+      trimWidth: item.trimWidth ?? venueItem.trimWidth ?? null,
+      safeHeight: item.safeHeight ?? venueItem.safeHeight ?? null,
+      safeWidth: item.safeWidth ?? venueItem.safeWidth ?? null,
+      notes: item.notes?.trim() ? item.notes : venueItem.notes || item.notes || "",
+    };
+  });
+}
+
 export default function CreativeAssignmentPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
@@ -89,6 +143,8 @@ export default function CreativeAssignmentPage() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const modeSuffix = searchParams.get("mode") === "customer" ? "?mode=customer" : "";
+  const useClassicHeader = ["1", "true", "yes"].includes((searchParams.get("classicHeader") || "").toLowerCase());
+  const useUtilityHeader = !useClassicHeader;
   const shareAccess = useShareAccess(projectId);
 
   // Demo mode: either the known demo project id OR explicit navigation flag
@@ -155,9 +211,23 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
   });
 }, [ctx, demoInventoryLegacy, demoCreativesAll]);
 
-  const loadWorkspace = useCallback(async (force = false) => {
+  const enrichWorkspaceInventory = useCallback(
+    async (response: ApiProjectWorkspaceResponse, baseInventory: InventoryItem[]) => {
+      if (shareAccess.isShareMode || !response.project.venueId) return baseInventory;
+      try {
+        const venueDetail = await fetchVenueDetail(api, response.project.venueId);
+        return mergeInventoryVenueSpecs(baseInventory, venueDetail);
+      } catch (error) {
+        console.warn("Unable to enrich assignment inventory specs from venue detail", error);
+        return baseInventory;
+      }
+    },
+    [api, shareAccess.isShareMode]
+  );
+
+  const loadWorkspace = useCallback(async (force = false, options: { silent?: boolean } = {}) => {
     if (!projectId || isDemo || shareAccess.isResolving) return;
-    setWorkspaceLoading(true);
+    if (!options.silent) setWorkspaceLoading(true);
     try {
       if (!force) {
         const cached = peekProjectWorkspaceCache(projectId, shareAccess.isShareMode);
@@ -171,17 +241,41 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
       }
       if (force) invalidateProjectWorkspaceCache(projectId, shareAccess.isShareMode);
       const response = await fetchProjectWorkspace(api, projectId, shareAccess.isShareMode);
+      const nextInventory = await enrichWorkspaceInventory(response, normalizeWorkspaceInventory(response.workspace.inventory));
       setLiveWorkspace(response);
       setCreativesState(response.workspace.creatives.map(normalizeCreativeAsset));
-      setInventoryState(normalizeWorkspaceInventory(response.workspace.inventory));
+      setInventoryState(nextInventory);
       setMapsState(normalizeWorkspaceMaps(response.workspace.maps));
       setVariantsState(normalizeWorkspaceVariants(response.workspace.variants));
     } catch (error) {
       console.error("Failed to load creative assignment workspace", error);
     } finally {
-      setWorkspaceLoading(false);
+      if (!options.silent) setWorkspaceLoading(false);
     }
-  }, [api, isDemo, projectId, shareAccess.isResolving, shareAccess.isShareMode]);
+  }, [api, enrichWorkspaceInventory, isDemo, projectId, shareAccess.isResolving, shareAccess.isShareMode]);
+
+  const enqueueCollaborationToast = useCollaborationToastQueue("Assignment updated by another user.");
+
+  const requestRemoteAssignmentSync = useCallback(() => {
+    if (!projectId || isDemo) return;
+    invalidateProjectWorkspaceCache(projectId, shareAccess.isShareMode);
+    void loadWorkspace(true, { silent: true });
+  }, [isDemo, loadWorkspace, projectId, shareAccess.isShareMode]);
+
+  const handleRemoteAssignmentChange = useCallback((event: WorkspaceChangeEvent) => {
+    requestRemoteAssignmentSync();
+    enqueueCollaborationToast(event, formatRemoteAssignmentSummary(event));
+  }, [enqueueCollaborationToast, requestRemoteAssignmentSync]);
+
+  const presence = useWorkspacePresence({
+    api,
+    projectId,
+    workspace: "assignment",
+    enabled: !isDemo && Boolean(projectId) && !shareAccess.isResolving,
+    shareMode: shareAccess.isShareMode,
+    onRemoteChange: handleRemoteAssignmentChange,
+    onSyncRequested: requestRemoteAssignmentSync,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -199,9 +293,11 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
       try {
         const response = await fetchProjectWorkspace(api, projectId, shareAccess.isShareMode);
         if (cancelled) return;
+        const nextInventory = await enrichWorkspaceInventory(response, normalizeWorkspaceInventory(response.workspace.inventory));
+        if (cancelled) return;
         setLiveWorkspace(response);
         setCreativesState(response.workspace.creatives.map(normalizeCreativeAsset));
-        setInventoryState(normalizeWorkspaceInventory(response.workspace.inventory));
+        setInventoryState(nextInventory);
         setMapsState(normalizeWorkspaceMaps(response.workspace.maps));
         setVariantsState(normalizeWorkspaceVariants(response.workspace.variants));
       } catch (error) {
@@ -215,7 +311,7 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
     return () => {
       cancelled = true;
     };
-  }, [api, isDemo, loadWorkspace, projectId, shareAccess.isResolving, shareAccess.isShareMode]);
+  }, [api, enrichWorkspaceInventory, isDemo, projectId, shareAccess.isResolving, shareAccess.isShareMode]);
 
   useEffect(() => {
     if (assignmentSaveState.tone !== "saved" && assignmentSaveState.tone !== "error") return;
@@ -244,7 +340,7 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
     const next = new Map<string, string>();
     creatives.forEach((creative) => {
       const index = hashCreativeId(creative.id) % CREATIVE_DISPLAY_COLORS.length;
-      next.set(creative.id, CREATIVE_DISPLAY_COLORS[index] || creative.color || "#2563eb");
+      next.set(creative.id, CREATIVE_DISPLAY_COLORS[index] || creative.color || "#3F6ED8");
     });
     return next;
   }, [creatives]);
@@ -297,6 +393,7 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
   // Lightbox
   const [lightbox, setLightbox] = useState<{
     src: string;
+    fallbackSrc?: string;
     title?: string;
     subtitle?: string;
     openUrl?: string;
@@ -315,23 +412,54 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
 
   // Rail 2 view toggle
   const [assignView, setAssignView] = useState<"map" | "list">("map");
+  const [isListOnlyViewport, setIsListOnlyViewport] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 980px)").matches
+  );
+  const [isListFirstViewport, setIsListFirstViewport] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 1319px)").matches
+  );
+  const [hasManualViewChoice, setHasManualViewChoice] = useState(false);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 820px)");
-    const preferMobileListView = () => {
-      if (mediaQuery.matches) {
-        setAssignView("list");
-      }
+    const listOnlyQuery = window.matchMedia("(max-width: 980px)");
+    const listFirstQuery = window.matchMedia("(max-width: 1319px)");
+    const updateViewportMode = () => {
+      setIsListOnlyViewport(listOnlyQuery.matches);
+      setIsListFirstViewport(listFirstQuery.matches);
     };
 
-    preferMobileListView();
-    mediaQuery.addEventListener("change", preferMobileListView);
-    return () => mediaQuery.removeEventListener("change", preferMobileListView);
+    updateViewportMode();
+    listOnlyQuery.addEventListener("change", updateViewportMode);
+    listFirstQuery.addEventListener("change", updateViewportMode);
+    return () => {
+      listOnlyQuery.removeEventListener("change", updateViewportMode);
+      listFirstQuery.removeEventListener("change", updateViewportMode);
+    };
   }, []);
+
+  useEffect(() => {
+    if (isListOnlyViewport) {
+      setAssignView("list");
+      return;
+    }
+    if (isListFirstViewport && !hasManualViewChoice) {
+      setAssignView("list");
+      return;
+    }
+    if (!isListFirstViewport && !hasManualViewChoice) {
+      setAssignView("map");
+    }
+  }, [hasManualViewChoice, isListFirstViewport, isListOnlyViewport]);
+
+  function selectAssignView(view: "map" | "list") {
+    setHasManualViewChoice(true);
+    setAssignView(isListOnlyViewport && view === "map" ? "list" : view);
+  }
 
   const {
     viewportRef: mapViewportRef,
     imageRef: mapImgRef,
+    mapFrameStyle,
     zoom,
     pan,
     isPanning,
@@ -353,12 +481,21 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
   const [invListQuery, setInvListQuery] = useState("");
   const [invListMapId, setInvListMapId] = useState<string>("all");
   const [invListVariantKey, setInvListVariantKey] = useState<string>("all");
+  const [mobileInventoryToolsExpanded, setMobileInventoryToolsExpanded] = useState(false);
+  const assignListFilterSnapshotRef = useRef<{
+    query: string;
+    mapId: string;
+    variantKey: string;
+  } | null>(null);
   
   // Inventory List inline picker (Assigned column)
   const [openInvPickerId, setOpenInvPickerId] = useState<string | null>(null);
+  const [mapModalInventoryId, setMapModalInventoryId] = useState<string | null>(null);
+  const [openListDetailsId, setOpenListDetailsId] = useState<string | null>(null);
   
   
   const listStageRef = useRef<HTMLDivElement | null>(null);
+  const mobileInventorySearchRef = useRef<HTMLInputElement | null>(null);
 
 useEffect(() => {
   if (!openInvPickerId) return;
@@ -401,7 +538,38 @@ useEffect(() => {
     return map;
   }, [creatives]);
 
-  const isAllocationComplete = useMemo(() => inventory.every((i) => !!i.assignedCreativeId), [inventory]);
+  const mapModalInventory = useMemo(
+    () => inventory.find((item) => item.id === mapModalInventoryId) || null,
+    [inventory, mapModalInventoryId]
+  );
+  const mapModalMap = useMemo(
+    () => maps.find((map) => map.id === mapModalInventory?.mapId) || null,
+    [mapModalInventory?.mapId, maps]
+  );
+  const {
+    viewportRef: modalMapViewportRef,
+    imageRef: modalMapImgRef,
+    mapFrameStyle: modalMapFrameStyle,
+    zoom: modalMapZoom,
+    pan: modalMapPan,
+    mapError: modalMapError,
+    fitMapToView: fitModalMapToView,
+    onImageLoad: onModalMapImageLoad,
+    onImageError: onModalMapImageError,
+    onWheelMap: onWheelModalMap,
+    onMouseDownMap: onMouseDownModalMap,
+    onMouseMoveMap: onMouseMoveModalMap,
+    onMouseUpMap: onMouseUpModalMap,
+  } = useSharedMapWorkspace({
+    mapSrc: mapModalMap?.imageUrl,
+    activeKey: `list-map-modal:${mapModalMap?.id || ""}:${mapModalInventoryId || ""}`,
+    enabled: !!mapModalInventoryId,
+  });
+
+  const isAllocationComplete = useMemo(
+    () => inventory.length > 0 && inventory.every((i) => !!i.assignedCreativeId),
+    [inventory]
+  );
   const assignedCreativesCount = useMemo(
     () => creatives.filter((c) => c.assignedInventoryIds.length > 0).length,
     [creatives]
@@ -477,6 +645,36 @@ useEffect(() => {
       });
   }, [inventory, invListQuery, invListMapId, invListVariantKey]);
 
+  const isListAssignMode = assignView === "list" && assignMode.isActive && !!activeCreative;
+  const listRowsForRender = useMemo(() => {
+    if (!isListAssignMode || !activeCreative) return inventoryListRows;
+    return inventoryListRows.filter((item) => item.mediaVariantKey === activeCreative.mediaVariantKey);
+  }, [activeCreative, inventoryListRows, isListAssignMode]);
+
+  const hasActiveInventoryListFilters = Boolean(invListQuery.trim()) || invListMapId !== "all" || invListVariantKey !== "all";
+  const inventoryListMapFilterLabel = invListMapId === "all" ? "All maps" : mapNameById[invListMapId] || "Map filter";
+  const inventoryListMediaFilterLabel = invListVariantKey === "all" ? "All media" : mediaLabelFromKey(invListVariantKey);
+  const inventoryListFilterSummary = hasActiveInventoryListFilters
+    ? `${inventoryListMapFilterLabel} · ${inventoryListMediaFilterLabel}`
+    : "to assign";
+
+  const expandMobileInventoryTools = useCallback((focusSearch = false) => {
+    setMobileInventoryToolsExpanded(true);
+    if (focusSearch) {
+      window.setTimeout(() => mobileInventorySearchRef.current?.focus(), 80);
+    }
+  }, []);
+
+  const clearInventoryListFilters = useCallback(() => {
+    setInvListQuery("");
+    setInvListMapId("all");
+    setInvListVariantKey("all");
+  }, []);
+
+  const scrollInventoryListTop = useCallback(() => {
+    listStageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   // Pins visible on map (map + activeVariantKey filter)
   const pinsOnActiveMap = useMemo(() => {
     const q = mapInvQuery.trim().toLowerCase();
@@ -495,18 +693,41 @@ useEffect(() => {
     [inventory, activeMapId]
   );
 
+  const inventoryListAssignedCount = useMemo(
+    () => listRowsForRender.filter((item) => !!item.assignedCreativeId).length,
+    [listRowsForRender]
+  );
+  const isInventoryListContext = assignView === "list";
+  const inventoryContextTitle = isInventoryListContext
+    ? invListMapId === "all"
+      ? "All venue inventory"
+      : inventoryListMapFilterLabel
+    : activeMap?.name || "Location";
+  const inventoryContextAssignedCount = isInventoryListContext ? inventoryListAssignedCount : activeMapAssignedCount;
+  const inventoryContextTotalCount = isInventoryListContext ? listRowsForRender.length : activeMapTotalCount;
+  const inventoryContextSummary = isInventoryListContext
+    ? invListMapId === "all"
+      ? `${inventoryContextAssignedCount}/${inventoryContextTotalCount} assigned in list`
+      : `${inventoryContextAssignedCount}/${inventoryContextTotalCount} assigned on map`
+    : `${inventoryContextAssignedCount}/${inventoryContextTotalCount} locations assigned in this view`;
+  const inventoryContextCompactSummary = `${inventoryContextAssignedCount}/${inventoryContextTotalCount} assigned`;
+  const inventoryContextIsComplete =
+    inventoryContextTotalCount > 0 && inventoryContextAssignedCount === inventoryContextTotalCount;
+
   // Pin declutter (hover-only)
   const declutterCenterId = hoveredInvId || activePinId || null;
-  const activeMapIsComplete = activeMapTotalCount > 0 && activeMapAssignedCount === activeMapTotalCount;
 
   function openCreativePreview(creative: CreativeAsset | null | undefined) {
     if (!creative) return;
     const isDocument = creative.fileMeta?.toUpperCase().includes("PDF");
+    const fullPreview = getCreativeFull(creative);
+    const thumbPreview = getCreativeThumb(creative);
     setLightbox({
-      src: isDocument ? getCreativeThumb(creative) : getCreativeFull(creative),
+      src: fullPreview,
       title: creative.filename,
       subtitle: creative.fileMeta,
-      openUrl: getCreativeFull(creative),
+      openUrl: fullPreview,
+      fallbackSrc: thumbPreview,
       assetType: isDocument ? "document" : "image",
     });
   }
@@ -653,7 +874,8 @@ useEffect(() => {
             inventoryRecordId,
             creativeId,
             inventory.find((item) => item.recordId === inventoryRecordId)?.assignmentUpdatedAt ?? null,
-            shareAccess.isShareMode
+            shareAccess.isShareMode,
+            presence.sessionId
           );
           setAssignmentSaveState({
             tone: "saved",
@@ -724,12 +946,33 @@ useEffect(() => {
     if (c) {
       setActiveVariantKey(c.mediaVariantKey);
       setFilterSource("auto");
+      if (assignView === "list") {
+        if (!assignListFilterSnapshotRef.current) {
+          assignListFilterSnapshotRef.current = {
+            query: invListQuery,
+            mapId: invListMapId,
+            variantKey: invListVariantKey,
+          };
+        }
+        setInvListVariantKey(c.mediaVariantKey);
+        setOpenInvPickerId(null);
+      }
     }
+  }
+
+  function restoreListAssignFilters() {
+    const snapshot = assignListFilterSnapshotRef.current;
+    if (!snapshot) return;
+    setInvListQuery(snapshot.query);
+    setInvListMapId(snapshot.mapId);
+    setInvListVariantKey(snapshot.variantKey);
+    assignListFilterSnapshotRef.current = null;
   }
 
   function onExitAssign() {
     setAssignMode(endAssignMode());
     setInvQuery("");
+    restoreListAssignFilters();
 
     if (filterSource === "auto") {
       setActiveVariantKey(null);
@@ -814,6 +1057,8 @@ useEffect(() => {
   const postDate = isDemo
     ? (ctx.postDate || "—")
     : liveProject?.postDate || currentRollup?.dates.postDate || (projectId === "proj_001" ? "2025-12-25" : "—");
+  const commandArtworkDue = artworkDue === "—" ? "Not set" : artworkDue;
+  const commandPostDate = postDate === "—" ? "Not set" : postDate;
   const projectMarketLabel = isDemo ? ctx.venueMarket || "New York City" : liveProject?.marketName || currentRollup?.marketName || "New York City";
   const projectVenueLabel = isDemo ? ctx.venueName || "Penn Station" : liveProject?.venueName || currentRollup?.venueName || "Penn Station";
   const projectCustomerLabel = isDemo ? "Intersection" : liveProject?.customerName || "Intersection";
@@ -1013,90 +1258,158 @@ useEffect(() => {
     );
   }
 
+  const usesCreativeShelf = assignView === "list" && isListFirstViewport;
+  const hasReviewableInventory = inventory.length > 0;
+  const compactReviewCtaLabel =
+    useUtilityHeader && !isSubmitted && isAllocationComplete ? "Review & Submit" : reviewCtaLabel;
+  const headerActions = isSubmitted ? null : (
+    <div className="assign-headerActions">
+      <div className="assign-headerActionRow">
+        <button className="btn btn-ghost btn-soft" type="button" onClick={openAllocationPdf}>
+          Download PDF
+        </button>
+
+        {!isSubmitted && shareAccess.canView("artwork") && (
+          <button className="btn btn-ghost btn-soft" type="button" onClick={() => setArtworkFolderOpen(true)}>
+            Artwork Folder
+          </button>
+        )}
+
+        <button
+          className={[
+            "btn",
+            "btn-primary",
+            isAllocationComplete ? "review-cta-ready" : "",
+            !hasReviewableInventory ? "review-cta-empty" : "",
+          ].filter(Boolean).join(" ")}
+          type="button"
+          onClick={() => setReviewOpen(true)}
+          disabled={!hasReviewableInventory}
+        >
+          {compactReviewCtaLabel}
+          {!isSubmitted && isAllocationComplete && <span className="review-cta-spark" aria-hidden="true">✨</span>}
+        </button>
+      </div>
+      <div
+        className={[
+          "assign-headerSaveStatus",
+          assignmentSaveState.tone === "saving" ? "is-saving" : "",
+          assignmentSaveState.tone === "saved" ? "is-saved" : "",
+          assignmentSaveState.tone === "error" ? "is-error" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {assignmentSaveState.tone === "saving"
+          ? "Updating…"
+          : assignmentSaveState.tone === "idle"
+            ? ""
+            : assignmentSaveState.message}
+      </div>
+    </div>
+  );
+
   return (
     <AppShell pageClassName="workspace" projectTitle={projectTitle}>
-      <div className="assign-fullscreen">
-        <PageHeader
-          variant="workspace"
-          className="page-header-compactProject"
-          eyebrow="Creative Assignment"
-          title={projectTitle}
-          meta={
-            <div className="assign-projectMetaRow assign-projectMetaRow-grouped">
-              <div className="assign-projectContextGroup">
-                <div className="assign-projectMeta assign-projectMeta-chip">
-                  <span className="assign-metaValue">{projectMarketLabel}</span>
-                </div>
-
-                <div className="assign-projectMeta assign-projectMeta-chip">
-                  <span className="assign-metaValue">{projectVenueLabel}</span>
-                </div>
-              </div>
-
-              <div className="assign-projectCampaignGroup">
-                <div className="assign-projectMeta assign-projectMeta-detail">
-                  <span className="assign-metaLabel">Artwork Due</span>
-                  <span className="assign-metaValue">{artworkDue}</span>
-                </div>
-
-                <div className="assign-projectMeta assign-projectMeta-detail">
-                  <span className="assign-metaLabel">Post Date</span>
-                  <span className="assign-metaValue">{postDate}</span>
-                </div>
-
-                <div className="assign-projectMeta assign-projectMeta-detail assign-projectMeta-detailEmphasis">
-                  <span className="assign-metaLabel">Coverage</span>
-                  <span className="assign-metaValue">
-                    {assignedLocationsCount}/{inventory.length} assigned
-                  </span>
-                </div>
-              </div>
-            </div>
-          }
-          backLabel="← Back to Hub"
-          onBack={() => navigate(shareAccess.buildProjectUrl(`/p/${projectId}${modeSuffix}`), isDemo ? { state: { demo: true } } : undefined)}
-          actions={
-            isSubmitted ? null :
-            <div className="assign-headerActions">
-              <div className="assign-headerActionRow">
-                <button className="btn btn-ghost btn-soft" type="button" onClick={openAllocationPdf}>
-                  Download PDF
-                </button>
-
-                {!isSubmitted && shareAccess.canView("artwork") && (
-                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => setArtworkFolderOpen(true)}>
-                    Artwork Folder
-                  </button>
-                )}
-
-                <button
-                  className={`btn btn-primary ${isAllocationComplete ? "review-cta-ready" : ""}`}
-                  type="button"
-                  onClick={() => setReviewOpen(true)}
-                >
-                  {reviewCtaLabel}
-                  {!isSubmitted && isAllocationComplete && <span className="review-cta-spark" aria-hidden="true">✨</span>}
-                </button>
-              </div>
-              <div
-                className={[
-                  "assign-headerSaveStatus",
-                  assignmentSaveState.tone === "saving" ? "is-saving" : "",
-                  assignmentSaveState.tone === "saved" ? "is-saved" : "",
-                  assignmentSaveState.tone === "error" ? "is-error" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
+      <div
+        className={[
+          "assign-fullscreen",
+          useUtilityHeader ? "is-utility-header" : "",
+          `assign-view-${assignView}`,
+          isListOnlyViewport ? "is-list-only" : "",
+          isListFirstViewport ? "is-list-first" : "",
+          usesCreativeShelf ? "is-creative-shelf" : "",
+        ].filter(Boolean).join(" ")}
+      >
+        {useUtilityHeader ? (
+          <section className="assign-commandHeader" aria-label="Creative assignment workspace header">
+            <div className="assign-commandIdentity">
+              <button
+                className="btn btn-ghost btn-soft assign-commandBack"
+                type="button"
+                onClick={() => navigate(shareAccess.buildProjectUrl(`/p/${projectId}${modeSuffix}`), isDemo ? { state: { demo: true } } : undefined)}
               >
-                {assignmentSaveState.tone === "saving"
-                  ? "Updating…"
-                  : assignmentSaveState.tone === "idle"
-                    ? ""
-                    : assignmentSaveState.message}
+                ← Back
+              </button>
+
+              <div className="assign-commandTitleBlock">
+                <div className="assign-commandEyebrow">Creative Assignment</div>
+                <div className="assign-commandTitle" title={projectTitle}>{projectTitle}</div>
               </div>
             </div>
-          }
-        />
+
+            <div className="assign-commandMeta" aria-label="Project status">
+              <span className="assign-commandChip">{projectMarketLabel}</span>
+              <span className="assign-commandChip">{projectVenueLabel}</span>
+
+              <span className="assign-commandStat assign-commandStatDue">
+                <span className="assign-commandStatLabel">Due</span>
+                <span className="assign-commandStatValue">{commandArtworkDue}</span>
+              </span>
+
+              <span className="assign-commandStat assign-commandStatPost">
+                <span className="assign-commandStatLabel">Post</span>
+                <span className="assign-commandStatValue">{commandPostDate}</span>
+              </span>
+
+              <span className="assign-commandStat assign-commandStatCoverage">
+                <span className="assign-commandStatLabel">Coverage</span>
+                <span className="assign-commandStatValue">{assignedLocationsCount}/{inventory.length} assigned</span>
+              </span>
+            </div>
+
+            <div className="assign-commandActions">
+              <WorkspacePresenceCluster
+                participants={presence.participants}
+                currentSessionId={presence.sessionId}
+                status={presence.status}
+              />
+              {headerActions}
+            </div>
+          </section>
+        ) : (
+          <PageHeader
+            variant="workspace"
+            className="page-header-compactProject"
+            eyebrow="Creative Assignment"
+            title={projectTitle}
+            meta={
+              <div className="assign-projectMetaRow assign-projectMetaRow-grouped">
+                <div className="assign-projectContextGroup">
+                  <div className="assign-projectMeta assign-projectMeta-chip">
+                    <span className="assign-metaValue">{projectMarketLabel}</span>
+                  </div>
+
+                  <div className="assign-projectMeta assign-projectMeta-chip">
+                    <span className="assign-metaValue">{projectVenueLabel}</span>
+                  </div>
+                </div>
+
+                <div className="assign-projectCampaignGroup">
+                  <div className="assign-projectMeta assign-projectMeta-detail">
+                    <span className="assign-metaLabel">Artwork Due</span>
+                    <span className="assign-metaValue">{artworkDue}</span>
+                  </div>
+
+                  <div className="assign-projectMeta assign-projectMeta-detail">
+                    <span className="assign-metaLabel">Post Date</span>
+                    <span className="assign-metaValue">{postDate}</span>
+                  </div>
+
+                  <div className="assign-projectMeta assign-projectMeta-detail assign-projectMeta-detailEmphasis">
+                    <span className="assign-metaLabel">Coverage</span>
+                    <span className="assign-metaValue">
+                      {assignedLocationsCount}/{inventory.length} assigned
+                    </span>
+                  </div>
+                </div>
+              </div>
+            }
+            backLabel="← Back to Hub"
+            onBack={() => navigate(shareAccess.buildProjectUrl(`/p/${projectId}${modeSuffix}`), isDemo ? { state: { demo: true } } : undefined)}
+            actions={headerActions}
+          />
+        )}
 
         {!isSubmitted && isAllocationComplete && inventory.length > 0 && (
           <div className="assign-completeBanner">
@@ -1188,7 +1501,7 @@ useEffect(() => {
                   <span className="field-icon">⌕</span>
                   <input
                     className="field-input"
-                    placeholder="Search creatives…"
+                    placeholder="Search files…"
                     value={creativeQuery}
                     onChange={(e) => setCreativeQuery(e.target.value)}
                   />
@@ -1276,7 +1589,7 @@ useEffect(() => {
                   const assignedCount = c.assignedInventoryIds.length;
                   const hasAssignments = assignedCount > 0;
                   const variant = variantByKey.get(c.mediaVariantKey) as any;
-                  const creativeDisplayColor = creativeDisplayColorById.get(c.id) || c.color || "#2563eb";
+                  const creativeDisplayColor = creativeDisplayColorById.get(c.id) || c.color || "#3F6ED8";
 
                   return (
                     <div
@@ -1352,7 +1665,7 @@ useEffect(() => {
                         <div
                           className="creative-pill"
                           title={mediaLabel}
-                          style={{ ["--variantTone" as any]: variant?.color || c.color || "#2563eb" }}
+                          style={{ ["--variantTone" as any]: variant?.color || c.color || "#3F6ED8" }}
                         >
                           {mediaLabel}
                         </div>
@@ -1439,32 +1752,35 @@ useEffect(() => {
 				<div>
                   <div className="assign-venueName">Penn Station</div>
                   <div className="assign-mapContext">
-                    <span className="assign-mapContextTitle">{activeMap?.name || "Location"}</span>
+                    <span className="assign-mapContextTitle">{inventoryContextTitle}</span>
                     <span className="assign-mapContextText">
-                      {activeMapAssignedCount}/{activeMapTotalCount} locations assigned in this view
+                      <span className="assign-mapContextTextFull">{inventoryContextSummary}</span>
+                      <span className="assign-mapContextTextCompact">{inventoryContextCompactSummary}</span>
                     </span>
-                    <span className={`assign-mapCompletePill ${activeMapIsComplete ? "is-visible" : "is-hidden"}`}>
+                    <span className={`assign-mapCompletePill ${inventoryContextIsComplete ? "is-visible" : "is-hidden"}`}>
                       Complete
                     </span>
                   </div>
                 </div>
 			
-				<div className="assign-viewToggle">
-				  <button
-					type="button"
-					className={`assign-viewBtn ${assignView === "map" ? "is-on" : ""}`}
-					onClick={() => setAssignView("map")}
-				  >
-					Map View
-				  </button>
-				  <button
-					type="button"
-					className={`assign-viewBtn ${assignView === "list" ? "is-on" : ""}`}
-					onClick={() => setAssignView("list")}
-				  >
-					List View
-				  </button>
-				</div>
+				{!isListOnlyViewport ? (
+				  <div className="assign-viewToggle">
+				    <button
+					  type="button"
+					  className={`assign-viewBtn ${assignView === "map" ? "is-on" : ""}`}
+					  onClick={() => selectAssignView("map")}
+				    >
+					  Map View
+				    </button>
+				    <button
+					  type="button"
+					  className={`assign-viewBtn ${assignView === "list" ? "is-on" : ""}`}
+					  onClick={() => selectAssignView("list")}
+				    >
+					  List View
+				    </button>
+				  </div>
+				) : null}
 			  </div>
         {isSubmitted && (
           <div className="assign-mapNote">
@@ -1509,7 +1825,10 @@ useEffect(() => {
 						if (!isPanning) closePopover();
 					  }}
 					>
-					  <div className="map-transform" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+					  <div
+              className="map-transform"
+              style={{ ...mapFrameStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+            >
 						{activeMap?.imageUrl ? (
 						  <img
 							key={activeMapId}
@@ -1609,6 +1928,9 @@ useEffect(() => {
 						  style={{
 							left: popPos?.left ?? (pinAnchor?.right ?? 20) + 12,
 							top: popPos?.top ?? Math.max(20, (pinAnchor?.top ?? 80) - 10),
+              ["--pinPopoverAccent" as any]:
+                ((variantByKey.get(inventory.find((i) => i.id === pinPopoverId)?.mediaVariantKey || "") as any)?.color ||
+                  "#2fbf71"),
 						  }}
 						  onClick={(e) => e.stopPropagation()}
 						>
@@ -1617,17 +1939,40 @@ useEffect(() => {
 							if (!inv) return null;
 				
 							const assignedCreative = inv.assignedCreativeId ? creativeById.get(inv.assignedCreativeId) : null;
+              const variant = variantByKey.get(inv.mediaVariantKey) as any;
+              const mediaName = getInventoryMediaName(inv, variant);
+              const trimDimensions = formatSpecDimensions(
+                inv.trimHeight,
+                inv.trimWidth,
+                variant ? formatMediaDimensions(variant.w, variant.h) : "Not specified"
+              );
+              const safeDimensions = formatSpecDimensions(inv.safeHeight, inv.safeWidth);
 				
 							return (
 							  <>
 								<div className="pin-pop-head">
-								  <div className="pin-pop-title">{inv.id}</div>
+								  <div className="pin-pop-heading">
+								    <div className="pin-pop-title">{inv.id}</div>
+								    <div className="pin-pop-meta">{mediaLabelFromKey(inv.mediaVariantKey)}</div>
+								  </div>
 								  <button className="btn btn-ghost btn-soft pin-pop-close" type="button" onClick={closePopover}>
 									✕
 								  </button>
 								</div>
-				
-								<div className="pin-pop-meta">{mediaLabelFromKey(inv.mediaVariantKey)}</div>
+
+                <details className="pin-details">
+                  <summary className="pin-details-summary">Specs</summary>
+                  <div className="pin-details-body">
+                    <div className="pin-details-row"><span className="k">Inventory ID</span><span className="v">{inv.id}</span></div>
+                    <div className="pin-details-row"><span className="k">Media</span><span className="v">{mediaName}</span></div>
+                    <div className="pin-details-row"><span className="k">Dimensions</span><span className="v">{trimDimensions}</span></div>
+                    <div className="pin-details-row"><span className="k">Safety Dimensions</span><span className="v">{safeDimensions}</span></div>
+                    <div className="pin-details-notes">
+                      <div className="pin-details-notesLabel">Notes</div>
+                      <div className="pin-details-notesText">{inv.notes?.trim() || "No notes added."}</div>
+                    </div>
+                  </div>
+                </details>
 				
 								{assignedCreative ? (
 								  <div className="pin-pop-assigned">
@@ -1792,24 +2137,41 @@ useEffect(() => {
 				
 					{/* Assign mode overlay inspector */}
 					{!isLocked && assignMode.isActive && activeCreative && (
-					  <div className="assign-overlay">
+					  <div
+              className="assign-overlay"
+              style={{ ["--assignOverlayColor" as any]: creativeDisplayColorById.get(activeCreative.id) || activeCreative.color || "#3F6ED8" }}
+            >
 						<div className="assign-overlayHead">
-						  <div>
-							<div className="assign-overlayTitle">Assign Mode</div>
-							<div className="assign-overlayFile" title={activeCreative.filename}>
-							  <strong>{activeCreative?.filename}</strong>
-							</div>
-							<div className="assign-overlayHint">
-							  Showing inventory matching: <strong>{mediaLabelFromKey(activeCreative.mediaVariantKey)}</strong>
-							</div>
-							<div className="assign-overlayTip">
-							  Tip: Press <kbd>Esc</kbd> to exit assign mode
-							</div>
-						  </div>
-						  <button className="btn btn-ghost btn-soft" type="button" onClick={onExitAssign}>
-							✕
+						  <div className="assign-overlayIdentity">
+                <button
+                  className="assign-overlayThumb"
+                  type="button"
+                  onClick={() => openCreativePreview(activeCreative)}
+                  aria-label={`Preview ${activeCreative.filename}`}
+                  title="Preview creative"
+                >
+                  <img src={getCreativeThumb(activeCreative)} alt="" loading="lazy" />
+                  <span className="assign-overlayColorDot" aria-hidden="true" />
+                </button>
+                <div className="assign-overlayCopy">
+                  <div className="assign-overlayTitle">Assign Mode</div>
+                  <div className="assign-overlayFile" title={activeCreative.filename}>
+                    <strong>{activeCreative?.filename}</strong>
+                  </div>
+                  <div className="assign-overlayHint">
+                    Matching <strong>{mediaLabelFromKey(activeCreative.mediaVariantKey)}</strong>
+                  </div>
+                </div>
+              </div>
+						  <button className="assign-overlayClose" type="button" onClick={onExitAssign} aria-label="Exit assign mode">
+                <X aria-hidden="true" size={17} />
 						  </button>
 						</div>
+
+            <div className="assign-overlayInstruction">
+              <span>Click map pins or rows to place this creative.</span>
+              <kbd>Esc</kbd>
+            </div>
 				
 						<div className="assign-overlaySearch">
 						  <span className="field-icon">⌕</span>
@@ -1822,7 +2184,10 @@ useEffect(() => {
 						</div>
 				
 						<div className="assign-overlaySection">
-						  <div className="assign-overlaySectionTitle">Available ({assignLists.available.length})</div>
+						  <div className="assign-overlaySectionTitle is-available">
+                <span>Available</span>
+                <strong>{assignLists.available.length}</strong>
+              </div>
 				
 						  {assignLists.available.map((i) => {
 							const checked = i.assignedCreativeId === activeCreative.id;
@@ -1832,6 +2197,7 @@ useEffect(() => {
 								key={i.id}
 								className={`assign-invRow ${checked ? "is-checked" : ""}`}
 								type="button"
+                aria-pressed={checked}
 								onClick={() => toggleForActiveCreative(i.id)}
 							  >
 								<div className="assign-invRow-main">
@@ -1847,7 +2213,10 @@ useEffect(() => {
 				
 						{assignLists.elsewhere.length > 0 && (
 						  <div className="assign-overlaySection">
-							<div className="assign-overlaySectionTitle">Assigned Elsewhere ({assignLists.elsewhere.length})</div>
+							<div className="assign-overlaySectionTitle is-elsewhere">
+                <span>Assigned Elsewhere</span>
+                <strong>{assignLists.elsewhere.length}</strong>
+              </div>
 				
 							{assignLists.elsewhere.map((i) => (
 							  <div key={i.id} className="assign-invRow elsewhere">
@@ -1873,35 +2242,103 @@ useEffect(() => {
               <div className="assign-listSummary">
                 <div className="assign-listSummaryTitle">Inventory Review</div>
                 <div className="assign-listSummaryText">
-                  {inventoryListRows.length} visible item{inventoryListRows.length === 1 ? "" : "s"} in this filtered list
+                  {isListAssignMode && activeCreative
+                    ? `Assigning ${activeCreative.filename}`
+                    : `${listRowsForRender.length} visible item${listRowsForRender.length === 1 ? "" : "s"} in this filtered list`}
                 </div>
               </div>
 
-					  <div className="assign-invSearch">
-						<span className="field-icon">⌕</span>
-						<input
-						  className="field-input"
-						  placeholder="Search inventory ID…"
-						  value={invListQuery}
-						  onChange={(e) => setInvListQuery(e.target.value)}
-						/>
-					  </div>
+              <div className={`assign-mobileInventoryDock ${mobileInventoryToolsExpanded ? "is-expanded" : ""}`}>
+                <button
+                  className="assign-mobileInventoryDockSummary"
+                  type="button"
+                  onClick={() => setMobileInventoryToolsExpanded((value) => !value)}
+                  aria-expanded={mobileInventoryToolsExpanded}
+                >
+                  <strong>{listRowsForRender.length}</strong>
+                  <span>Inventory</span>
+                  <em>{inventoryListFilterSummary}</em>
+                </button>
+                <button
+                  className="assign-mobileInventoryDockIcon"
+                  type="button"
+                  aria-label="Search inventory"
+                  onClick={() => expandMobileInventoryTools(true)}
+                >
+                  <Search aria-hidden="true" size={17} />
+                </button>
+                <button
+                  className={`assign-mobileInventoryDockIcon ${hasActiveInventoryListFilters ? "is-active" : ""}`}
+                  type="button"
+                  aria-label="Filter inventory"
+                  onClick={() => expandMobileInventoryTools(false)}
+                >
+                  <SlidersHorizontal aria-hidden="true" size={17} />
+                </button>
+                <button className="assign-mobileInventoryDockTop" type="button" onClick={scrollInventoryListTop}>
+                  Top
+                </button>
+              </div>
+
+              <div className={`assign-listControls ${mobileInventoryToolsExpanded ? "is-mobile-expanded" : ""}`}>
+					      <div className="assign-invSearch">
+						      <span className="field-icon">⌕</span>
+						      <input
+                    ref={mobileInventorySearchRef}
+						        className="field-input"
+						        placeholder="Search inventory ID…"
+						        value={invListQuery}
+						        onChange={(e) => setInvListQuery(e.target.value)}
+						      />
+					      </div>
 				
-					  <select className="select assign-filterSelect" value={invListMapId} onChange={(e) => setInvListMapId(e.target.value)}>
-						<option value="all">All Maps</option>
-						{maps.map((m) => (
-						  <option key={m.id} value={m.id}>{m.name}</option>
-						))}
-					  </select>
+					      <select className="select assign-filterSelect" value={invListMapId} onChange={(e) => setInvListMapId(e.target.value)}>
+						    <option value="all">All Maps</option>
+						    {maps.map((m) => (
+						      <option key={m.id} value={m.id}>{m.name}</option>
+						    ))}
+					      </select>
 				
-					  <select className="select assign-filterSelect" value={invListVariantKey} onChange={(e) => setInvListVariantKey(e.target.value)}>
-						<option value="all">All Media</option>
-						{variantCatalog.map((v: any) => (
-						  <option key={v.key} value={v.key}>
-							{v.mediaName} {formatMediaDimensions(v.w, v.h)}
-						  </option>
-						))}
-					  </select>
+					      <select className="select assign-filterSelect" value={invListVariantKey} onChange={(e) => setInvListVariantKey(e.target.value)}>
+						    <option value="all">All Media</option>
+						    {variantCatalog.map((v: any) => (
+						      <option key={v.key} value={v.key}>
+							    {v.mediaName} {formatMediaDimensions(v.w, v.h)}
+						      </option>
+						    ))}
+					      </select>
+                <div className="assign-mobileInventoryQueueBar">
+                  <div className="assign-mobileInventoryQueueCount">
+                    <strong>{listRowsForRender.length}</strong>
+                    <span>of {inventory.length} shown</span>
+                  </div>
+                  <button
+                    className="assign-mobileInventoryQueueButton"
+                    type="button"
+                    onClick={clearInventoryListFilters}
+                    disabled={!hasActiveInventoryListFilters}
+                  >
+                    Clear
+                  </button>
+                  <button className="assign-mobileInventoryQueueButton" type="button" onClick={scrollInventoryListTop}>
+                    Top
+                  </button>
+                  <button
+                    className="assign-mobileInventoryQueueButton assign-mobileInventoryQueueClose"
+                    type="button"
+                    onClick={() => setMobileInventoryToolsExpanded(false)}
+                    aria-label="Collapse inventory controls"
+                  >
+                    <X aria-hidden="true" size={15} />
+                    <span>Collapse</span>
+                  </button>
+                </div>
+                {isListAssignMode ? (
+                  <button className="btn btn-primary" type="button" onClick={onExitAssign}>
+                    Done
+                  </button>
+                ) : null}
+              </div>
 					</div>
 				
 					{/* LIST TABLE */}
@@ -1913,7 +2350,7 @@ useEffect(() => {
 						<div className="right">Actions</div>
 					  </div>
 				
-					  {inventoryListRows.length === 0 ? (
+					  {listRowsForRender.length === 0 ? (
 						<div className="invtab-empty">
               <div className="invtab-emptyTitle">No inventory items match these filters</div>
               <div className="invtab-emptyText">
@@ -1921,21 +2358,59 @@ useEffect(() => {
               </div>
             </div>
 					  ) : (
-						inventoryListRows.map((inv) => {
+						listRowsForRender.map((inv) => {
 						  const assigned = inv.assignedCreativeId ? creativeById.get(inv.assignedCreativeId) : null;
 						  const mediaLabel = mediaLabelFromKey(inv.mediaVariantKey);
+              const variant = variantByKey.get(inv.mediaVariantKey) as any;
+              const mediaName = getInventoryMediaName(inv, variant);
+              const trimDimensions = formatSpecDimensions(
+                inv.trimHeight,
+                inv.trimWidth,
+                variant ? formatMediaDimensions(variant.w, variant.h) : "Not specified"
+              );
+              const safeDimensions = formatSpecDimensions(inv.safeHeight, inv.safeWidth);
 						  const matchingCreatives = creatives.filter((c) => c.mediaVariantKey === inv.mediaVariantKey);
+              const checkedForActive = isListAssignMode && activeCreative && inv.assignedCreativeId === activeCreative.id;
+              const assignedElsewhere = isListAssignMode && activeCreative && inv.assignedCreativeId && inv.assignedCreativeId !== activeCreative.id;
 				
 						  return (
-							<div key={inv.id} className="assign-listRow">
+							<div
+                key={inv.id}
+                className={`assign-listRow ${isListAssignMode ? "is-batch" : ""}`}
+                style={{ ["--inventoryColor" as any]: variant?.color || "#94a3b8" }}
+              >
 							  <div className="assign-listInv">
-								<div className="assign-listInvId">{inv.id}</div>
+								<div className="assign-listInvId">
+                  {isListAssignMode && !assignedElsewhere ? (
+                    <input
+                      className="assign-listCheckbox"
+                      type="checkbox"
+                      checked={Boolean(checkedForActive)}
+                      onChange={() => toggleForActiveCreative(inv.id)}
+                      disabled={isLocked}
+                    />
+                  ) : null}
+                  <span>{inv.id}</span>
+                </div>
 								<div className="assign-listInvSub">{mapNameById[inv.mapId] || inv.mapId}</div>
 							  </div>
 				
 							  <div className="assign-listMedia">{mediaLabel}</div>
 				
 								<div className="assign-listAssigned">
+                  {isListAssignMode ? (
+                    assigned ? (
+                      <div className={`assign-listBatchState ${checkedForActive ? "is-active" : "is-elsewhere"}`}>
+                        <span className="assign-listDot" style={{ background: creativeDisplayColorById.get(assigned.id) || assigned.color }} />
+                        <span className="assign-listName" title={assigned.filename}>
+                          {checkedForActive ? "Selected" : assigned.filename}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="assign-listBatchState">Available</div>
+                    )
+                  ) : (
+                    <>
 								  {/* “Assigned chip” is now the picker trigger (like pin popover) */}
 									<button
 									  type="button"
@@ -2014,25 +2489,64 @@ useEffect(() => {
 									)}
 								  </div>
 								)}
+                  </>
+                  )}
 								</div>
 				
 								<div className="assign-listActions right">
-								  {inv.assignedCreativeId ? (
-									<button
-									  className="btn btn-ghost btn-soft"
-									  type="button"
-									  onClick={() => {
-										setAssignment(inv.id, null);
-										setOpenInvPickerId(null);
-									  }}
-                    disabled={isLocked}
-									>
-									  Clear
-									</button>
-								  ) : (
-									<span />
-								  )}
+                  <button
+                    className="btn btn-ghost btn-soft"
+                    type="button"
+                    onClick={() => setMapModalInventoryId(inv.id)}
+                  >
+                    View Map
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-soft"
+                    type="button"
+                    onClick={() => setOpenListDetailsId((current) => (current === inv.id ? null : inv.id))}
+                  >
+                    Details
+                  </button>
+                  {assignedElsewhere && activeCreative ? (
+                    <button
+                      className="btn btn-ghost btn-soft"
+                      type="button"
+                      onClick={() => setAssignment(inv.id, activeCreative.id)}
+                      disabled={isLocked}
+                    >
+                      Replace
+                    </button>
+                  ) : inv.assignedCreativeId && !isListAssignMode ? (
+                    <button
+                      className="btn btn-ghost btn-soft"
+                      type="button"
+                      onClick={() => {
+                        setAssignment(inv.id, null);
+                        setOpenInvPickerId(null);
+                      }}
+                      disabled={isLocked}
+                    >
+                      Clear
+                    </button>
+                  ) : (
+                    <span className="assign-listActionSlot" aria-hidden="true" />
+                  )}
 								</div>
+                {openListDetailsId === inv.id ? (
+                  <div className="assign-listDetails">
+                    <div className="assign-listDetailsGrid">
+                      <div><span>Inventory ID</span><strong>{inv.id}</strong></div>
+                      <div><span>Media</span><strong>{mediaName}</strong></div>
+                      <div><span>Dimensions</span><strong>{trimDimensions}</strong></div>
+                      <div><span>Safety Dimensions</span><strong>{safeDimensions}</strong></div>
+                    </div>
+                    <div className="assign-listDetailsNotes">
+                      <span>Notes</span>
+                      <p>{inv.notes?.trim() || "No notes added."}</p>
+                    </div>
+                  </div>
+                ) : null}
 							</div>
 						  );
 						})
@@ -2131,9 +2645,108 @@ useEffect(() => {
 
       {shareAccess.identityModal()}
 
+      {mapModalInventoryId && mapModalInventory ? (
+        <Portal>
+          <div className="assign-mapModalBackdrop" onMouseDown={() => setMapModalInventoryId(null)}>
+            <div className="assign-mapModal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="assign-mapModalHead">
+                <div>
+                  <div className="assign-mapModalTitle">{mapModalInventory.id}</div>
+                  <div className="assign-mapModalSub">
+                    {mapNameById[mapModalInventory.mapId] || mapModalMap?.name || "Map"} · {mediaLabelFromKey(mapModalInventory.mediaVariantKey)}
+                  </div>
+                </div>
+                <button className="btn btn-ghost btn-soft" type="button" onClick={() => setMapModalInventoryId(null)}>
+                  x
+                </button>
+              </div>
+              <div
+                className="assign-mapCanvas assign-mapModalCanvas"
+                ref={modalMapViewportRef}
+                onWheel={onWheelModalMap}
+                onMouseDown={onMouseDownModalMap}
+                onMouseMove={onMouseMoveModalMap}
+                onMouseUp={onMouseUpModalMap}
+                onMouseLeave={onMouseUpModalMap}
+              >
+                <div
+                  className="map-transform"
+                  style={{
+                    ...modalMapFrameStyle,
+                    transform: `translate(${modalMapPan.x}px, ${modalMapPan.y}px) scale(${modalMapZoom})`,
+                  }}
+                >
+                  {mapModalMap?.imageUrl ? (
+                    <img
+                      ref={modalMapImgRef}
+                      className="map-image"
+                      src={mapModalMap.imageUrl}
+                      alt=""
+                      draggable={false}
+                      onLoad={onModalMapImageLoad}
+                      onError={onModalMapImageError}
+                    />
+                  ) : (
+                    <div className="assign-mapPlaceholder">No map image configured for this location.</div>
+                  )}
+                  <div className="pin-layer">
+                    {inventory
+                      .filter((item) => item.mapId === mapModalInventory.mapId)
+                      .map((inv) => {
+                        const variant: any = variantCatalog.find((v: any) => v.key === inv.mediaVariantKey);
+                        const assignedCreative = inv.assignedCreativeId ? creativeById.get(inv.assignedCreativeId) : null;
+                        const selected = inv.id === mapModalInventory.id;
+                        return (
+                          <button
+                            key={inv.id}
+                            className={`pin ${selected ? "is-selected is-hovered" : ""}`}
+                            style={{
+                              left: `${inv.x * 100}%`,
+                              top: `${inv.y * 100}%`,
+                              ["--pinColor" as any]: variant?.color || "#94a3b8",
+                              ["--haloColor" as any]: assignedCreative
+                                ? creativeDisplayColorById.get(assignedCreative.id) || assignedCreative.color
+                                : "transparent",
+                              ["--pinInvScale" as any]: String(1 / modalMapZoom),
+                              ["--pinJx" as any]: "0px",
+                              ["--pinJy" as any]: "0px",
+                            }}
+                            type="button"
+                            title={inv.id}
+                            onClick={() => setMapModalInventoryId(inv.id)}
+                          >
+                            <span className="pin-halo" />
+                            <span className="pin-core">{variant?.shortLabel || ""}</span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+                {modalMapError ? <div className="assign-mapPlaceholder">We could not load this map asset.</div> : null}
+                <div className="map-hint" onClick={(e) => e.stopPropagation()}>
+                  {Math.round(modalMapZoom * 100)}%
+                  <button
+                    className="map-hint-btn"
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      fitModalMapToView();
+                    }}
+                  >
+                    Fit
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      ) : null}
+
       <Lightbox
         isOpen={!!lightbox}
         src={lightbox?.src || ""}
+        fallbackSrc={lightbox?.fallbackSrc}
         title={lightbox?.title}
         subtitle={lightbox?.subtitle}
         openInNewTabUrl={lightbox?.openUrl}

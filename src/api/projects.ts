@@ -68,6 +68,10 @@ export type ApiProjectWorkspaceResponse = {
   };
   scope: {
     includedIds: string[];
+    sourceType?: "full_venue" | "venue_preset" | "manual";
+    presetId?: string | null;
+    presetName?: string | null;
+    appliedAt?: string | null;
   };
   workspace: {
     maps: Array<{
@@ -93,7 +97,13 @@ export type ApiProjectWorkspaceResponse = {
       locationName?: string;
       mapId: string;
       mediaVariantKey: string;
+      mediaType?: string | null;
       unitNumber?: string;
+      trimHeight?: number | null;
+      trimWidth?: number | null;
+      safeHeight?: number | null;
+      safeWidth?: number | null;
+      notes?: string;
       x: number;
       y: number;
       assignedCreativeId?: string | null;
@@ -217,6 +227,10 @@ export type ApiProjectProofsResponse = {
     autoRefreshRecommended?: boolean;
     autoRefreshPausedReason?: string | null;
   };
+};
+
+export type ApiRealtimeConfigResponse = {
+  websocketUrl: string;
 };
 
 export type ApiAllocationOverrideInventoryItem = ApiProjectWorkspaceResponse["workspace"]["inventory"][number] & {
@@ -758,6 +772,63 @@ export type CustomerBranding = {
   logoUrl?: string | null;
 };
 
+export type ApiVenueInventoryPreset = {
+  id: string;
+  venueId: string;
+  name: string;
+  description?: string;
+  includedIds: string[];
+  rawIncludedIds?: string[];
+  status: "active" | "archived";
+  isDefault?: boolean;
+  readOnly?: boolean;
+  createdAt?: string;
+  createdByName?: string;
+  updatedAt?: string;
+  updatedByName?: string;
+  validation: {
+    activeInventoryCount: number;
+    includedActiveCount: number;
+    excludedActiveCount: number;
+    unavailableIncludedCount: number;
+    unavailableIncludedIds: string[];
+    newActiveCount: number;
+    newActiveInventoryIds: string[];
+  };
+};
+
+export type ApiVenueDetailResponse = {
+  venue: {
+    id: string;
+    name: string;
+    customerId?: string;
+    customerName?: string;
+    marketId?: string;
+    marketName?: string;
+  };
+  maps: Array<{ id: string; name: string; mapUrl?: string | null; imageUrl?: string | null; inventoryCount?: number; unpinnedCount?: number }>;
+  variants: Array<Record<string, unknown>>;
+  inventory: Array<{
+    id: string;
+    inventoryId: string;
+    locationId: string;
+    locationDetail?: string | null;
+    mapName?: string | null;
+    mediaVariantKey: string;
+    mediaType?: string | null;
+    unitNumber?: string | null;
+    trimHeight?: number | null;
+    trimWidth?: number | null;
+    safeHeight?: number | null;
+    safeWidth?: number | null;
+    notes?: string | null;
+    x?: number | null;
+    y?: number | null;
+    isActive?: boolean;
+  }>;
+  presets?: ApiVenueInventoryPreset[];
+};
+
 type CacheEntry<T> = {
   value?: T;
   fetchedAt: number;
@@ -845,6 +916,10 @@ export async function fetchProjectWorkspace(api: ApiClientLike, projectId: strin
   return request;
 }
 
+export async function fetchRealtimeConfig(api: ApiClientLike, shareMode = false) {
+  return api.request<ApiRealtimeConfigResponse>(shareMode ? "/api/share/realtime/config" : "/api/realtime/config");
+}
+
 export async function fetchProjectHubBootstrap(api: ApiClientLike, projectId: string) {
   const response = await api.request<ApiProjectHubBootstrapResponse>(`/api/projects/${projectId}?hub=1`);
   workspaceCache.set(projectCacheKey(projectId, false), {
@@ -856,6 +931,44 @@ export async function fetchProjectHubBootstrap(api: ApiClientLike, projectId: st
     fetchedAt: Date.now(),
   });
   return response;
+}
+
+export async function fetchVenueDetail(api: ApiClientLike, venueId: string) {
+  return api.request<ApiVenueDetailResponse>(`/api/venues/${venueId}`);
+}
+
+export async function fetchVenueInventoryPresets(api: ApiClientLike, venueId: string) {
+  const response = await fetchVenueDetail(api, venueId);
+  return response.presets || [];
+}
+
+export async function createVenueInventoryPreset(
+  api: ApiClientLike,
+  venueId: string,
+  payload: { name: string; description?: string; includedIds: string[] }
+) {
+  return api.request<{ preset: ApiVenueInventoryPreset }>(`/api/venues/${venueId}/inventory-presets`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateVenueInventoryPreset(
+  api: ApiClientLike,
+  venueId: string,
+  presetId: string,
+  payload: { name?: string; description?: string; includedIds?: string[] }
+) {
+  return api.request<{ preset: ApiVenueInventoryPreset }>(`/api/venues/${venueId}/inventory-presets/${presetId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function archiveVenueInventoryPreset(api: ApiClientLike, venueId: string, presetId: string) {
+  return api.request<{ preset: ApiVenueInventoryPreset }>(`/api/venues/${venueId}/inventory-presets/${presetId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function fetchProjectLiftOrderUrl(api: ApiClientLike, projectId: string) {
@@ -1119,6 +1232,7 @@ export async function updateProjectProofLine(
     proofThumbObjectKey?: string | null;
     useClientCreativeAsProof?: boolean;
     expectedUpdatedAt?: string | null;
+    clientSessionId?: string | null;
   },
   shareMode = false
 ) {
@@ -1161,7 +1275,8 @@ export async function updateProjectAssignment(
   inventoryRecordId: string,
   creativeId: string | null,
   expectedUpdatedAt?: string | null,
-  shareMode = false
+  shareMode = false,
+  clientSessionId?: string | null
 ) {
   const response = await api.request<{
     assignment: {
@@ -1175,7 +1290,7 @@ export async function updateProjectAssignment(
     };
   }>(projectPath(projectId, `/assignments/${inventoryRecordId}`, shareMode), {
     method: "PATCH",
-    body: JSON.stringify({ creativeId, expectedUpdatedAt: expectedUpdatedAt ?? null }),
+    body: JSON.stringify({ creativeId, expectedUpdatedAt: expectedUpdatedAt ?? null, clientSessionId: clientSessionId || null }),
   });
   invalidateProjectWorkspaceCache(projectId, shareMode);
   return response;
@@ -1586,7 +1701,13 @@ export function normalizeWorkspaceInventory(
     locationName: item.locationName,
     mapId: item.mapId,
     mediaVariantKey: item.mediaVariantKey,
+    mediaType: item.mediaType || undefined,
     unitNumber: item.unitNumber || "",
+    trimHeight: item.trimHeight ?? null,
+    trimWidth: item.trimWidth ?? null,
+    safeHeight: item.safeHeight ?? null,
+    safeWidth: item.safeWidth ?? null,
+    notes: item.notes || "",
     x: item.x,
     y: item.y,
     assignedCreativeId: item.assignedCreativeId ?? null,

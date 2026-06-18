@@ -10,7 +10,6 @@
 
 .map-transform{
   position: absolute;
-  inset: 0;
   transform-origin: 50% 50%;
 }
 
@@ -87,12 +86,12 @@
 }
 
 .pin.is-selected .pin-core{
-  border-color: rgba(37,99,235,.35);
-  box-shadow: 0 14px 22px rgba(37,99,235,.18);
+  border-color: rgba(63,110,216,.35);
+  box-shadow: 0 14px 22px rgba(63,110,216,.18);
 }
 
 .pin.is-checked .pin-core{
-  box-shadow: 0 14px 22px rgba(37,99,235,.14);
+  box-shadow: 0 14px 22px rgba(63,110,216,.14);
 }
 
 .pin.is-dim{

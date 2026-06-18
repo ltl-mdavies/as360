@@ -38,7 +38,7 @@
   padding: 24px 26px 20px;
   border-bottom: 1px solid var(--stroke);
   background:
-    radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 36%),
+    radial-gradient(circle at top left, rgba(63,110,216,0.08), transparent 36%),
     rgba(255, 255, 255, 0.92);
 }
 
@@ -53,9 +53,9 @@
 .share-title {
   margin-top: 4px;
   font-size: 1.35rem;
-  font-weight: 850;
+  font-weight: 760;
   color: var(--text);
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 
 .share-copy {
@@ -132,7 +132,7 @@
 }
 
 .share-linkTitle {
-  font-weight: 850;
+  font-weight: 760;
   color: var(--text);
 }
 
@@ -154,23 +154,42 @@
 }
 
 .share-status {
-  border-radius: 999px;
-  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 10px;
+  padding: 4px 8px 4px 7px;
   font-size: 0.68rem;
-  font-weight: 850;
+  font-weight: 700;
   text-transform: capitalize;
 }
 
+.share-status::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 38%, transparent);
+}
+
 .share-status.is-active {
-  border: 1px solid rgba(22, 163, 74, 0.22);
-  background: rgba(22, 163, 74, 0.08);
+  border: 1px solid color-mix(in srgb, var(--brand-green) 24%, white);
+  background: var(--successTint);
   color: #166534;
+}
+
+.share-status.is-active::before {
+  background: var(--brand-green);
 }
 
 .share-status.is-revoked {
   border: 1px solid rgba(220, 38, 38, 0.18);
   background: rgba(220, 38, 38, 0.07);
   color: #991b1b;
+}
+
+.share-status.is-revoked::before {
+  background: var(--danger);
 }
 
 .share-linkStats {
@@ -226,7 +245,7 @@
 
 .share-deniedTitle {
   font-size: 1.5rem;
-  font-weight: 850;
+  font-weight: 760;
   color: var(--text);
 }
 
@@ -245,4 +264,70 @@
   .share-linkActions {
     justify-content: flex-start;
   }
+}
+
+html[data-theme="dark"] .share-scrim {
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--primary) 10%, transparent), transparent 36%),
+    rgba(2, 6, 23, .76);
+  backdrop-filter: blur(10px);
+}
+
+html[data-theme="dark"] .share-config,
+html[data-theme="dark"] .share-identityCard,
+html[data-theme="dark"] .share-denied {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-panel) 94%, transparent), color-mix(in srgb, var(--surface-raised) 90%, transparent));
+  border-color: var(--stroke);
+  color: var(--text);
+  box-shadow: 0 30px 90px rgba(0,0,0,.48);
+}
+
+html[data-theme="dark"] .share-configHead,
+html[data-theme="dark"] .share-create {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--brand-green) 7%, transparent), transparent 34%),
+    color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  border-color: var(--stroke);
+}
+
+html[data-theme="dark"] .share-linkList {
+  background: color-mix(in srgb, var(--surface-canvas) 92%, transparent);
+}
+
+html[data-theme="dark"] .share-field input,
+html[data-theme="dark"] .share-createInput,
+html[data-theme="dark"] .share-createSelect,
+html[data-theme="dark"] .share-linkCard,
+html[data-theme="dark"] .share-activity {
+  background: var(--surface-field);
+  border-color: var(--stroke);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .share-title,
+html[data-theme="dark"] .share-linkTitle,
+html[data-theme="dark"] .share-linkStats strong,
+html[data-theme="dark"] .share-activityRow span:first-child {
+  color: var(--signal-white);
+}
+
+html[data-theme="dark"] .share-copy,
+html[data-theme="dark"] .share-linkMeta,
+html[data-theme="dark"] .share-linkUrl,
+html[data-theme="dark"] .share-linkStats,
+html[data-theme="dark"] .share-activityRow {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .share-status.is-active {
+  background: color-mix(in srgb, var(--brand-green) 14%, var(--surface-field));
+  border-color: color-mix(in srgb, var(--brand-green) 34%, var(--stroke));
+  color: color-mix(in srgb, var(--brand-green) 74%, white 14%);
+}
+
+html[data-theme="dark"] .share-status.is-revoked {
+  background: color-mix(in srgb, #ef4444 12%, var(--surface-field));
+  border-color: color-mix(in srgb, #ef4444 34%, var(--stroke));
+  color: color-mix(in srgb, #f87171 80%, white 8%);
 }

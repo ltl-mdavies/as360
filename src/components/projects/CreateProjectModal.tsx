@@ -1,6 +1,8 @@
 // src/components/projects/CreateProjectModal.tsx
 import { useEffect, useMemo, useState } from "react";
 import Portal from "../common/Portal";
+import { fetchVenueInventoryPresets, type ApiVenueInventoryPreset } from "../../api/projects";
+import { useApiClient } from "../../api/useApiClient";
 
 export type NewProjectDraft = {
   projectMode?: "live" | "internal_sandbox";
@@ -18,6 +20,8 @@ export type NewProjectDraft = {
 
   endClientName?: string;
   contractNumber?: string;
+  inventoryPresetId?: string;
+  inventoryPresetName?: string;
 };
 
 export type ProjectCustomerOption = {
@@ -65,6 +69,7 @@ export default function CreateProjectModal({
   venues,
   setupLoading = false,
 }: Props) {
+  const api = useApiClient();
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -81,6 +86,9 @@ export default function CreateProjectModal({
 
   const [endClientName, setEndClientName] = useState("");
   const [contractNumber, setContractNumber] = useState("");
+  const [inventoryPresetId, setInventoryPresetId] = useState("full_venue");
+  const [inventoryPresets, setInventoryPresets] = useState<ApiVenueInventoryPreset[]>([]);
+  const [presetLoading, setPresetLoading] = useState(false);
 
   const sandboxCustomer = useMemo(
     () => customers.find((customer) => customer.isInternalSandbox),
@@ -127,6 +135,8 @@ export default function CreateProjectModal({
     setCustomerId(nextCustomerId);
     setMarketId(nextMarketId);
     setVenueId(nextVenues[0]?.id || "");
+    setInventoryPresetId("full_venue");
+    setInventoryPresets([]);
     setProjectMode("live");
     setSubmitError("");
   }, [customers, isOpen, liveCustomers, markets, venues]);
@@ -142,6 +152,7 @@ export default function CreateProjectModal({
         nextVenues.some((venue) => venue.id === venueId) ? venueId : nextVenues[0]?.id || "";
       setMarketId(nextMarketId);
       setVenueId(nextVenueId);
+      setInventoryPresetId("full_venue");
       if (sandboxCustomer?.id) setCustomerId(sandboxCustomer.id);
       return;
     }
@@ -160,7 +171,38 @@ export default function CreateProjectModal({
     setCustomerId(nextCustomerId);
     setMarketId(nextMarketId);
     setVenueId(nextVenueId);
+    setInventoryPresetId("full_venue");
   }, [customerId, isOpen, liveCustomers, marketId, markets, projectMode, sandboxCustomer?.id, venueId, venues]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isOpen || !venueId) {
+      setInventoryPresets([]);
+      setInventoryPresetId("full_venue");
+      return;
+    }
+
+    setPresetLoading(true);
+    void (async () => {
+      try {
+        const presets = await fetchVenueInventoryPresets(api, venueId);
+        if (cancelled) return;
+        setInventoryPresets(presets);
+        setInventoryPresetId((current) => (presets.some((preset) => preset.id === current) ? current : "full_venue"));
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Failed to load venue presets", error);
+        setInventoryPresets([]);
+        setInventoryPresetId("full_venue");
+      } finally {
+        if (!cancelled) setPresetLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, isOpen, venueId]);
 
   const canCreate =
     title.trim().length > 2 &&
@@ -180,6 +222,8 @@ export default function CreateProjectModal({
     setPoNumber("");
     setEndClientName("");
     setContractNumber("");
+    setInventoryPresetId("full_venue");
+    setInventoryPresets([]);
     setAdvancedOpen(false);
     setSubmitError("");
     setIsSubmitting(false);
@@ -212,6 +256,8 @@ export default function CreateProjectModal({
         poNumber: poNumber.trim() || undefined,
         endClientName: endClientName.trim() || undefined,
         contractNumber: contractNumber.trim() || undefined,
+        inventoryPresetId,
+        inventoryPresetName: inventoryPresets.find((preset) => preset.id === inventoryPresetId)?.name || "Full Venue",
       });
 
       reset();
@@ -359,6 +405,25 @@ export default function CreateProjectModal({
                 ) : null}
                 {projectMode === "internal_sandbox" && selectedVenue?.customerName ? (
                   <div className="cp-note">Target venue customer: {selectedVenue.customerName}</div>
+                ) : null}
+              </div>
+
+              <div className="cp-field">
+                <div className="cp-label">Inventory Preset</div>
+                <select
+                  className="cp-select"
+                  value={inventoryPresetId}
+                  onChange={(e) => setInventoryPresetId(e.target.value)}
+                  disabled={!venueId || presetLoading}
+                >
+                  {(inventoryPresets.length ? inventoryPresets : [{ id: "full_venue", name: "Full Venue" } as ApiVenueInventoryPreset]).map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+                {inventoryPresets.find((preset) => preset.id === inventoryPresetId)?.validation?.newActiveCount ? (
+                  <div className="cp-note">This preset has new venue inventory to review.</div>
                 ) : null}
               </div>
 

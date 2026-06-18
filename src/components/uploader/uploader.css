@@ -18,7 +18,7 @@ html[data-theme="dark"] .upl-backdrop{
   max-height: min(88vh, 880px);
   overflow: hidden;
 
-  border-radius: 24px;
+  border-radius: 16px;
   background: color-mix(in srgb, var(--panel) 92%, white);
   border: 1px solid var(--stroke2);
   box-shadow: 0 28px 80px rgba(12, 18, 30, .22);
@@ -42,6 +42,9 @@ html[data-theme="dark"] .upl-backdrop{
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--stroke2);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--brand-green) 7%, transparent), transparent 28%),
+    color-mix(in srgb, var(--surface-1) 88%, transparent);
 }
 
 .upl-headMain{
@@ -51,8 +54,9 @@ html[data-theme="dark"] .upl-backdrop{
 .upl-title{
   font-size: 18px;
   line-height: 1.1;
-  letter-spacing: -.02em;
-  font-weight: 950;
+  letter-spacing: 0;
+  font-family: var(--font-brand);
+  font-weight: 700;
 }
 
 .upl-sub{
@@ -74,9 +78,10 @@ html[data-theme="dark"] .upl-backdrop{
 .upl-metaPill{
   display:inline-flex;
   align-items:center;
+  gap: 7px;
   min-height: 32px;
-  padding: 0 12px;
-  border-radius: 999px;
+  padding: 0 12px 0 10px;
+  border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--stroke2) 90%, white);
   background: rgba(255,255,255,.74);
   color: color-mix(in srgb, var(--text) 82%, var(--muted));
@@ -84,10 +89,22 @@ html[data-theme="dark"] .upl-backdrop{
   font-weight: 800;
 }
 
+.upl-metaPill::before{
+  content: "";
+  width: 3px;
+  height: 15px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 34%, transparent);
+}
+
 .upl-metaPill.is-ready{
-  border-color: rgba(37,99,235,.16);
-  background: rgba(37,99,235,.08);
-  color: color-mix(in srgb, var(--text) 90%, var(--brand));
+  border-color: color-mix(in srgb, var(--brand-green) 20%, white);
+  background: color-mix(in srgb, var(--brand-green) 8%, white);
+  color: color-mix(in srgb, var(--text) 90%, var(--brand-green));
+}
+
+.upl-metaPill.is-ready::before{
+  background: var(--brand-green);
 }
 
 .upl-close{
@@ -117,8 +134,8 @@ html[data-theme="dark"] .upl-backdrop{
 
 .upl-stepTitle{
   font-size: 13px;
-  font-weight: 950;
-  letter-spacing: -.01em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .upl-stepNote{
@@ -153,7 +170,7 @@ html[data-theme="dark"] .upl-backdrop{
   gap: 10px;
   padding: 14px 14px;
   min-height: 74px;
-  border-radius: 18px;
+  border-radius: 10px;
   border: 1px solid var(--stroke2);
   background: rgba(255,255,255,.7);
   cursor: pointer;
@@ -171,9 +188,9 @@ html[data-theme="dark"] .upl-variant{
 }
 
 .upl-variant.is-on{
-  border-color: rgba(37,99,235,.28);
-  background: linear-gradient(180deg, rgba(37,99,235,.10), rgba(37,99,235,.05));
-  box-shadow: 0 12px 28px rgba(37,99,235,.12);
+  border-color: rgba(63,110,216,.28);
+  background: linear-gradient(180deg, rgba(63,110,216,.10), rgba(63,110,216,.05));
+  box-shadow: 0 12px 28px rgba(63,110,216,.12);
 }
 
 .upl-dot{
@@ -191,9 +208,9 @@ html[data-theme="dark"] .upl-variant{
 }
 
 .upl-variantName{
-  font-weight: 900;
+  font-weight: 700;
   font-size: 14px;
-  letter-spacing: -.01em;
+  letter-spacing: 0;
 }
 
 .upl-variantSize{
@@ -209,20 +226,20 @@ html[data-theme="dark"] .upl-variant{
   justify-content:center;
   min-height: 28px;
   padding: 0 10px;
-  border-radius: 999px;
-  background: rgba(37,99,235,.12);
-  color: var(--brand);
+  border-radius: 10px;
+  background: rgba(63,110,216,.12);
+  color: var(--primary);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .02em;
 }
 
 .upl-drop{
-  border-radius: 22px;
+  border-radius: 14px;
   border: 1px dashed rgba(148,163,184,.55);
   background:
     linear-gradient(180deg, rgba(255,255,255,.7), rgba(255,255,255,.55)),
-    radial-gradient(circle at top, rgba(37,99,235,.06), transparent 48%);
+    radial-gradient(circle at top, rgba(63,110,216,.06), transparent 48%);
   padding: 30px 24px;
   display: grid;
   place-items: center;
@@ -235,9 +252,9 @@ html[data-theme="dark"] .upl-drop{
 }
 
 .upl-drop.is-dragover{
-  border-color: rgba(37,99,235,.55);
-  background: linear-gradient(180deg, rgba(37,99,235,.10), rgba(37,99,235,.05));
-  box-shadow: inset 0 0 0 1px rgba(37,99,235,.12);
+  border-color: rgba(63,110,216,.55);
+  background: linear-gradient(180deg, rgba(63,110,216,.10), rgba(63,110,216,.05));
+  box-shadow: inset 0 0 0 1px rgba(63,110,216,.12);
 }
 
 .upl-dropEyebrow{
@@ -245,7 +262,7 @@ html[data-theme="dark"] .upl-drop{
   text-transform: uppercase;
   letter-spacing: .08em;
   color: var(--muted);
-  font-weight: 850;
+  font-weight: 700;
 }
 
 .upl-dropIcon{
@@ -253,18 +270,19 @@ html[data-theme="dark"] .upl-drop{
   height: 54px;
   display:grid;
   place-items:center;
-  border-radius: 18px;
+  border-radius: 10px;
   background: rgba(148,163,184,.10);
   color: color-mix(in srgb, var(--text) 68%, var(--muted));
   font-size: 24px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .upl-dropTitle{
   margin-top: 2px;
   font-size: 18px;
-  font-weight: 950;
-  letter-spacing: -0.02em;
+  font-family: var(--font-brand);
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .upl-dropSub{
@@ -281,7 +299,7 @@ html[data-theme="dark"] .upl-drop{
 
 .upl-empty{
   border: 1px solid var(--stroke2);
-  border-radius: 18px;
+  border-radius: 10px;
   padding: 18px;
   background: rgba(255,255,255,.50);
 }
@@ -292,8 +310,8 @@ html[data-theme="dark"] .upl-empty{
 
 .upl-emptyTitle{
   font-size: 14px;
-  font-weight: 900;
-  letter-spacing: -.01em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .upl-emptyText{
@@ -316,7 +334,7 @@ html[data-theme="dark"] .upl-empty{
   gap: 12px;
   align-items: center;
   padding: 12px;
-  border-radius: 18px;
+  border-radius: 10px;
   border: 1px solid var(--stroke2);
   background: rgba(255,255,255,.68);
   transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
@@ -350,7 +368,7 @@ html[data-theme="dark"] .upl-fileRow{
 
 .upl-pdfBadge{
   font-size: 11px;
-  font-weight: 950;
+  font-weight: 700;
   color: var(--muted);
   letter-spacing: .4px;
 }
@@ -361,7 +379,7 @@ html[data-theme="dark"] .upl-fileRow{
 
 .upl-fileName{
   font-size: 13px;
-  font-weight: 950;
+  font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

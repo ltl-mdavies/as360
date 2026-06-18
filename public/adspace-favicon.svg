@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generator: Adobe Illustrator 30.5.1, SVG Export Plug-In . SVG Version: 9.03 Build 0)  -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 200 200" style="enable-background:new 0 0 200 200;" xml:space="preserve">
+<style type="text/css">
+	.st0{display:none;}
+	.st1{display:inline;}
+	.st2{fill:#F2F3F5;}
+	.st3{fill:#111418;}
+	.st4{fill:#24A95A;}
+	.st5{opacity:0.8;clip-path:url(#SVGID_00000139281215980946207770000006307469971072900781_);}
+	.st6{fill:url(#SVGID_00000099644904099164296820000016069836872333937324_);}
+	.st7{fill:url(#SVGID_00000097484576235811036200000016870718594686795661_);}
+	.st8{font-family:'VTFJustinaHUM-Bold';}
+	.st9{font-size:125.3962px;}
+</style>
+<font horiz-adv-x="1000">
+<!-- Copyright \(c\) 2020 by Variable Type Foundry. All rights reserved. -->
+<!-- Copyright: Copyright 2026 Adobe System Incorporated. All rights reserved. -->
+<font-face font-family="VTFJustinaHUM-Bold" units-per-em="1000" underline-position="-100" underline-thickness="50"/>
+<missing-glyph horiz-adv-x="856" d="M754,0l0,732l-652,0l0,-732M223,611l410,0l0,-497l-410,0M397,322l0,88l-101,0l0,-88M564,322l0,88l-100,0l0,-88z"/>
+<glyph unicode="A" horiz-adv-x="616" d="M623,0l-241,732l-148,0l-241,-732l125,0l58,175l263,0l58,-175M308,572l91,-276l-183,0z"/>
+</font>
+
+	<g id="App_Icon">
+</g>
+<g id="Favicon_00000008858660426828612740000002799583057707576244_">
+	
+		<linearGradient id="SVGID_00000157308582305557410870000001364877460601003914_" gradientUnits="userSpaceOnUse" x1="9.4358" y1="20.1504" x2="171.5226" y2="200.2481">
+		<stop  offset="0" style="stop-color:#161A22"/>
+		<stop  offset="1" style="stop-color:#0F1218"/>
+	</linearGradient>
+	<path style="fill:url(#SVGID_00000157308582305557410870000001364877460601003914_);" d="M197.8,92.8l-45.7-69.5
+		c-2.5-3.7-6.6-6-11.1-6H28.5v-0.1C12.7,17.2,0,30.1,0,45.7v108.5c0,15.8,12.8,28.5,28.5,28.5H141c4.5,0,8.7-2.3,11.1-6l45.7-69.5
+		C200.7,102.9,200.7,97.2,197.8,92.8z"/>
+	<path class="st4" d="M30,44.5h5.6c1.1,0,2,0.9,2,2v106.9c0,1.1-0.9,2-2,2H30c-1.1,0-2-0.9-2-2V46.5C28,45.4,28.9,44.5,30,44.5z"/>
+	<text transform="matrix(1.2 0 0 1 50.2206 144.5688)" class="st2 st8 st9">A</text>
+</g>
+<g id="Logo">
+</g>
+</svg>

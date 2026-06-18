@@ -149,6 +149,23 @@ type InventoryItem = {
   updatedAt: string;
 };
 
+type VenueInventoryPresetItem = {
+  entityType: "VenueInventoryPreset";
+  id: string;
+  venueId: string;
+  name: string;
+  description?: string;
+  includedIds: string[];
+  knownInventoryIds: string[];
+  status: "active" | "archived";
+  createdAt: string;
+  createdByName: string;
+  updatedAt: string;
+  updatedByName: string;
+  archivedAt?: string | null;
+  archivedByName?: string | null;
+};
+
 type UserRole = "platform_admin" | "customer_admin";
 
 type UserProfileItem = {
@@ -277,6 +294,27 @@ export async function handler(event: ApiEvent) {
         return created({ venue: await createVenue(getBody(event), auth) });
       case "PATCH /api/venues/{venueId}":
         return ok({ venue: await updateVenue(requirePath(event, "venueId"), getBody(event), auth) });
+      case "POST /api/venues/{venueId}/inventory-presets":
+        return created({
+          preset: await createVenueInventoryPreset(requirePath(event, "venueId"), getBody(event), auth),
+        });
+      case "PATCH /api/venues/{venueId}/inventory-presets/{presetId}":
+        return ok({
+          preset: await updateVenueInventoryPreset(
+            requirePath(event, "venueId"),
+            requirePath(event, "presetId"),
+            getBody(event),
+            auth
+          ),
+        });
+      case "DELETE /api/venues/{venueId}/inventory-presets/{presetId}":
+        return ok({
+          preset: await archiveVenueInventoryPreset(
+            requirePath(event, "venueId"),
+            requirePath(event, "presetId"),
+            auth
+          ),
+        });
       case "POST /api/venues/{venueId}/maps":
         return created({ map: await createMap(requirePath(event, "venueId"), getBody(event), auth) });
       case "PATCH /api/venues/{venueId}/maps/{mapId}":
@@ -669,6 +707,10 @@ async function getVenueDetail(venueId: string, auth: AuthContext) {
   const inventory = items
     .filter((item): item is InventoryItem => item.entityType === "InventoryItem")
     .sort((a, b) => a.inventoryId.localeCompare(b.inventoryId));
+  const presets = items
+    .filter((item): item is VenueInventoryPresetItem => item.entityType === "VenueInventoryPreset")
+    .filter((preset) => preset.status !== "archived")
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const inventoryByLocation = new Map<string, InventoryItem[]>();
   for (const item of inventory) {
@@ -692,6 +734,7 @@ async function getVenueDetail(venueId: string, auth: AuthContext) {
     maps: mapSummaries,
     variants,
     inventory,
+    presets: buildVenuePresetResponses(venueId, inventory, presets),
     summary: {
       rooms: mapSummaries.length,
       inventory: inventory.length,
@@ -869,6 +912,224 @@ function normalizeDocumentSourceMode(value: unknown, documentLibraryUrl?: string
     return normalized;
   }
   return optionalString(documentLibraryUrl) ? "hybrid" : "adspace";
+}
+
+async function createVenueInventoryPreset(venueId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  const venue = await findVenueById(venueId);
+  if (!venue) throw new HttpError(404, `Venue ${venueId} not found`);
+  assertCustomerAccess(auth, venue.customerId);
+  const customer = await findCustomerById(venue.customerId);
+  if (!customer) throw new HttpError(404, `Customer ${venue.customerId} not found`);
+  assertCustomerMutable(auth, customer, "manage venue inventory presets");
+
+  const name = requiredString(payload, "name");
+  if (normalizeText(name) === "full venue") {
+    throw new HttpError(400, "Full Venue is the default preset and cannot be recreated.");
+  }
+
+  const venueItems = await queryByPk(`VENUE#${venueId}`);
+  const inventory = venueItems.filter((item): item is InventoryItem => item.entityType === "InventoryItem");
+  const duplicate = venueItems
+    .filter((item): item is VenueInventoryPresetItem => item.entityType === "VenueInventoryPreset")
+    .filter((preset) => preset.status !== "archived")
+    .some((preset) => normalizeText(preset.name) === normalizeText(name));
+  if (duplicate) throw new HttpError(409, `Preset "${name}" already exists for this venue.`);
+
+  const activeInventoryIds = inventory.filter((item) => item.isActive).map((item) => item.id).sort();
+  const includedIds = validatePresetIncludedIds(payload.includedIds, inventory);
+  if (!includedIds.length) throw new HttpError(400, "A preset must include at least one active inventory item.");
+
+  const now = isoNow();
+  const preset: VenueInventoryPresetItem = {
+    entityType: "VenueInventoryPreset",
+    id: optionalString(payload.id) || makeId("preset", venueId, name),
+    venueId,
+    name,
+    description: optionalString(payload.description),
+    includedIds,
+    knownInventoryIds: activeInventoryIds,
+    status: "active",
+    createdAt: now,
+    createdByName: auth.actorName,
+    updatedAt: now,
+    updatedByName: auth.actorName,
+  };
+
+  await putCore(buildVenueInventoryPresetRecord(preset));
+  venueDetailResponseCache.delete(`venue-detail:${venueId}:${authScopeCacheKey(auth)}`);
+  await writeAudit(`VENUE_ADMIN#${venueId}`, "inventory_preset.created", auth.actorName, {
+    venueId,
+    presetId: preset.id,
+    name: preset.name,
+    includedCount: includedIds.length,
+  });
+
+  return buildVenuePresetResponse(preset, inventory);
+}
+
+async function updateVenueInventoryPreset(venueId: string, presetId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  if (presetId === "full_venue") throw new HttpError(400, "Full Venue is read-only.");
+  const venue = await findVenueById(venueId);
+  if (!venue) throw new HttpError(404, `Venue ${venueId} not found`);
+  assertCustomerAccess(auth, venue.customerId);
+  const customer = await findCustomerById(venue.customerId);
+  if (!customer) throw new HttpError(404, `Customer ${venue.customerId} not found`);
+  assertCustomerMutable(auth, customer, "manage venue inventory presets");
+
+  const venueItems = await queryByPk(`VENUE#${venueId}`);
+  const existing = venueItems.find(
+    (item): item is VenueInventoryPresetItem =>
+      item.entityType === "VenueInventoryPreset" && item.id === presetId && item.status !== "archived"
+  );
+  if (!existing) throw new HttpError(404, `Preset ${presetId} not found for venue ${venueId}`);
+
+  const inventory = venueItems.filter((item): item is InventoryItem => item.entityType === "InventoryItem");
+  const nextName = hasOwn(payload, "name") ? requiredString(payload, "name") : existing.name;
+  const duplicate = venueItems
+    .filter((item): item is VenueInventoryPresetItem => item.entityType === "VenueInventoryPreset")
+    .filter((preset) => preset.status !== "archived" && preset.id !== existing.id)
+    .some((preset) => normalizeText(preset.name) === normalizeText(nextName));
+  if (duplicate) throw new HttpError(409, `Preset "${nextName}" already exists for this venue.`);
+
+  const nextIncludedIds = hasOwn(payload, "includedIds")
+    ? validatePresetIncludedIds(payload.includedIds, inventory)
+    : existing.includedIds;
+  if (!nextIncludedIds.length) throw new HttpError(400, "A preset must include at least one active inventory item.");
+
+  const next: VenueInventoryPresetItem = {
+    ...existing,
+    name: nextName,
+    description: hasOwn(payload, "description") ? optionalString(payload.description) : existing.description,
+    includedIds: nextIncludedIds,
+    knownInventoryIds: inventory.filter((item) => item.isActive).map((item) => item.id).sort(),
+    updatedAt: isoNow(),
+    updatedByName: auth.actorName,
+  };
+
+  await putCore(buildVenueInventoryPresetRecord(next));
+  venueDetailResponseCache.delete(`venue-detail:${venueId}:${authScopeCacheKey(auth)}`);
+  await writeAudit(`VENUE_ADMIN#${venueId}`, "inventory_preset.updated", auth.actorName, {
+    venueId,
+    presetId,
+    name: next.name,
+    includedCount: nextIncludedIds.length,
+  });
+
+  return buildVenuePresetResponse(next, inventory);
+}
+
+async function archiveVenueInventoryPreset(venueId: string, presetId: string, auth: AuthContext) {
+  if (presetId === "full_venue") throw new HttpError(400, "Full Venue is read-only.");
+  const venue = await findVenueById(venueId);
+  if (!venue) throw new HttpError(404, `Venue ${venueId} not found`);
+  assertCustomerAccess(auth, venue.customerId);
+  const customer = await findCustomerById(venue.customerId);
+  if (!customer) throw new HttpError(404, `Customer ${venue.customerId} not found`);
+  assertCustomerMutable(auth, customer, "manage venue inventory presets");
+
+  const venueItems = await queryByPk(`VENUE#${venueId}`);
+  const existing = venueItems.find(
+    (item): item is VenueInventoryPresetItem =>
+      item.entityType === "VenueInventoryPreset" && item.id === presetId && item.status !== "archived"
+  );
+  if (!existing) throw new HttpError(404, `Preset ${presetId} not found for venue ${venueId}`);
+
+  const now = isoNow();
+  const next: VenueInventoryPresetItem = {
+    ...existing,
+    status: "archived",
+    archivedAt: now,
+    archivedByName: auth.actorName,
+    updatedAt: now,
+    updatedByName: auth.actorName,
+  };
+
+  await putCore(buildVenueInventoryPresetRecord(next));
+  venueDetailResponseCache.delete(`venue-detail:${venueId}:${authScopeCacheKey(auth)}`);
+  await writeAudit(`VENUE_ADMIN#${venueId}`, "inventory_preset.archived", auth.actorName, {
+    venueId,
+    presetId,
+    name: existing.name,
+  });
+
+  return buildVenuePresetResponse(next, venueItems.filter((item): item is InventoryItem => item.entityType === "InventoryItem"));
+}
+
+function validatePresetIncludedIds(value: unknown, inventory: InventoryItem[]) {
+  if (!Array.isArray(value)) throw new HttpError(400, "includedIds is required");
+  const currentActiveIds = new Set(inventory.filter((item) => item.isActive).map((item) => item.id));
+  const displayIdToRecordId = new Map(inventory.map((item) => [item.inventoryId, item.id]));
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => displayIdToRecordId.get(item) || item)
+        .filter((id) => currentActiveIds.has(id))
+    )
+  ).sort();
+}
+
+function buildVenuePresetResponses(venueId: string, inventory: InventoryItem[], presets: VenueInventoryPresetItem[]) {
+  const activeIds = inventory.filter((item) => item.isActive).map((item) => item.id).sort();
+  const now = isoNow();
+  return [
+    buildVenuePresetResponse(
+      {
+        entityType: "VenueInventoryPreset",
+        id: "full_venue",
+        venueId,
+        name: "Full Venue",
+        description: "All active inventory for this venue.",
+        includedIds: activeIds,
+        knownInventoryIds: activeIds,
+        status: "active",
+        createdAt: now,
+        createdByName: "System",
+        updatedAt: now,
+        updatedByName: "System",
+      },
+      inventory,
+      true
+    ),
+    ...presets.map((preset) => buildVenuePresetResponse(preset, inventory)),
+  ];
+}
+
+function buildVenuePresetResponse(preset: VenueInventoryPresetItem, inventory: InventoryItem[], isDefault = false) {
+  const currentActiveIds = new Set(inventory.filter((item) => item.isActive).map((item) => item.id));
+  const includedSet = new Set(preset.includedIds);
+  const knownSet = new Set(preset.knownInventoryIds || []);
+  const effectiveIncludedIds = preset.includedIds.filter((id) => currentActiveIds.has(id)).sort();
+  const unavailableIncludedIds = preset.includedIds.filter((id) => !currentActiveIds.has(id)).sort();
+  const newActiveInventoryIds = Array.from(currentActiveIds).filter((id) => !knownSet.has(id)).sort();
+  const excludedActiveCount = Array.from(currentActiveIds).filter((id) => !includedSet.has(id)).length;
+
+  return {
+    id: preset.id,
+    venueId: preset.venueId,
+    name: preset.name,
+    description: preset.description || "",
+    includedIds: effectiveIncludedIds,
+    rawIncludedIds: preset.includedIds,
+    status: preset.status,
+    isDefault,
+    readOnly: isDefault,
+    createdAt: preset.createdAt,
+    createdByName: preset.createdByName,
+    updatedAt: preset.updatedAt,
+    updatedByName: preset.updatedByName,
+    validation: {
+      activeInventoryCount: currentActiveIds.size,
+      includedActiveCount: effectiveIncludedIds.length,
+      excludedActiveCount,
+      unavailableIncludedCount: unavailableIncludedIds.length,
+      unavailableIncludedIds,
+      newActiveCount: isDefault ? 0 : newActiveInventoryIds.length,
+      newActiveInventoryIds: isDefault ? [] : newActiveInventoryIds,
+    },
+  };
 }
 
 async function createMap(venueId: string, payload: Record<string, unknown>, auth: AuthContext) {
@@ -1708,6 +1969,18 @@ function buildMapRecord(map: RoomMapItem) {
     gsi2pk: `VENUE#${map.venueId}`,
     gsi2sk: `MAP#${map.name}#${map.id}`,
     ...map,
+  };
+}
+
+function buildVenueInventoryPresetRecord(preset: VenueInventoryPresetItem) {
+  return {
+    pk: `VENUE#${preset.venueId}`,
+    sk: `PRESET#${preset.id}`,
+    gsi1pk: `VENUE_PRESET#${preset.id}`,
+    gsi1sk: `VENUE#${preset.venueId}`,
+    gsi2pk: `VENUE#${preset.venueId}`,
+    gsi2sk: `PRESET#${preset.name}#${preset.id}`,
+    ...preset,
   };
 }
 

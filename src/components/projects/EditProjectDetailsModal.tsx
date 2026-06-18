@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Portal from "../common/Portal";
+import type { ApiVenueInventoryPreset } from "../../api/projects";
 
 export type ProjectDetailsDraft = {
   title: string;
@@ -13,6 +14,8 @@ export type ProjectDetailsDraft = {
   contractNumber?: string;
   liftOrderId?: string | null;
   liftOrderOverrideNote?: string;
+  inventoryPresetId?: string;
+  inventoryPresetName?: string;
 };
 
 type VenueOption = {
@@ -28,6 +31,8 @@ type Props = {
   venues: VenueOption[];
   isVenueLocked?: boolean;
   canManageLiftOrder?: boolean;
+  inventoryPresets?: ApiVenueInventoryPreset[];
+  isInventoryScopeLocked?: boolean;
   onSave: (draft: ProjectDetailsDraft) => void;
 };
 
@@ -38,6 +43,8 @@ export default function EditProjectDetailsModal({
   venues,
   isVenueLocked = false,
   canManageLiftOrder = false,
+  inventoryPresets = [],
+  isInventoryScopeLocked = false,
   onSave,
 }: Props) {
   const [advancedOpen, setAdvancedOpen] = useState(Boolean(initial.endClientName || initial.poNumber || initial.liftOrderId));
@@ -52,6 +59,7 @@ export default function EditProjectDetailsModal({
   const [contractNumber, setContractNumber] = useState(initial.contractNumber || "");
   const [liftOrderId, setLiftOrderId] = useState(initial.liftOrderId || "");
   const [liftOrderOverrideNote, setLiftOrderOverrideNote] = useState("");
+  const [inventoryPresetId, setInventoryPresetId] = useState(initial.inventoryPresetId || "full_venue");
 
   useEffect(() => {
     if (!isOpen) return;
@@ -67,6 +75,7 @@ export default function EditProjectDetailsModal({
     setContractNumber(initial.contractNumber || "");
     setLiftOrderId(initial.liftOrderId || "");
     setLiftOrderOverrideNote("");
+    setInventoryPresetId(initial.inventoryPresetId || "full_venue");
   }, [
     isOpen,
     initial.title,
@@ -79,6 +88,7 @@ export default function EditProjectDetailsModal({
     initial.endClientName,
     initial.contractNumber,
     initial.liftOrderId,
+    initial.inventoryPresetId,
   ]);
 
   const markets = useMemo(() => {
@@ -107,6 +117,8 @@ export default function EditProjectDetailsModal({
       poNumber: poNumber.trim() || undefined,
       endClientName: endClientName.trim() || undefined,
       contractNumber: contractNumber.trim() || undefined,
+      inventoryPresetId,
+      inventoryPresetName: inventoryPresets.find((preset) => preset.id === inventoryPresetId)?.name || "Full Venue",
       ...(canManageLiftOrder
         ? {
             liftOrderId: liftOrderId.trim() || null,
@@ -197,6 +209,25 @@ export default function EditProjectDetailsModal({
                     placeholder="Venue name"
                   />
                 )}
+              </div>
+
+              <div className="cp-field">
+                <div className="cp-label">Inventory Preset</div>
+                <select
+                  className="cp-select"
+                  value={inventoryPresetId}
+                  disabled={isInventoryScopeLocked || inventoryPresets.length === 0}
+                  onChange={(e) => setInventoryPresetId(e.target.value)}
+                >
+                  {(inventoryPresets.length ? inventoryPresets : [{ id: "full_venue", name: "Full Venue" } as ApiVenueInventoryPreset]).map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+                {isInventoryScopeLocked ? (
+                  <div className="cp-note">Inventory presets are locked after submission.</div>
+                ) : null}
               </div>
 
               <div className="cp-field">

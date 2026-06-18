@@ -32,8 +32,8 @@
 
 .ta-title{
   font-size: 22px;
-  font-weight: 850;
-  letter-spacing: -0.2px;
+  font-weight: 760;
+  letter-spacing: 0;
 }
 
 .ta-sub{
@@ -109,7 +109,7 @@
   top:0;
   bottom:0;
   width:4px;
-  background: rgba(37,99,235,.68);
+  background: rgba(63,110,216,.68);
 }
 
 .ta-summaryCard:nth-child(2)::before{
@@ -148,13 +148,13 @@ html[data-theme="dark"] .ta-summaryCard{
 .ta-summaryValue{
   margin-top: 6px;
   font-size: 26px;
-  font-weight: 850;
-  letter-spacing: -.4px;
+  font-weight: 760;
+  letter-spacing: 0;
 }
 
 .ta-summaryValue-text{
   font-size: 18px;
-  letter-spacing: -.2px;
+  letter-spacing: 0;
 }
 
 .ta-summaryText{
@@ -202,14 +202,14 @@ html[data-theme="dark"] .ta-variant{
   /* subtle tint to separate the section */
   background: linear-gradient(
     180deg,
-    rgba(37, 99, 235, 0.06),
-    rgba(37, 99, 235, 0.02)
+    rgba(63,110,216,0.06),
+    rgba(63,110,216,0.02)
   );
 }
 
 /* Keep the header band “flush” with the card edges */
 .ta-variantTitle{
-  font-weight: 850;
+  font-weight: 760;
   font-size: 13px;
 }
 
@@ -396,7 +396,7 @@ html[data-theme="dark"] .ta-locChip{
 
 .ta-cardTitle{
   font-size: 14px;
-  font-weight: 850;
+  font-weight: 760;
 }
 
 .ta-cardSub{
@@ -416,9 +416,9 @@ html[data-theme="dark"] .ta-locChip{
 .ta-decisionNote{
   margin-bottom: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(37,99,235,.14);
+  border: 1px solid rgba(63,110,216,.14);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(37,99,235,.08), rgba(37,99,235,.03));
+  background: linear-gradient(180deg, rgba(63,110,216,.08), rgba(63,110,216,.03));
   font-size: 12px;
   line-height: 1.45;
   color: var(--text);
@@ -477,7 +477,7 @@ html[data-theme="dark"] .ta-textarea{
   border-radius: 12px;
   border: 1px solid var(--stroke2);
   background: rgba(255,255,255,.65);
-  font-weight: 900;
+  font-weight: 760;
   cursor: pointer;
 }
 
@@ -486,8 +486,8 @@ html[data-theme="dark"] .ta-segBtn{
 }
 
 .ta-segBtn.is-on{
-  background: rgba(37,99,235,.10);
-  border-color: rgba(37,99,235,.18);
+  background: rgba(63,110,216,.10);
+  border-color: rgba(63,110,216,.18);
 }
 
 .ta-actions{
@@ -516,7 +516,7 @@ html[data-theme="dark"] .ta-segBtn{
   border-radius: 999px;
   border: 1px solid rgba(22,163,74,.18);
   background: rgba(22,163,74,.10);
-  font-weight: 900;
+  font-weight: 760;
   font-size: 12px;
   color: rgba(21,128,61,.95);
 }
@@ -524,7 +524,7 @@ html[data-theme="dark"] .ta-segBtn{
 .ta-confirmTitle{
   margin-top: 10px;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 760;
 }
 
 .ta-confirmMeta{
@@ -595,7 +595,7 @@ html[data-theme="dark"] .ta-confirmComment{
 
   .ta-cardTitle{
     font-size: 18px;
-    letter-spacing: -.25px;
+    letter-spacing: 0;
   }
 
   .ta-cardSub{

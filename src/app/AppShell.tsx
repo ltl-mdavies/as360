@@ -6,6 +6,7 @@ import { fetchAdminBranding, peekAdminSettingsCache, resolveShareLink } from "..
 import { useApiClient } from "../api/useApiClient";
 import NavDrawer from "../components/common/NavDrawer";
 import adspaceLogo from "../assets/adspace_logo_v1.svg";
+import adspaceLogoDark from "../assets/adspace_logo_v1_dark.svg";
 import { useAuth } from "../auth/AuthProvider";
 import { useDemoStore } from "../domain/store/demoStore";
 
@@ -27,6 +28,17 @@ type BrandingSnapshot = {
 };
 
 const BRANDING_STORAGE_TTL_MS = 10 * 60 * 1000;
+const THEME_STORAGE_KEY = "adspace360:theme";
+
+function readStoredTheme(): "light" | "dark" {
+  if (typeof window === "undefined") return "light";
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
 
 function defaultBrandingSnapshot(customerName: string): BrandingSnapshot {
   return {
@@ -109,12 +121,18 @@ export default function AppShell({
   projectTitle,
   showNavTrigger = false,
 }: AppShellProps) {
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [theme, setTheme] = useState<"light" | "dark">(() => readStoredTheme());
   const { signOut, user } = useAuth();
   const api = useApiClient();
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Theme persistence is a convenience only; storage failures should not block navigation.
+    }
   }, [theme]);
 
   const [navOpen, setNavOpen] = useState(false);
@@ -314,7 +332,7 @@ export default function AppShell({
           <div className="brand">
             <img
               className={`brand-logo ${brandLogoUrl && !brandLogoFailed ? "brand-logo-customer" : ""}`.trim()}
-              src={brandLogoUrl && !brandLogoFailed ? brandLogoUrl : adspaceLogo}
+              src={brandLogoUrl && !brandLogoFailed ? brandLogoUrl : theme === "dark" ? adspaceLogoDark : adspaceLogo}
               alt={brandAlt}
               onError={() => setBrandLogoFailed(true)}
             />
@@ -336,7 +354,7 @@ export default function AppShell({
             {theme === "light" ? "☾" : "☀"}
           </button>
 
-          <div className="userpill" title={userPrimaryLabel}>
+          <div className={`userpill ${viewerIsPlatformAdmin ? "userpill-internal" : ""}`} title={userPrimaryLabel}>
             <span className="userpill-avatar" aria-hidden="true">{userInitials}</span>
             <span className="userpill-copy">
               <span className="userpill-name">{userPrimaryLabel}</span>

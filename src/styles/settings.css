@@ -20,8 +20,8 @@
 .settings-subnavBtn.is-active,
 .settings-tabBtn.is-active {
   background: color-mix(in srgb, #edf4ff 78%, white 22%);
-  border-color: color-mix(in srgb, #74a3f3 35%, var(--line) 65%);
-  color: #1d4ed8;
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--line) 70%);
+  color: var(--primary);
 }
 
 .settings-panel {
@@ -63,10 +63,11 @@
 .settings-sessionLabel,
 .settings-sectionEyebrow {
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  font-family: var(--font-brand);
+  font-weight: 760;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--primary) 86%, var(--text));
 }
 
 .settings-sessionValue {
@@ -179,7 +180,7 @@
 
 .settings-listTitle {
   font-weight: 800;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .settings-cellStrong {
@@ -284,7 +285,7 @@
   min-width: 0;
   flex: 1;
   font-weight: 800;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .settings-readinessDetail {
@@ -386,7 +387,7 @@ textarea.settings-input.field-input:focus-visible,
   outline: none;
   border-color: color-mix(in srgb, #74a3f3 56%, var(--line) 44%);
   box-shadow:
-    0 0 0 3px rgba(37,99,235,.12),
+    0 0 0 3px rgba(63,110,216,.12),
     inset 0 1px 0 rgba(255,255,255,.92);
   background: color-mix(in srgb, #eff6ff 82%, white 18%);
 }
@@ -484,9 +485,9 @@ textarea.settings-input.field-input:focus-visible,
 .settings-note {
   padding: 14px 16px;
   border-radius: 16px;
-  border: 1px solid color-mix(in srgb, #74a3f3 24%, var(--line) 76%);
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--line) 78%);
   background: color-mix(in srgb, #edf4ff 82%, white 18%);
-  color: color-mix(in srgb, var(--text) 88%, #1d4ed8 12%);
+  color: color-mix(in srgb, var(--text) 88%, var(--primary) 12%);
   line-height: 1.5;
 }
 
@@ -528,7 +529,7 @@ textarea.settings-input.field-input:focus-visible,
 .settings-kvValue {
   font-size: 22px;
   line-height: 1;
-  font-weight: 850;
+  font-weight: 760;
   color: var(--text);
 }
 
@@ -654,7 +655,7 @@ textarea.settings-input.field-input:focus-visible,
 .settings-subsectionTitle {
   font-size: 16px;
   font-weight: 800;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   color: var(--text);
 }
 

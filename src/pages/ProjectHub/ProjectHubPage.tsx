@@ -1,5 +1,6 @@
 // src/pages/ProjectHub/ProjectHubPage.tsx
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowUp, ChevronDown, ListChecks } from "lucide-react";
 import AppShell from "../../app/AppShell";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import Panel from "../../components/common/Panel";
@@ -21,7 +22,9 @@ import {
   fetchProjectLiftOrderUrl,
   fetchProjectTransit,
   fetchProjectWorkspace,
+  fetchVenueDetail,
   generateProjectCreativePackage,
+  invalidateProjectWorkspaceCache,
   logProjectErrorEvent,
   peekProjectWorkspaceCache,
   normalizeCreativeAsset,
@@ -30,6 +33,7 @@ import {
   normalizeWorkspaceVariants,
   releaseProjectProduction,
   type ApiProjectAuditEvent,
+  type ApiVenueInventoryPreset,
   updateProjectTransit,
 } from "../../api/projects";
 
@@ -84,6 +88,16 @@ async function copyText(text: string) {
 
 type HubStepperModel = StepperModel & { currentKey: StepKey };
 type ActivityFilterKey = "all" | "workflow" | "approvals" | "uploads" | "collaboration" | "errors";
+type ProjectScopeUpdateResponse = {
+  project: any;
+  scope: {
+    includedIds: string[];
+    sourceType?: "full_venue" | "venue_preset" | "manual";
+    presetId?: string | null;
+    presetName?: string | null;
+    appliedAt?: string | null;
+  };
+};
 const ACTIVITY_FEED_LIMIT = 10;
 
 function getCurrentStepKey(model: StepperModel): StepKey {
@@ -384,6 +398,197 @@ function projectActivityCategoryLabel(event: ApiProjectAuditEvent) {
   return "Workflow";
 }
 
+type HubMobileChip = {
+  label: string;
+  tone?: HubTone;
+};
+
+type HubMobileMetric = {
+  label: string;
+  value: ReactNode;
+  tone?: HubTone;
+};
+
+function scrollHubMobileTarget(targetId: string) {
+  if (typeof document === "undefined") return;
+  document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function HubMobileProjectHeader({
+  eyebrow,
+  title,
+  chips,
+  metrics,
+  tools,
+}: {
+  eyebrow: string;
+  title: string;
+  chips: HubMobileChip[];
+  metrics: HubMobileMetric[];
+  tools?: ReactNode;
+}) {
+  return (
+    <section className="hub-mobileHero" aria-label="Project summary">
+      <div className="hub-mobileHeroRail" aria-hidden="true" />
+      <div className="hub-mobileEyebrow">{eyebrow}</div>
+      <h1>{title}</h1>
+      <div className="hub-mobileChipRow">
+        {chips.map((chip) => (
+          <span key={`${chip.label}-${chip.tone || "neutral"}`} className={`hub-mobileChip hub-mobileTone-${chip.tone || "neutral"}`}>
+            {chip.label}
+          </span>
+        ))}
+      </div>
+      <div className="hub-mobileMetricGrid">
+        {metrics.map((metric) => (
+          <span key={String(metric.label)} className={`hub-mobileMetric hub-mobileTone-${metric.tone || "neutral"}`}>
+            <em>{metric.label}</em>
+            <strong>{metric.value}</strong>
+          </span>
+        ))}
+      </div>
+      {tools ? <div className="hub-mobileToolGrid">{tools}</div> : null}
+    </section>
+  );
+}
+
+function HubMobileNextStep({
+  banner,
+  iconName,
+  onPrimary,
+  onSecondary,
+}: {
+  banner: any;
+  iconName: HubPrimaryBannerIconName;
+  onPrimary?: () => void;
+  onSecondary?: () => void;
+}) {
+  const tone = primaryBannerToneClass(banner.tone);
+  return (
+    <section className={`hub-mobileNext hub-mobileTone-${tone}`} aria-label="Recommended next step">
+      <div className={`hub-mobileNextIcon hub-primary-icon-${tone}`} aria-hidden="true">
+        <HubPrimaryBannerIcon icon={iconName} />
+      </div>
+      <div className="hub-mobileNextCopy">
+        <span>Next step</span>
+        <strong>{banner.title}</strong>
+        <p>{banner.body}</p>
+      </div>
+      {"ctaLabel" in banner && banner.ctaLabel ? (
+        <div className="hub-mobileNextActions">
+          <button className="btn btn-primary" type="button" onClick={onPrimary}>
+            {banner.ctaLabel}
+          </button>
+          {"ctaSecondaryLabel" in banner && banner.ctaSecondaryLabel ? (
+            <button className="btn btn-ghost btn-soft" type="button" onClick={onSecondary}>
+              {banner.ctaSecondaryLabel}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function HubMobileProgressDock({
+  stepper,
+  assignmentLabel,
+  proofLabel,
+  activityCount,
+}: {
+  stepper: HubStepperModel;
+  assignmentLabel: string;
+  proofLabel: string;
+  activityCount: number;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const currentStep = stepper.steps.find((step) => step.state === "current" && !step.hidden) || stepper.steps.find((step) => !step.hidden);
+
+  return (
+    <div className={`hub-mobileProgressDock ${isExpanded ? "is-expanded" : ""}`} aria-label="Project workflow controls">
+      <div className="hub-mobileProgressDockBar">
+        <button
+          type="button"
+          className="hub-mobileProgressSummary"
+          onClick={() => setIsExpanded((value) => !value)}
+          aria-expanded={isExpanded}
+        >
+          <ListChecks size={17} strokeWidth={2.4} aria-hidden="true" />
+          <span>
+            <strong>{currentStep?.label || "Workflow"}</strong>
+            <em>{assignmentLabel} · {proofLabel}</em>
+          </span>
+          <ChevronDown size={16} strokeWidth={2.6} aria-hidden="true" />
+        </button>
+        <button type="button" className="hub-mobileProgressButton" onClick={() => scrollHubMobileTarget("hub-mobile-workflows")}>
+          Work
+        </button>
+        <button type="button" className="hub-mobileProgressButton" onClick={() => scrollHubMobileTarget("hub-mobile-activity")}>
+          {activityCount > 0 ? "Log" : "Activity"}
+        </button>
+        <button type="button" className="hub-mobileProgressIcon" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} aria-label="Back to top">
+          <ArrowUp size={16} strokeWidth={2.6} aria-hidden="true" />
+        </button>
+      </div>
+      {isExpanded ? (
+        <div className="hub-mobileProgressSteps">
+          {stepper.steps.filter((step) => !step.hidden).map((step) => (
+            <span key={step.key} className={`hub-mobileProgressStep is-${step.state}`}>
+              <i aria-hidden="true" />
+              <strong>{step.label}</strong>
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function HubMobileWorkflowCard({
+  title,
+  meta,
+  tone = "neutral",
+  badge,
+  description,
+  metrics,
+  actions,
+  id,
+}: {
+  title: string;
+  meta?: ReactNode;
+  tone?: HubTone;
+  badge?: ReactNode;
+  description?: ReactNode;
+  metrics?: HubMobileMetric[];
+  actions?: ReactNode;
+  id?: string;
+}) {
+  return (
+    <article id={id} className={`hub-mobileWorkflowCard hub-mobileTone-${tone}`}>
+      <span className="hub-mobileWorkflowRail" aria-hidden="true" />
+      <header>
+        <div>
+          <h2>{title}</h2>
+          {meta ? <p>{meta}</p> : null}
+        </div>
+        {badge ? <span className={`hub-mobileStatusBadge hub-mobileTone-${tone}`}>{badge}</span> : null}
+      </header>
+      {description ? <div className="hub-mobileWorkflowDesc">{description}</div> : null}
+      {metrics?.length ? (
+        <div className="hub-mobileWorkflowMetrics">
+          {metrics.map((metric) => (
+            <span key={String(metric.label)} className={`hub-mobileWorkflowMetric hub-mobileTone-${metric.tone || "neutral"}`}>
+              <strong>{metric.value}</strong>
+              <em>{metric.label}</em>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {actions ? <div className="hub-mobileWorkflowActions">{actions}</div> : null}
+    </article>
+  );
+}
+
 function activityGroupLabel(value?: string | null) {
   if (!value) return "Recent activity";
   const parsed = new Date(value);
@@ -501,6 +706,13 @@ export default function ProjectHubPage() {
   } | null>(null);
   const [scopeVenueMaps, setScopeVenueMaps] = useState<typeof mockMaps>([]);
   const [scopeVenueInventory, setScopeVenueInventory] = useState<typeof mockInventory>([]);
+  const [scopeVenuePresets, setScopeVenuePresets] = useState<ApiVenueInventoryPreset[]>([]);
+  const [projectScopeMeta, setProjectScopeMeta] = useState<{
+    sourceType?: "full_venue" | "venue_preset" | "manual";
+    presetId?: string | null;
+    presetName?: string | null;
+    appliedAt?: string | null;
+  }>({});
   const [backendTransit, setBackendTransit] = useState<{
     status: "not_started" | "pending" | "approved" | "rejected";
     submittedByName?: string | null;
@@ -558,6 +770,12 @@ export default function ProjectHubPage() {
         if (cached && !cancelled) {
           setBackendProject(cached.project);
           setIncludedIds(cached.scope?.includedIds || []);
+          setProjectScopeMeta({
+            sourceType: cached.scope?.sourceType,
+            presetId: cached.scope?.presetId,
+            presetName: cached.scope?.presetName,
+            appliedAt: cached.scope?.appliedAt,
+          });
           setBackendWorkspace({
             maps: normalizeWorkspaceMaps(cached.workspace.maps),
             creatives: cached.workspace.creatives.map(normalizeCreativeAsset),
@@ -571,6 +789,12 @@ export default function ProjectHubPage() {
         if (cancelled) return;
         setBackendProject(response.project);
         setIncludedIds(response.scope?.includedIds || []);
+        setProjectScopeMeta({
+          sourceType: response.scope?.sourceType,
+          presetId: response.scope?.presetId,
+          presetName: response.scope?.presetName,
+          appliedAt: response.scope?.appliedAt,
+        });
         setBackendWorkspace({
           maps: normalizeWorkspaceMaps(response.workspace.maps),
           creatives: response.workspace.creatives.map(normalizeCreativeAsset),
@@ -771,24 +995,9 @@ export default function ProjectHubPage() {
     let cancelled = false;
 
     async function loadScopeVenueDetail() {
-      if (!isScopeOpen || !backendProject?.venueId || isDemo) return;
+      if ((!isScopeOpen && !isEditOpen) || !backendProject?.venueId || isDemo) return;
       try {
-        const response = await api.request<{
-          venue: { id: string; name: string };
-          maps: Array<{ id: string; name: string; mapUrl?: string | null; imageUrl?: string | null }>;
-          inventory: Array<{
-            id: string;
-            inventoryId: string;
-            locationId: string;
-            locationDetail?: string | null;
-            mapName?: string | null;
-            mediaVariantKey: string;
-            unitNumber?: string | null;
-            x?: number | null;
-            y?: number | null;
-            isActive?: boolean;
-          }>;
-        }>(`/api/venues/${backendProject.venueId}`);
+        const response = await fetchVenueDetail(api, backendProject.venueId);
         if (cancelled) return;
 
         const fullMaps = response.maps.map((map) => {
@@ -820,6 +1029,7 @@ export default function ProjectHubPage() {
 
         setScopeVenueMaps(fullMaps as typeof mockMaps);
         setScopeVenueInventory(fullInventory as typeof mockInventory);
+        setScopeVenuePresets(response.presets || []);
       } catch (error) {
         if (cancelled) return;
         console.error("Failed to load venue inventory scope detail", error);
@@ -830,7 +1040,7 @@ export default function ProjectHubPage() {
     return () => {
       cancelled = true;
     };
-  }, [api, backendProject?.venueId, isDemo, isScopeOpen]);
+  }, [api, backendProject?.venueId, isDemo, isEditOpen, isScopeOpen]);
 
 // Derived models
 const actionCard = useMemo(() => (rollup ? getEndClientPrimaryActionCard(rollup) : null), [rollup]);
@@ -1209,6 +1419,84 @@ const currentVenueOption =
   const goProofs = () => resolvedProjectId && navigate(shareAccess.buildProjectUrl(`/p/${resolvedProjectId}/proofs${modeSuffix}`), demoNavState as any);
   const goTransit = () => resolvedProjectId && navigate(shareAccess.buildProjectUrl(`/p/${resolvedProjectId}/transit${modeSuffix}`), demoNavState as any);
   const goAllocationOverride = () => resolvedProjectId && navigate(`/p/${resolvedProjectId}/allocation-override`, demoNavState as any);
+  const openLiftOrder = async () => {
+    if (!rollup.projectId) return;
+    const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
+    setLiftOrderUrlLoading(true);
+    try {
+      const response = await fetchProjectLiftOrderUrl(api, rollup.projectId);
+      if (popup) {
+        popup.location.href = response.url;
+      } else {
+        window.open(response.url, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      popup?.close();
+      const message = error instanceof Error ? error.message : "We couldn't open the Lift order yet.";
+      demoStore.actions.pushToast("danger", message);
+    } finally {
+      setLiftOrderUrlLoading(false);
+    }
+  };
+  const handleApproveProduction = () => {
+    if (isDemo) {
+      demoStore.actions.approveForProduction(demoActiveProjectId);
+      return;
+    }
+    if (!projectId) return;
+    void (async () => {
+      try {
+        const response = await releaseProjectProduction(api, projectId);
+        setBackendProject(response.project);
+        void loadProjectActivity();
+        demoStore.actions.pushToast("success", "Project released to production");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "We couldn't release the project yet.";
+        demoStore.actions.pushToast("danger", message);
+        void logProjectErrorEvent(api, projectId, {
+          actionType: "project.release",
+          errorCode: "production_release_failed",
+          message,
+          severity: "error",
+          surface: "hub.production",
+          workspace: "hub",
+        }).catch(() => undefined);
+      }
+    })();
+  };
+  const handlePrimaryBannerAction = () => {
+    if (!("ctaKind" in primaryBanner)) return;
+    if (primaryBanner.ctaKind === "get_started") {
+      if (canViewArtwork) goArtwork();
+      else demoStore.actions.pushToast("warning", "This shared link does not allow artwork access");
+    }
+    if (primaryBanner.ctaKind === "continue_assignment") {
+      if (canViewAssignment) goAssignment();
+      else if (canViewArtwork) goArtwork();
+      else demoStore.actions.pushToast("warning", "This shared link does not allow assignment access");
+    }
+    if (primaryBanner.ctaKind === "open_proofs") {
+      if (canViewProofs) goProofs();
+      else demoStore.actions.pushToast("warning", "This shared link does not allow proof access");
+    }
+    if (primaryBanner.ctaKind === "open_transit") goTransit();
+    if (primaryBanner.ctaKind === "approve_production") handleApproveProduction();
+  };
+  const handlePrimaryBannerSecondaryAction = () => {
+    if (!("ctaSecondaryKind" in primaryBanner)) {
+      if (canViewAssignment) goAssignment();
+      else if (canViewArtwork) goArtwork();
+      else demoStore.actions.pushToast("warning", "This shared link does not allow assignment access");
+      return;
+    }
+    if (primaryBanner.ctaSecondaryKind === "open_transit") {
+      goTransit();
+      return;
+    }
+    if (canViewAssignment) goAssignment();
+    else if (canViewArtwork) goArtwork();
+    else demoStore.actions.pushToast("warning", "This shared link does not allow assignment access");
+  };
 
   if (!rollup) {
     const isStillLoadingLiveProject = !isDemo && (projectLoading || shareAccess.isResolving || !!projectId);
@@ -1288,6 +1576,259 @@ const currentVenueOption =
 
   return (
     <AppShell pageClassName="wide" projectTitle={rollup.title}>
+      <div className="hub-mobileOnly">
+        <div className="hub-mobileShell">
+          <HubMobileProjectHeader
+            eyebrow="Project Hub"
+            title={rollup.title}
+            chips={[
+              ...(isSandboxProject ? [{ label: "Internal Sandbox", tone: "warning" as const }] : []),
+              { label: venueMarket, tone: "success" },
+              { label: venueName, tone: "neutral" },
+              ...(rollup.liftOrderId ? [{ label: `Lift ${rollup.liftOrderId}`, tone: "neutral" as const }] : []),
+              ...(isSandboxProject && rollup.sourceCustomerName ? [{ label: `Source ${rollup.sourceCustomerName}`, tone: "neutral" as const }] : []),
+            ]}
+            metrics={[
+              { label: "AS360 #", value: rollup.adspaceOrderNumber || rollup.extId.replace(/^AS360-/i, ""), tone: "primary" },
+              { label: "Contract #", value: displayContractNumber, tone: "warning" },
+              { label: "Artwork Due", value: formatDateLabel(rollup.dates.artworkDue), tone: "success" },
+              { label: "Post Date", value: formatDateLabel(rollup.dates.postDate), tone: "danger" },
+            ]}
+            tools={
+              <>
+                {rollup.liftOrderId && !shareAccess.isShareMode ? (
+                  <button className="btn btn-ghost btn-soft" type="button" disabled={liftOrderUrlLoading} onClick={() => void openLiftOrder()}>
+                    {liftOrderUrlLoading ? "Opening Lift…" : "Open Lift"}
+                  </button>
+                ) : null}
+                {viewerCanManageLiftOrder && !shareAccess.isShareMode && !isDemo ? (
+                  <button className="btn btn-ghost btn-soft" type="button" onClick={goAllocationOverride}>
+                    Allocation
+                  </button>
+                ) : null}
+                {isCustomerMode && !isSandboxProject ? (
+                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => setShareAccessOpen(true)}>
+                    Share
+                  </button>
+                ) : null}
+                {!shareAccess.isShareMode ? (
+                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => setEditOpen(true)}>
+                    Edit Details
+                  </button>
+                ) : null}
+              </>
+            }
+          />
+
+          <HubMobileNextStep
+            banner={primaryBanner}
+            iconName={getPrimaryBannerIconName({
+              tone: primaryBanner.tone,
+              title: primaryBanner.title,
+              ctaKind: "ctaKind" in primaryBanner ? primaryBanner.ctaKind : undefined,
+            })}
+            onPrimary={handlePrimaryBannerAction}
+            onSecondary={handlePrimaryBannerSecondaryAction}
+          />
+
+          <HubMobileProgressDock
+            stepper={stepper}
+            assignmentLabel={`${assignmentAssigned}/${assignmentRequired} assigned`}
+            proofLabel={proofStatusText}
+            activityCount={activityFeed.length}
+          />
+
+          <div id="hub-mobile-workflows" className="hub-mobileWorkflowList">
+            {isSandboxProject ? (
+              <HubMobileWorkflowCard
+                title="Sandbox rehearsal lane"
+                meta="Internal-only workflow rehearsal"
+                tone="warning"
+                badge="Zero write"
+                description="Routes Lift previews to demo customer 1249 and keeps customer-facing share access disabled."
+                metrics={[
+                  { label: "Source customer", value: rollup.sourceCustomerName || "Linked" },
+                  { label: "Share links", value: "Blocked", tone: "warning" },
+                  { label: "Lift demo", value: "1249" },
+                ]}
+                actions={
+                  <>
+                    <button className="btn btn-primary" type="button" onClick={() => setReviewOpen(true)}>
+                      Review Allocation
+                    </button>
+                    <button className="btn btn-ghost btn-soft" type="button" onClick={() => navigate(shareAccess.buildProjectUrl(`/p/${resolvedProjectId}/docs${modeSuffix}`), demoNavState as any)}>
+                      Documents
+                    </button>
+                  </>
+                }
+              />
+            ) : null}
+
+            {canViewArtwork ? (
+              <HubMobileWorkflowCard
+                title="Artwork Folder"
+                meta={artworkWorkspaceLoading ? "Syncing artwork coverage" : `${artworkCreatives.length} files · ${artworkCoveredKeys.size}/${artworkVariantKeys.size} variants`}
+                tone={artworkNeedsCount > 0 ? "warning" : "success"}
+                badge={artworkWorkspaceLoading ? "Syncing" : artworkNeedsCount > 0 ? `${artworkNeedsCount} needed` : "Ready"}
+                metrics={[
+                  { label: "Files", value: artworkWorkspaceLoading ? "—" : artworkCreatives.length },
+                  { label: "Covered", value: artworkWorkspaceLoading ? "—" : artworkCoveredKeys.size },
+                  { label: "Need artwork", value: artworkWorkspaceLoading ? "—" : artworkNeedsCount, tone: artworkNeedsCount > 0 ? "warning" : "success" },
+                ]}
+                actions={
+                  <>
+                    <button className="btn btn-primary" type="button" onClick={goArtwork}>
+                      Open Artwork
+                    </button>
+                    {!shareAccess.isShareMode && !isDemo ? (
+                      <button
+                        className="btn btn-ghost btn-soft"
+                        type="button"
+                        disabled={creativePackageGenerating || artworkWorkspaceLoading || artworkCreatives.length === 0}
+                        onClick={() => void handleGenerateCreativePackage()}
+                      >
+                        {creativePackageGenerating ? "Building…" : "Download Package"}
+                      </button>
+                    ) : null}
+                  </>
+                }
+              />
+            ) : null}
+
+            {canViewAssignment ? (
+              <HubMobileWorkflowCard
+                title="Creative Assignment"
+                meta={assignmentStatusText}
+                tone={assignmentStatusTone}
+                badge={assignmentStatusTone === "warning" ? "Action" : "Complete"}
+                metrics={[
+                  { label: "Required", value: assignmentRequired },
+                  { label: "Assigned", value: assignmentAssigned, tone: "success" },
+                  { label: "Remaining", value: assignmentRemainingCount, tone: assignmentRemainingCount > 0 ? "warning" : "success" },
+                ]}
+                actions={
+                  <>
+                    <button className="btn btn-primary" type="button" onClick={goAssignment}>
+                      {rollup.liftOrderId ? "Review Assignment" : "Open Assignment"}
+                    </button>
+                    <button className="btn btn-ghost btn-soft" type="button" onClick={() => setReviewOpen(true)}>
+                      Review Allocation
+                    </button>
+                    {isCustomerMode && !rollup.liftOrderId ? (
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => setScopeOpen(true)}>
+                        Edit Inventory
+                      </button>
+                    ) : null}
+                  </>
+                }
+              />
+            ) : null}
+
+            {canViewProofs ? (
+              <HubMobileWorkflowCard
+                title="Proof Approval"
+                meta={proofStatusText}
+                tone={proofStatusTone}
+                badge={proofStatusTone === "warning" ? "Pending" : proofStatusTone === "success" ? "Complete" : "Locked"}
+                metrics={[
+                  { label: "Lines", value: proofTotal },
+                  { label: "Pending", value: proofPendingCount, tone: proofPendingCount > 0 ? "warning" : "success" },
+                  { label: proofFourthLabel, value: proofFourthValue },
+                ]}
+                actions={
+                  <button className="btn btn-primary" type="button" disabled={!proofEnabled} onClick={goProofs}>
+                    Open Proof Review
+                  </button>
+                }
+              />
+            ) : null}
+
+            {showTransitCard ? (
+              <HubMobileWorkflowCard
+                title="Transit Approval"
+                meta={transitStatusText}
+                tone={transitStatusTone}
+                badge={transitAcceptanceText}
+                metrics={[
+                  { label: "Acceptance", value: transitAcceptanceText, tone: transitStatusTone },
+                  { label: "Action date", value: transitActionDateText },
+                  { label: "Submitted by", value: transitSubmittedByText },
+                ]}
+                actions={
+                  <>
+                    <button className="btn btn-primary" type="button" onClick={goTransit} disabled={!transitReadyForAction}>
+                      Open Transit
+                    </button>
+                    <button className="btn btn-ghost btn-soft" type="button" onClick={() => copyText(transitLink)} disabled={!transitReadyForAction}>
+                      Copy Link
+                    </button>
+                  </>
+                }
+              />
+            ) : null}
+
+            <HubMobileWorkflowCard
+              title="Document Repository"
+              meta={showExternalDocsAction ? `Adspace + ${externalDocsLabel}` : "Specs, templates, and instructions"}
+              tone="neutral"
+              metrics={[
+                { label: "Source", value: documentSourceMode === "external" ? "External" : documentSourceMode === "hybrid" ? "Hybrid" : "Adspace" },
+              ]}
+              actions={
+                <>
+                  <button className="btn btn-primary" type="button" onClick={() => navigate(shareAccess.buildProjectUrl(`/p/${rollup.projectId}/docs${modeSuffix}`), demoNavState as any)}>
+                    Open Documents
+                  </button>
+                  {showExternalDocsAction ? (
+                    <a className="btn btn-ghost btn-soft" href={externalDocumentUrl} target="_blank" rel="noreferrer">
+                      Open {externalDocsLabel}
+                    </a>
+                  ) : null}
+                </>
+              }
+            />
+
+            <HubMobileWorkflowCard
+              title="Support"
+              meta="Contact us if you need help"
+              tone="neutral"
+              metrics={[
+                { label: "Email", value: "support@ltlco.com" },
+                { label: "Phone", value: "(502) 555-0123" },
+              ]}
+            />
+
+            {isCustomerMode && !shareAccess.isShareMode ? (
+              <HubMobileWorkflowCard
+                id="hub-mobile-activity"
+                title="Project Activity"
+                meta={activityFeed.length > 0 ? `${Math.min(filteredActivityFeed.length, ACTIVITY_FEED_LIMIT)} shown` : "No activity yet"}
+                tone={activityFeed.length > 0 ? "primary" : "neutral"}
+                description={
+                  activityLoading
+                    ? "Loading the latest project activity."
+                    : filteredActivityFeed[0]
+                    ? `${filteredActivityFeed[0].actorName || "Adspace360"} ${projectActivityLabel(filteredActivityFeed[0])}`
+                    : "Recent uploads, assignments, approvals, shared-link activity, and release actions will appear here."
+                }
+                metrics={[
+                  { label: "Events", value: activityFeed.length },
+                  { label: "Filter", value: activityFilter === "all" ? "All" : projectActivityCategoryLabel(filteredActivityFeed[0] || activityFeed[0] || ({ eventType: "workflow", detail: {} } as any)) },
+                ]}
+                actions={
+                  activityFeed.length > ACTIVITY_FEED_LIMIT ? (
+                    <button className="btn btn-ghost btn-soft" type="button" onClick={() => setActivityPage((page) => Math.min(activityPageCount, page + 1))}>
+                      More Activity
+                    </button>
+                  ) : null
+                }
+              />
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="hub-desktopOnly">
       <PageHeader
         className="hub-pageHeader"
         backLabel={isCustomerMode ? "← Projects" : undefined}
@@ -1504,7 +2045,7 @@ const currentVenueOption =
 	</div>
 
       {isSandboxProject && (
-        <Panel className="hub-card hub-sandboxCard">
+          <Panel className="hub-card hub-sandboxCard hub-card-tone-info">
           <div className="hub-cardHeader">
             <div>
               <div className="hub-cardTitle">Sandbox rehearsal lane</div>
@@ -1561,7 +2102,7 @@ const currentVenueOption =
         <div className="hub-primaryWorkflowGrid">
           {/* Artwork Folder */}
           {canViewArtwork && (
-            <Panel className="hub-card hub-card-artwork">
+            <Panel className={`hub-card hub-card-artwork hub-card-tone-${artworkNeedsCount > 0 ? "warning" : "success"}`}>
               <div className="hub-cardHeader">
                 <div>
                   <div className="hub-cardTitle">Artwork Folder</div>
@@ -1625,7 +2166,7 @@ const currentVenueOption =
 
           {/* Creative Assignment */}
           {canViewAssignment && (
-            <Panel className="hub-card">
+            <Panel className={`hub-card hub-card-tone-${assignmentStatusTone}`}>
               <div className="hub-cardHeader">
                 <div>
                   <div className="hub-cardTitle">Creative Assignment</div>
@@ -1700,7 +2241,7 @@ const currentVenueOption =
         <div className={`hub-workflowGrid ${showTransitCard ? "" : "hub-workflowGrid-single"}`}>
         {/* Proof Approval */}
         {canViewProofs && (
-          <Panel className="hub-card">
+          <Panel className={`hub-card hub-card-tone-${proofStatusTone}`}>
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Proof Approval</div>
@@ -1749,7 +2290,7 @@ const currentVenueOption =
 
         {/* Transit Approval (customer-only) */}
         {showTransitCard && (
-          <Panel className="hub-card">
+          <Panel className={`hub-card hub-card-tone-${transitStatusTone}`}>
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Transit Approval</div>
@@ -1834,7 +2375,7 @@ const currentVenueOption =
         </div>
 
         <div className="hub-secondaryGrid">
-          <Panel className="hub-card">
+          <Panel className="hub-card hub-card-tone-info">
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Document Repository</div>
@@ -1864,7 +2405,7 @@ const currentVenueOption =
             </div>
           </Panel>
 
-          <Panel className="hub-card">
+          <Panel className="hub-card hub-card-tone-neutral">
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Support</div>
@@ -1888,7 +2429,7 @@ const currentVenueOption =
         </div>
 
         {isCustomerMode && !shareAccess.isShareMode && (
-          <Panel className="hub-card hub-activityCard">
+          <Panel className={`hub-card hub-activityCard hub-card-tone-${activityFeed.length > 0 ? "primary" : "neutral"}`}>
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Project Activity</div>
@@ -2001,6 +2542,7 @@ const currentVenueOption =
           </Panel>
         )}
       </div>
+      </div>
 
       {/* Modals */}
       {isCustomerMode && (
@@ -2020,7 +2562,7 @@ const currentVenueOption =
                 return;
               }
 
-              const response = await api.request<{ project: any; scope: { includedIds: string[] } }>(
+              const response = await api.request<ProjectScopeUpdateResponse>(
                 `/api/projects/${rollup.projectId}`,
                 {
                   method: "PATCH",
@@ -2029,7 +2571,14 @@ const currentVenueOption =
               );
               setBackendProject(response.project);
               setIncludedIds(response.scope?.includedIds || ids);
+              setProjectScopeMeta({
+                sourceType: response.scope?.sourceType,
+                presetId: response.scope?.presetId,
+                presetName: response.scope?.presetName,
+                appliedAt: response.scope?.appliedAt,
+              });
 
+              invalidateProjectWorkspaceCache(rollup.projectId, false);
               const workspace = await fetchProjectWorkspace(api, rollup.projectId, false);
               setBackendWorkspace({
                 maps: normalizeWorkspaceMaps(workspace.workspace.maps),
@@ -2129,10 +2678,14 @@ const currentVenueOption =
           endClientName: backendProject?.endClientName ?? rollup.endClientName ?? undefined,
           contractNumber: backendProject?.contractNumber ?? undefined,
           liftOrderId: backendProject?.liftOrderId ?? rollup.liftOrderId ?? undefined,
+          inventoryPresetId: projectScopeMeta.presetId || "full_venue",
+          inventoryPresetName: projectScopeMeta.presetName || "Full Venue",
         }}
         venues={editVenueOptions}
         isVenueLocked={isProjectVenueLocked}
         canManageLiftOrder={viewerCanManageLiftOrder}
+        inventoryPresets={scopeVenuePresets}
+        isInventoryScopeLocked={Boolean(rollup.liftOrderId)}
         onSave={(draft) => {
           if (isDemo) {
             demoStore.actions.updateProjectDetails(demoActiveProjectId, {
@@ -2147,7 +2700,7 @@ const currentVenueOption =
 
           void (async () => {
             try {
-              const response = await api.request<{ project: any; scope: { includedIds: string[] } }>(
+              const response = await api.request<ProjectScopeUpdateResponse>(
                 `/api/projects/${rollup.projectId}`,
                 {
                   method: "PATCH",
@@ -2159,6 +2712,7 @@ const currentVenueOption =
                   poNumber: draft.poNumber,
                   endClientName: draft.endClientName,
                   contractNumber: draft.contractNumber,
+                  ...(!rollup.liftOrderId ? { inventoryPresetId: draft.inventoryPresetId || "full_venue" } : {}),
                   ...(viewerCanManageLiftOrder
                     ? {
                         liftOrderId: draft.liftOrderId || null,
@@ -2169,7 +2723,22 @@ const currentVenueOption =
               }
             );
               setBackendProject(response.project);
+              setIncludedIds(response.scope?.includedIds || includedIds);
+              setProjectScopeMeta({
+                sourceType: response.scope?.sourceType,
+                presetId: response.scope?.presetId,
+                presetName: response.scope?.presetName,
+                appliedAt: response.scope?.appliedAt,
+              });
               setLocalProjectDetails(draft);
+              invalidateProjectWorkspaceCache(rollup.projectId, false);
+              const workspace = await fetchProjectWorkspace(api, rollup.projectId, false);
+              setBackendWorkspace({
+                maps: normalizeWorkspaceMaps(workspace.workspace.maps),
+                creatives: workspace.workspace.creatives.map(normalizeCreativeAsset),
+                inventory: normalizeWorkspaceInventory(workspace.workspace.inventory),
+                variants: normalizeWorkspaceVariants(workspace.workspace.variants),
+              });
               demoStore.actions.pushToast("success", "Project details updated");
             } catch (error) {
               const message = error instanceof Error ? error.message : "Could not update project details";

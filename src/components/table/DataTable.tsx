@@ -6,11 +6,13 @@ export default function DataTable<Row>({
   rows,
   onRowClick,
   getRowKey,
+  getRowClassName,
 }: {
   columns: any[];
   rows: Row[];
   onRowClick?: (row: Row) => void;
   getRowKey?: (row: Row, index: number) => string;
+  getRowClassName?: (row: Row, index: number) => string;
 }) {
   return (
     <table className="data-table">
@@ -31,7 +33,9 @@ export default function DataTable<Row>({
           return (
             <tr
               key={key}
-              className={onRowClick ? "row-clickable" : ""}
+              className={[onRowClick ? "row-clickable" : "", getRowClassName?.(row, i) || ""]
+                .filter(Boolean)
+                .join(" ")}
               onClick={() => onRowClick?.(row)}
             >
               {columns.map((c: any) => (

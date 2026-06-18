@@ -32,7 +32,7 @@
   display:block;
   color:var(--muted);
   font-size:11px;
-  font-weight:850;
+  font-weight: 760;
   letter-spacing:.06em;
   text-transform:uppercase;
 }
@@ -120,25 +120,44 @@
 }
 
 .alloc-override-row.is-selected{
-  border-color:rgba(37,99,235,.42);
-  box-shadow:0 0 0 3px rgba(37,99,235,.08);
-  background:linear-gradient(180deg,rgba(37,99,235,.04),#fff);
+  border-color:rgba(63,110,216,.42);
+  box-shadow:0 0 0 3px rgba(63,110,216,.08);
+  background:linear-gradient(180deg,rgba(63,110,216,.04),#fff);
 }
 
 .alloc-override-thumb{
+  position:relative;
+  flex:0 0 100px;
   width:100px;
   height:92px;
   border-radius:11px;
   overflow:hidden;
   border:1px solid var(--stroke2);
-  display:grid;
-  place-items:center;
+  display:block;
   color:var(--muted);
-  font-weight:850;
+  font-weight: 760;
   background:linear-gradient(180deg, rgba(248,250,252,.92), rgba(241,245,249,.76));
   background-position:center;
   background-repeat:no-repeat;
   background-size:contain;
+}
+
+.alloc-override-thumb span{
+  position:absolute;
+  inset:0;
+  display:grid;
+  place-items:center;
+}
+
+.alloc-override-thumbImg{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  max-width:none;
+  max-height:none;
+  object-fit:cover;
+  display:block;
 }
 
 .alloc-override-rowMain{
@@ -184,11 +203,11 @@
   min-height:22px;
   border:1px solid #dbeafe;
   background:#eff6ff;
-  color:#2563eb;
+  color:#3F6ED8;
   border-radius:999px;
   padding:0 8px;
   font-size:10.5px;
-  font-weight:850;
+  font-weight: 760;
 }
 
 .alloc-override-chip.is-green{
@@ -227,7 +246,7 @@
   flex-direction:column;
   gap:6px;
   font-size:11px;
-  font-weight:850;
+  font-weight: 760;
   letter-spacing:.06em;
   color:var(--muted);
   text-transform:uppercase;

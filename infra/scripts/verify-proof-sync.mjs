@@ -730,6 +730,52 @@ runCase("revised-art rollback step hides stale Lift proof and waits for regenera
   assert.deepEqual(merged.updatedProofs[0].locations, ["CW-001"]);
 });
 
+runCase("post-proof Lift steps keep proof assets visible as read-only references", () => {
+  const existingProofs = [
+    makeProofLine({
+      id: "proof_reference",
+      lineNumber: 1,
+      mediaVariantKey: "column_wrap_63.75x123",
+      mediaVariantLabel: 'Column Wrap • 63.75"h x 123"w',
+      unitNumber: "NYPENN_CW1",
+      locations: ["CW-001"],
+      clientCreativeId: "creative_approved",
+      clientFileName: "ColumnWrap-Approved.pdf",
+      liftOrderLineId: 9401,
+    }),
+  ];
+
+  const rawLines = [
+    {
+      LINE_NUMBER: 1,
+      LINE_STEP_NUMBER: 8.01,
+      ORDER_LINE_ID: 9401,
+      UNIT_NUMBER: null,
+      PROOFS: [
+        {
+          ATTACHMENT_ID: 8401,
+          PROOF_LINK: "https://lift.example/reference-preview",
+          HIRES_PDF_PROOF: "https://lift.example/reference-proof",
+          PROOF_APPROVAL_STATUS: "PENDING",
+        },
+      ],
+    },
+  ];
+
+  const merged = mergeProjectProofLinesFromLift({
+    existingProofs,
+    rawLines,
+    actorName: "Verifier",
+    syncedAt: "2026-04-16T13:40:00.000Z",
+  });
+
+  assert.equal(merged.issues.length, 0);
+  assert.equal(merged.updatedProofs[0].status, "approved");
+  assert.equal(merged.updatedProofs[0].liftProofThumbUrl, "https://lift.example/reference-preview");
+  assert.equal(merged.updatedProofs[0].liftProofFullUrl, "https://lift.example/reference-proof");
+  assert.deepEqual(merged.updatedProofs[0].locations, ["CW-001"]);
+});
+
 if (process.exitCode && process.exitCode !== 0) {
   process.exit(process.exitCode);
 }

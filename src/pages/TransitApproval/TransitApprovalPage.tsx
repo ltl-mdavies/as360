@@ -231,6 +231,7 @@ export default function TransitApprovalPage() {
 
   const [lb, setLb] = useState<{
     src: string;
+    fallbackSrc?: string;
     title?: string;
     subtitle?: string;
     openUrl?: string;
@@ -476,7 +477,8 @@ export default function TransitApprovalPage() {
                             title="Click to preview"
                             onClick={() =>
                               setLb({
-                                src: thumb,
+                                src: full,
+                                fallbackSrc: thumb,
                                 title: c.filename,
                                 subtitle: c.fileMeta,
                                 openUrl: full,
@@ -618,6 +620,7 @@ export default function TransitApprovalPage() {
         <Lightbox
           isOpen={!!lb}
           src={lb?.src || ""}
+          fallbackSrc={lb?.fallbackSrc}
           title={lb?.title}
           subtitle={lb?.subtitle}
           openInNewTabUrl={lb?.openUrl}

@@ -1,7 +1,8 @@
 // src/pages/ProofApproval/ProofApprovalPage.tsx
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
+import { ChevronDown, Info, Search, SlidersHorizontal, X } from "lucide-react";
 import { demoStore, useDemoStore } from "../../domain/store/demoStore";
 import { useDemoProjectContext } from "../../domain/selectors/useDemoProjectContext";
 import { useApiClient } from "../../api/useApiClient";
@@ -23,6 +24,7 @@ import AppShell from "../../app/AppShell";
 import Panel from "../../components/common/Panel";
 import PageHeader from "../../components/common/PageHeader";
 import Lightbox from "../../components/common/Lightbox";
+import { WorkspacePresenceCluster } from "../../components/realtime/WorkspacePresenceCluster";
 import { ShareAccessDenied, useShareAccess } from "../../components/share/ShareAccess";
 import { getRollupById } from "../../logic/mockRollups";
 import { isDemoProjectRoute } from "../../logic/projectMode";
@@ -30,6 +32,8 @@ import type { ProofLineMock } from "../../logic/mockProofLines";
 import { formatMediaDimensions } from "../../logic/mockAssignment";
 import { buildDocumentThumbUrl } from "../../logic/imageUrls";
 import { generatePdfThumbnail, sanitizeFilename } from "../../components/uploader/uploadFiles";
+import { useCollaborationToastQueue } from "../../realtime/useCollaborationToastQueue";
+import { useWorkspacePresence, type WorkspaceChangeEvent } from "../../realtime/useWorkspacePresence";
 
 type FilterKey = "all" | "pending" | "approved" | "revised";
 type BackgroundJobStatus = "processing" | "success" | "error";
@@ -57,6 +61,16 @@ function mediaKey(line: ProofLineMock) {
 function mediaLabelFromKey(key: string) {
   const [name, w, h] = key.split("||");
   return `${name} · ${formatSize(Number(w), Number(h))}`;
+}
+
+function formatRemoteProofSummary(event: WorkspaceChangeEvent) {
+  const actor = event.actorName || "Another user";
+  const detail = event.detail || {};
+  const lineNumber = typeof detail.lineNumber === "number" || typeof detail.lineNumber === "string" ? detail.lineNumber : "";
+  const lineLabel = lineNumber ? `line ${lineNumber}` : "a proof line";
+  if (event.eventType === "proof.approved") return `${actor} approved ${lineLabel}.`;
+  if (event.eventType === "proof.revised") return `${actor} uploaded a revision for ${lineLabel}.`;
+  return event.summary || "Proof queue updated by another user.";
 }
 
 function statusLabel(line: ProofLineMock) {
@@ -389,6 +403,8 @@ export default function ProofApprovalPage() {
   // Preserve customer context in back link
   const [searchParams] = useSearchParams();
   const modeSuffix = searchParams.get("mode") === "customer" ? "?mode=customer" : "";
+  const useClassicProofHeader = ["1", "true", "yes"].includes((searchParams.get("classicProofHeader") || "").toLowerCase());
+  const useProofCommandHeader = !useClassicProofHeader;
   const shareAccess = useShareAccess(projectId);
   const canEditProofs = shareAccess.canEdit("proofs");
 
@@ -426,6 +442,19 @@ export default function ProofApprovalPage() {
 
   const orderNumber = isDemo ? (ctx.liftOrderNumber || null) : (liveProject?.liftOrderId || liveProject?.extId || null);
 
+  const applyProofResponse = useCallback((response: ApiProjectProofsResponse) => {
+    setLiveLines(
+      response.proofs
+        .slice()
+        .sort((a, b) => a.lineNumber - b.lineNumber)
+        .map((line) => toLiveProofLine(line))
+    );
+    setProofSyncInfo(response.sync ?? null);
+    if (response.sync?.attempted && !response.sync.ok) {
+      setSyncWarning(response.sync.message || "Lift proof sync could not refresh yet.");
+    }
+  }, []);
+
   // Derive demo proof lines + creatives safely
   const demoProofLinesDomain = useMemo(() => {
     return demoProofsByProject[demoActiveProjectId] || [];
@@ -444,18 +473,6 @@ export default function ProofApprovalPage() {
       setLoadError(null);
       setSyncWarning(null);
       try {
-        const applyProofResponse = (response: ApiProjectProofsResponse) => {
-          setLiveLines(
-            response.proofs
-              .slice()
-              .sort((a, b) => a.lineNumber - b.lineNumber)
-              .map((line) => toLiveProofLine(line))
-          );
-          setProofSyncInfo(response.sync ?? null);
-          if (response.sync?.attempted && !response.sync.ok) {
-            setSyncWarning(response.sync.message || "Lift proof sync could not refresh yet.");
-          }
-        };
         const cachedWorkspace = peekProjectWorkspaceCache(projectId, shareAccess.isShareMode);
         if (cachedWorkspace) {
           setLiveProject({
@@ -539,7 +556,55 @@ export default function ProofApprovalPage() {
     return () => {
       cancelled = true;
     };
-  }, [api, isDemo, projectId, reloadToken, shareAccess.isResolving, shareAccess.isShareMode]);
+  }, [api, applyProofResponse, isDemo, projectId, reloadToken, shareAccess.isResolving, shareAccess.isShareMode]);
+
+  const syncProofsSilently = useCallback(async () => {
+    if (!projectId || isDemo) return;
+    invalidateProjectProofsCache(projectId, shareAccess.isShareMode);
+    invalidateProjectWorkspaceCache(projectId, shareAccess.isShareMode);
+    try {
+      const [workspaceResult, proofsResult] = await Promise.allSettled([
+        fetchProjectWorkspace(api, projectId, shareAccess.isShareMode),
+        fetchProjectProofs(api, projectId, shareAccess.isShareMode, true),
+      ]);
+      if (workspaceResult.status === "fulfilled") {
+        setLiveProject({
+          title: workspaceResult.value.project.title,
+          venueName: workspaceResult.value.project.venueName,
+          extId: workspaceResult.value.project.extId || null,
+          liftOrderId: workspaceResult.value.project.liftOrderId || null,
+          productionReleasedAt: workspaceResult.value.project.productionReleasedAt || null,
+        });
+      }
+      if (proofsResult.status === "fulfilled") {
+        applyProofResponse(proofsResult.value);
+      }
+    } catch (error) {
+      console.warn("Silent proof sync failed", error);
+    }
+  }, [api, applyProofResponse, isDemo, projectId, shareAccess.isShareMode]);
+
+  const enqueueCollaborationToast = useCollaborationToastQueue("Proof queue updated by another user.");
+
+  const requestRemoteProofSync = useCallback(() => {
+    if (!projectId || isDemo) return;
+    void syncProofsSilently();
+  }, [isDemo, projectId, syncProofsSilently]);
+
+  const handleRemoteProofChange = useCallback((event: WorkspaceChangeEvent) => {
+    requestRemoteProofSync();
+    enqueueCollaborationToast(event, formatRemoteProofSummary(event));
+  }, [enqueueCollaborationToast, requestRemoteProofSync]);
+
+  const presence = useWorkspacePresence({
+    api,
+    projectId,
+    workspace: "proofs",
+    enabled: !isDemo && Boolean(projectId) && !shareAccess.isResolving,
+    shareMode: shareAccess.isShareMode,
+    onRemoteChange: handleRemoteProofChange,
+    onSyncRequested: requestRemoteProofSync,
+  });
 
   function refreshProofStatus() {
     if (!projectId) return;
@@ -638,12 +703,22 @@ export default function ProofApprovalPage() {
   const [feedbackSortOrder, setFeedbackSortOrder] = useState<FeedbackSortOrder>("newest");
   const [feedbackLightbox, setFeedbackLightbox] = useState<{
     src: string;
+    fallbackSrc?: string;
+    openUrl?: string;
     title: string;
     subtitle?: string;
   } | null>(null);
+  const [mobileToolsExpanded, setMobileToolsExpanded] = useState(false);
+  const [technicalInfoOpen, setTechnicalInfoOpen] = useState(false);
   const [lineNotes, setLineNotes] = useState<Record<string, string>>({});
   const [revisionJobs, setRevisionJobs] = useState<RevisionBackgroundJob[]>([]);
   const mobileRevisionInputRef = useRef<HTMLInputElement | null>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const mobileToolsRef = useRef<HTMLDivElement | null>(null);
+  const mobileCardsTopRef = useRef<HTMLDivElement | null>(null);
+  const mobileCardRefs = useRef<Record<string, HTMLElement | null>>({});
+  const previousMobileScrollYRef = useRef(0);
+  const shouldFocusMobileSearchRef = useRef(false);
   const tabletRevisionInputRef = useRef<HTMLInputElement | null>(null);
   const revisionInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -745,14 +820,34 @@ export default function ProofApprovalPage() {
     return `Line ${line.lineNumber}${suffix}`;
   }
 
-  function getProofIdLabel(line: ProofLineMock) {
-    return line.liftProofingId ? `ID ${line.liftProofingId}` : null;
-  }
-
   function getLocationPreview(line: ProofLineMock, limit = 2) {
     const visible = line.locations.slice(0, limit);
     const remaining = Math.max(0, line.locations.length - visible.length);
     return { visible, remaining };
+  }
+
+  function getTechnicalInfoRows(line: ProofLineMock) {
+    const quantity = proofQuantity(line);
+    const assignedLocations = line.locations.length
+      ? `${line.locations.length} assigned (${line.locations.join(", ")})`
+      : "No assigned locations";
+
+    return [
+      { label: "Line Number", value: getProofLineLabel(line) },
+      { label: "Lift Line ID", value: line.liftOrderLineId || "—" },
+      { label: "Proof ID", value: line.liftProofingId || "—" },
+      { label: "Client Upload Filename", value: line.clientFileName || "Unavailable" },
+      { label: "Proof Filename", value: getProofFileName(line) },
+      {
+        label: "Qty",
+        value: quantity == null ? "—" : `${quantity}${hasProofQuantityMismatch(line) ? ` · ${line.locations.length} assigned` : ""}`,
+      },
+      { label: "Assigned Locations", value: assignedLocations },
+      { label: "Media/Product", value: line.mediaName || line.mediaVariantLabel || "—" },
+      { label: "Dimensions", value: formatSize(line.w, line.h) },
+      { label: "Unit", value: line.unitNumber || "—" },
+      { label: "Proof Status", value: statusLabel(line).label },
+    ];
   }
 
   const filtered = useMemo(() => {
@@ -839,6 +934,89 @@ export default function ProofApprovalPage() {
     );
   }
 
+  const mobileActionableCount = useMemo(
+    () => filtered.filter((line) => line.status !== "approved").length,
+    [filtered]
+  );
+  const hasActiveMobileFilters = filter !== "all" || q.trim() !== "" || mediaVariant !== "all";
+  const mobileFilterSummary =
+    filter === "pending"
+      ? `${counts.pending} pending`
+      : filter === "approved"
+      ? `${counts.approved} approved`
+      : filter === "revised"
+      ? `${counts.revised} revised`
+      : `${filtered.length} shown`;
+
+  useEffect(() => {
+    if (!mobileToolsExpanded || !shouldFocusMobileSearchRef.current) return;
+    shouldFocusMobileSearchRef.current = false;
+    window.requestAnimationFrame(() => mobileSearchInputRef.current?.focus());
+  }, [mobileToolsExpanded]);
+
+  const scrollMobileCardsStart = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const target = mobileCardsTopRef.current || mobileToolsRef.current;
+    target?.scrollIntoView({ behavior, block: "start" });
+  }, []);
+
+  const expandMobileTools = useCallback((focusSearch = false) => {
+    shouldFocusMobileSearchRef.current = focusSearch;
+    setMobileToolsExpanded(true);
+  }, []);
+
+  const handleMobileFilterChange = useCallback((nextFilter: FilterKey) => {
+    previousMobileScrollYRef.current = window.scrollY;
+    setFilter(nextFilter);
+    setMobileToolsExpanded(false);
+    window.requestAnimationFrame(() => scrollMobileCardsStart());
+  }, [scrollMobileCardsStart]);
+
+  const handleMobileSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    previousMobileScrollYRef.current = window.scrollY;
+    setQ(event.currentTarget.value);
+    window.requestAnimationFrame(() => scrollMobileCardsStart());
+  }, [scrollMobileCardsStart]);
+
+  const handleMobileMediaChange = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
+    previousMobileScrollYRef.current = window.scrollY;
+    setMediaVariant(event.currentTarget.value);
+    setMobileToolsExpanded(false);
+    window.requestAnimationFrame(() => scrollMobileCardsStart());
+  }, [scrollMobileCardsStart]);
+
+  const clearMobileFilters = useCallback(() => {
+    const restoreY = previousMobileScrollYRef.current;
+    setFilter("all");
+    setQ("");
+    setMediaVariant("all");
+    setMobileToolsExpanded(false);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: restoreY || 0, behavior: "smooth" });
+    });
+  }, []);
+
+  const scrollMobileQueueTop = useCallback(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const scrollToNextPendingMobile = useCallback(() => {
+    const candidates = filtered.filter((line) => line.status !== "approved");
+    if (!candidates.length) return;
+
+    const viewportThreshold = 96;
+    const nextLine =
+      candidates.find((line) => {
+        const node = mobileCardRefs.current[line.lineItemId];
+        return !!node && node.getBoundingClientRect().top > viewportThreshold;
+      }) || candidates[0];
+
+    setSelectedId(nextLine.lineItemId);
+    setMobileToolsExpanded(false);
+    window.requestAnimationFrame(() => {
+      mobileCardRefs.current[nextLine.lineItemId]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [filtered]);
+
   const canApproveSelected =
     !!selected && canApproveLine(selected);
   const canUploadRevision =
@@ -888,6 +1066,7 @@ export default function ProofApprovalPage() {
     setShowRevisionUploader(false);
     setIsRevisionDragActive(false);
     setHistoryOpen(false);
+    setTechnicalInfoOpen(false);
   }, [selectedId]);
 
   function applyProofPatch(
@@ -979,6 +1158,7 @@ export default function ProofApprovalPage() {
           status: "approved",
           proofDecisionComment: lineNote || null,
           expectedUpdatedAt: line.updatedAt || null,
+          clientSessionId: presence.sessionId,
         }, shareAccess.isShareMode);
         applyProofPatch(line.lineItemId, {
           status: response.proof.status,
@@ -1054,7 +1234,7 @@ export default function ProofApprovalPage() {
       if (isDemo && projectId) {
         const revisedThumbUrl = buildDocumentThumbUrl({
           label: isPdf ? "PDF" : "FILE",
-          accent: "#2563eb",
+          accent: "#3F6ED8",
         });
         setLines((prev) =>
           prev.map((l) =>
@@ -1180,6 +1360,7 @@ export default function ProofApprovalPage() {
         useClientCreativeAsProof: true,
         proofDecisionComment: lineNote || null,
         expectedUpdatedAt: lineForJob.updatedAt || null,
+        clientSessionId: presence.sessionId,
       }, shareAccess.isShareMode);
 
       applyProofPatch(lineForJob.lineItemId, {
@@ -1191,7 +1372,7 @@ export default function ProofApprovalPage() {
           updatedCreative.fullUrl ||
           buildDocumentThumbUrl({
             label: isPdf ? "PDF" : "FILE",
-            accent: updatedCreative.color || "#2563eb",
+            accent: updatedCreative.color || "#3F6ED8",
           }),
         clientFullUrl: updatedCreative.fullUrl || updatedCreative.thumbUrl || null,
         proofThumbUrl: response.proof.proofThumbUrl || response.proof.proofFullUrl || null,
@@ -1288,7 +1469,11 @@ export default function ProofApprovalPage() {
           status: "pending",
         } as any);
       } else if (projectId) {
-        const response = await updateProjectProofLine(api, projectId, selected.lineItemId, { status: "pending", expectedUpdatedAt: selected.updatedAt || null }, shareAccess.isShareMode);
+        const response = await updateProjectProofLine(api, projectId, selected.lineItemId, {
+          status: "pending",
+          expectedUpdatedAt: selected.updatedAt || null,
+          clientSessionId: presence.sessionId,
+        }, shareAccess.isShareMode);
         applyProofPatch(selected.lineItemId, {
           status: response.proof.status,
           revised: response.proof.revised,
@@ -1390,44 +1575,127 @@ export default function ProofApprovalPage() {
 
   // Everything above is now hardened/organized.
   // Next line in your file should be:  return (
+  const proofSyncMessage = syncWarning || backgroundSyncMessage || proofSyncStatusText(proofSyncInfo);
 
   return (
     <AppShell pageClassName="wide" projectTitle={projectTitle}>
-      <PageHeader
-        variant="workspace"
-        className="page-header-compactProject"
-        backLabel="← Back to Hub"
-        onBack={() => navigate(shareAccess.buildProjectUrl(`/p/${projectId}${modeSuffix}`))}
-        eyebrow="Proof Approval"
-        title={rollup?.title || projectTitle}
-        actions={
-          !isDemo ? (
-            <button
-              className="btn btn-ghost btn-soft"
-              type="button"
-              disabled={liveLoading}
-              onClick={refreshProofStatus}
-            >
-              {liveLoading ? "Refreshing…" : "Refresh Proof Status"}
-            </button>
-          ) : null
-        }
-        meta={
-          <>
-            <span>{rollup ? `${rollup.venueName}` : `${venueName}`}</span>
-            <span className="page-header-dot">•</span>
-            <span>Order #: {rollup?.liftOrderId || rollup?.extId || orderNumber || "—"}</span>
-            <span className="page-header-dot">•</span>
-            <span>{counts.pending} pending</span>
-            <span className="page-header-dot">•</span>
-            <span>{counts.approved} approved</span>
-          </>
-        }
-      />
+      <div className={`proof-workspace ${useProofCommandHeader ? "is-command-header" : "is-classic-header"}`}>
+        {useProofCommandHeader ? (
+          <section className="proof-commandHeader" aria-label="Proof approval workspace header">
+            <div className="proof-commandIdentity">
+              <button
+                className="btn btn-ghost btn-soft proof-commandBack"
+                type="button"
+                onClick={() => navigate(shareAccess.buildProjectUrl(`/p/${projectId}${modeSuffix}`))}
+              >
+                ← Back
+              </button>
 
-      {(syncWarning || backgroundSyncMessage || proofSyncStatusText(proofSyncInfo)) && (
+              <div className="proof-commandTitleBlock">
+                <div className="proof-commandEyebrow">Proof Approval</div>
+                <div className="proof-commandTitle" title={rollup?.title || projectTitle}>
+                  {rollup?.title || projectTitle}
+                </div>
+              </div>
+            </div>
+
+            <div className="proof-commandMeta" aria-label="Proof approval status">
+              <span className="proof-commandChip">{rollup ? rollup.venueName : venueName}</span>
+              <span className="proof-commandChip">Order {rollup?.liftOrderId || rollup?.extId || orderNumber || "Not set"}</span>
+
+              <span className="proof-commandStat proof-commandStatPending">
+                <span className="proof-commandStatLabel">Pending</span>
+                <span className="proof-commandStatValue">{counts.pending}</span>
+              </span>
+
+              {counts.waiting > 0 ? (
+                <span className="proof-commandStat proof-commandStatWaiting">
+                  <span className="proof-commandStatLabel">Waiting</span>
+                  <span className="proof-commandStatValue">{counts.waiting}</span>
+                </span>
+              ) : null}
+
+              <span className="proof-commandStat proof-commandStatApproved">
+                <span className="proof-commandStatLabel">Approved</span>
+                <span className="proof-commandStatValue">{counts.approved}/{counts.total}</span>
+              </span>
+
+              {counts.revised > 0 ? (
+                <span className="proof-commandStat proof-commandStatRevised">
+                  <span className="proof-commandStatLabel">Revised</span>
+                  <span className="proof-commandStatValue">{counts.revised}</span>
+                </span>
+              ) : null}
+            </div>
+
+            <div className="proof-commandActions">
+              <WorkspacePresenceCluster
+                participants={presence.participants}
+                currentSessionId={presence.sessionId}
+                status={presence.status}
+              />
+              {proofSyncMessage ? (
+                <span
+                  className={`proof-commandSyncStatus ${syncWarning ? "is-warning" : "is-neutral"}`}
+                  role="status"
+                  title={proofSyncMessage}
+                >
+                  {proofSyncMessage}
+                </span>
+              ) : null}
+              {!isDemo && !shareAccess.isShareMode ? (
+                <button
+                  className="btn btn-ghost btn-soft"
+                  type="button"
+                  disabled={liveLoading}
+                  onClick={refreshProofStatus}
+                >
+                  {liveLoading ? "Refreshing…" : "Refresh Proof Status"}
+                </button>
+              ) : (
+                <span className="proof-commandQueueStatus">
+                  {remainingProofActions === 0 && counts.total > 0 ? "Review Complete" : "Review Queue"}
+                </span>
+              )}
+            </div>
+          </section>
+        ) : (
+          <PageHeader
+            variant="workspace"
+            className="page-header-compactProject"
+            backLabel="← Back to Hub"
+            onBack={() => navigate(shareAccess.buildProjectUrl(`/p/${projectId}${modeSuffix}`))}
+            eyebrow="Proof Approval"
+            title={rollup?.title || projectTitle}
+            actions={
+              !isDemo ? (
+                <button
+                  className="btn btn-ghost btn-soft"
+                  type="button"
+                  disabled={liveLoading}
+                  onClick={refreshProofStatus}
+                >
+                  {liveLoading ? "Refreshing…" : "Refresh Proof Status"}
+                </button>
+              ) : null
+            }
+            meta={
+              <>
+                <span>{rollup ? `${rollup.venueName}` : `${venueName}`}</span>
+                <span className="page-header-dot">•</span>
+                <span>Order #: {rollup?.liftOrderId || rollup?.extId || orderNumber || "—"}</span>
+                <span className="page-header-dot">•</span>
+                <span>{counts.pending} pending</span>
+                <span className="page-header-dot">•</span>
+                <span>{counts.approved} approved</span>
+              </>
+            }
+          />
+        )}
+
+      {!useProofCommandHeader && proofSyncMessage && (
         <div className={`proof-syncWarning ${syncWarning ? "" : "is-neutral"}`} role="status">
-          {syncWarning || backgroundSyncMessage || proofSyncStatusText(proofSyncInfo)}
+          {proofSyncMessage}
         </div>
       )}
 
@@ -1449,43 +1717,129 @@ export default function ProofApprovalPage() {
             <div className="proof-summary-title">{proofSummaryTitle}</div>
             <div className="proof-summary-body">{proofSummaryBody}</div>
           </div>
-
-          <div className="proof-tabs proof-mobileTabs">
-            <button className={`tab ${filter === "all" ? "tab-active" : ""}`} onClick={() => setFilter("all")} type="button">
-              All ({counts.total})
-            </button>
-            <button className={`tab ${filter === "pending" ? "tab-active" : ""}`} onClick={() => setFilter("pending")} type="button">
-              Pending ({counts.pending})
-            </button>
-            <button className={`tab ${filter === "approved" ? "tab-active" : ""}`} onClick={() => setFilter("approved")} type="button">
-              Approved ({counts.approved})
-            </button>
-            <button className={`tab ${filter === "revised" ? "tab-active" : ""}`} onClick={() => setFilter("revised")} type="button">
-              Revised ({counts.revised})
-            </button>
-          </div>
-
-          <div className="proof-filters proof-mobileFilters">
-            <div className="proof-search">
-              <span className="field-icon">⌕</span>
-              <input
-                className="field-input"
-                placeholder="Search files…"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
-            </div>
-
-            <select className="select proof-media" value={mediaVariant} onChange={(e) => setMediaVariant(e.target.value)}>
-              {mediaOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt === "all" ? "All Media" : mediaLabelFromKey(opt)}
-                </option>
-              ))}
-            </select>
-          </div>
         </div>
 
+        <div
+          className={`proof-mobileStickyTools ${mobileToolsExpanded ? "is-expanded" : "is-collapsed"} ${hasActiveMobileFilters ? "has-active-filters" : ""}`}
+          ref={mobileToolsRef}
+        >
+          <div className="proof-mobileDock" aria-label="Proof queue controls">
+            <button
+              className="proof-mobileDockSummary"
+              type="button"
+              aria-expanded={mobileToolsExpanded}
+              onClick={() => setMobileToolsExpanded((prev) => !prev)}
+            >
+              <span className="proof-mobileDockCount">{mobileFilterSummary}</span>
+              <span className="proof-mobileDockSub">{mobileActionableCount} pending</span>
+              <ChevronDown aria-hidden="true" size={14} />
+            </button>
+
+            <button
+              className="proof-mobileDockIcon"
+              type="button"
+              aria-label="Search proof files"
+              onClick={() => expandMobileTools(true)}
+            >
+              <Search aria-hidden="true" size={17} />
+            </button>
+
+            <button
+              className={`proof-mobileDockIcon ${hasActiveMobileFilters ? "is-active" : ""}`}
+              type="button"
+              aria-label="Filter proof queue"
+              onClick={() => expandMobileTools(false)}
+            >
+              <SlidersHorizontal aria-hidden="true" size={17} />
+            </button>
+
+            <button
+              className="proof-mobileDockNext"
+              type="button"
+              onClick={scrollToNextPendingMobile}
+              disabled={mobileActionableCount === 0}
+            >
+              Next
+            </button>
+          </div>
+
+          {mobileToolsExpanded ? (
+            <div className="proof-mobileExpandedTools">
+              <div className="proof-tabs proof-mobileTabs">
+                <button className={`tab ${filter === "all" ? "tab-active" : ""}`} onClick={() => handleMobileFilterChange("all")} type="button">
+                  All ({counts.total})
+                </button>
+                <button className={`tab ${filter === "pending" ? "tab-active" : ""}`} onClick={() => handleMobileFilterChange("pending")} type="button">
+                  Pending ({counts.pending})
+                </button>
+                <button className={`tab ${filter === "approved" ? "tab-active" : ""}`} onClick={() => handleMobileFilterChange("approved")} type="button">
+                  Approved ({counts.approved})
+                </button>
+                <button className={`tab ${filter === "revised" ? "tab-active" : ""}`} onClick={() => handleMobileFilterChange("revised")} type="button">
+                  Revised ({counts.revised})
+                </button>
+              </div>
+
+              <div className="proof-filters proof-mobileFilters">
+                <div className="proof-search">
+                  <span className="field-icon">⌕</span>
+                  <input
+                    ref={mobileSearchInputRef}
+                    className="field-input"
+                    placeholder="Search files…"
+                    value={q}
+                    onChange={handleMobileSearchChange}
+                  />
+                </div>
+
+                <select className="select proof-media" value={mediaVariant} onChange={handleMobileMediaChange}>
+                  {mediaOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt === "all" ? "All Media" : mediaLabelFromKey(opt)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="proof-mobileQueueBar" aria-label="Proof queue shortcuts">
+                <div className="proof-mobileQueueCount">
+                  <strong>{filtered.length}</strong>
+                  <span>of {counts.total} shown</span>
+                </div>
+                <button
+                  className="proof-mobileQueueButton"
+                  type="button"
+                  onClick={clearMobileFilters}
+                  disabled={!hasActiveMobileFilters}
+                >
+                  Clear
+                </button>
+                <button className="proof-mobileQueueButton" type="button" onClick={scrollMobileQueueTop}>
+                  Top
+                </button>
+                <button
+                  className="proof-mobileQueueButton is-primary"
+                  type="button"
+                  onClick={scrollToNextPendingMobile}
+                  disabled={mobileActionableCount === 0}
+                >
+                  Next Pending
+                </button>
+                <button
+                  className="proof-mobileQueueButton proof-mobileQueueClose"
+                  type="button"
+                  onClick={() => setMobileToolsExpanded(false)}
+                  aria-label="Collapse proof queue controls"
+                >
+                  <X aria-hidden="true" size={15} />
+                  <span>Collapse</span>
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="proof-mobileCardsAnchor" ref={mobileCardsTopRef} />
         <div className="proof-mobileCards">
           {filtered.length === 0 ? (
             <div className="proof-empty">
@@ -1494,7 +1848,6 @@ export default function ProofApprovalPage() {
           ) : filtered.map((l) => {
             const s = statusLabel(l);
             const proofName = getProofFileName(l);
-            const proofIdLabel = getProofIdLabel(l);
             const lineFeedbackSummary = getFeedbackSummary(l);
             const lineHasClientAsset = hasClientUploadAsset(l);
             const lineIsApproved = l.status === "approved";
@@ -1506,11 +1859,16 @@ export default function ProofApprovalPage() {
             const isUploaderOpenForLine = showRevisionUploader && selected?.lineItemId === l.lineItemId && !lineIsApproved;
             const lineUsesSimpleDecisionDock = !lineFeedbackSummary.hasFeedback && !lineIsApproved && !lineIsWaiting;
             return (
-              <article className="proof-mobileCard" key={l.lineItemId}>
+              <article
+                className={`proof-mobileCard ${lineIsApproved ? "is-complete" : "is-actionable"}`}
+                key={l.lineItemId}
+                ref={(node) => {
+                  mobileCardRefs.current[l.lineItemId] = node;
+                }}
+              >
                 <div className="proof-mobileCardHead">
                   <div className="proof-lineIdentity">
                     <span className="proof-lineBadge">{getProofLineLabel(l)}</span>
-                    {proofIdLabel ? <span className="proof-attachmentBadge">{proofIdLabel}</span> : null}
                     {lineFeedbackSummary.hasFeedback ? (
                       <button className="proof-commentBadge proof-commentBadgeButton" type="button" onClick={() => openFeedbackDrawer(l)}>
                         {lineFeedbackSummary.commentCount || lineFeedbackSummary.attachmentCount} feedback
@@ -1816,14 +2174,13 @@ export default function ProofApprovalPage() {
         </Panel>
 
         <Panel className="proof-right">
-          {selected && (
+          {selected ? (
             <>
               <article className="proof-tabletCanvas" aria-label="Selected proof review card">
                 <div className="proof-mobileCard proof-tabletCard">
                   <div className="proof-mobileCardHead proof-tabletCardHead">
                     <div className="proof-lineIdentity">
                       <span className="proof-lineBadge">{getProofLineLabel(selected)}</span>
-                      {getProofIdLabel(selected) ? <span className="proof-attachmentBadge">{getProofIdLabel(selected)}</span> : null}
                     </div>
                     <div className="proof-tabletTools">
                       <button
@@ -1847,8 +2204,6 @@ export default function ProofApprovalPage() {
                         <span>{selected.locations.join(", ")}</span>
                       </>
                     ) : null}
-                    <span>Lift line {selected.liftOrderLineId || "—"}</span>
-                    <span>Proof ID {selected.liftProofingId || "—"}</span>
                     <span className={hasProofQuantityMismatch(selected) ? "is-warning" : ""}>
                       {proofQuantityLabel(selected)}
                       {hasProofQuantityMismatch(selected) ? ` · ${selected.locations.length} assigned` : ""}
@@ -2026,7 +2381,6 @@ export default function ProofApprovalPage() {
 						  <div className="proof-ins-titleWrap">
 							<div className="proof-ins-lineKicker">
                   {getProofLineLabel(selected)}
-                  {getProofIdLabel(selected) ? <span>{getProofIdLabel(selected)}</span> : null}
                 </div>
 							<div className="proof-ins-title">
 							  {selected.mediaVariantLabel || `${selected.mediaName} · ${formatSize(selected.w, selected.h)}`}
@@ -2044,6 +2398,41 @@ export default function ProofApprovalPage() {
 							<span className={`chip tone-${s.tone} proof-ins-statusChip`}>
 							  {s.label}
 							</span>
+                <button
+                  className={`proof-infoButton ${technicalInfoOpen ? "is-active" : ""}`}
+                  type="button"
+                  aria-label="Show proof technical details"
+                  aria-expanded={technicalInfoOpen}
+                  onClick={() => setTechnicalInfoOpen((prev) => !prev)}
+                >
+                  <Info aria-hidden="true" size={15} />
+                </button>
+                {technicalInfoOpen ? (
+                  <div className="proof-techPopover" role="dialog" aria-label="Proof technical details">
+                    <div className="proof-techPopoverHead">
+                      <div>
+                        <div className="proof-techEyebrow">Technical Info</div>
+                        <div className="proof-techTitle">{getProofLineLabel(selected)}</div>
+                      </div>
+                      <button
+                        className="proof-techClose"
+                        type="button"
+                        aria-label="Close technical details"
+                        onClick={() => setTechnicalInfoOpen(false)}
+                      >
+                        <X aria-hidden="true" size={14} />
+                      </button>
+                    </div>
+                    <dl className="proof-techList">
+                      {getTechnicalInfoRows(selected).map((row) => (
+                        <div className="proof-techRow" key={row.label}>
+                          <dt>{row.label}</dt>
+                          <dd title={String(row.value)}>{row.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                ) : null}
 						  </div>
 						</div>
 				
@@ -2068,13 +2457,10 @@ export default function ProofApprovalPage() {
 
                 <div className="proof-ins-systemRow" aria-label="Lift line details">
                   <div className="proof-ins-systemMeta">
-                    <span><b>Lift line</b>{selected.liftOrderLineId || "—"}</span>
-                    <span><b>Proof ID</b>{selected.liftProofingId || "—"}</span>
                     <span className={hasProofQuantityMismatch(selected) ? "is-warning" : ""}>
                       <b>Qty</b>{proofQuantity(selected) ?? "—"}
                       {hasProofQuantityMismatch(selected) ? ` · ${selected.locations.length} assigned` : ""}
                     </span>
-                    <span><b>Unit</b>{selected.unitNumber || "—"}</span>
                   </div>
                 </div>
 				
@@ -2286,8 +2672,18 @@ export default function ProofApprovalPage() {
                 ) : null}
               </div>
             </>
+          ) : (
+            <div className="proof-emptyCanvas" role="status">
+              <div className="proof-emptyCanvasMark" aria-hidden="true" />
+              <div className="proof-emptyCanvasKicker">Proof Review</div>
+              <div className="proof-emptyCanvasTitle">No proof line selected.</div>
+              <div className="proof-emptyCanvasBody">
+                Proof artwork, file history, feedback, and approval actions will appear here once a proof line is available.
+              </div>
+            </div>
           )}
         </Panel>
+      </div>
       </div>
       {feedbackDrawerOpen && selected ? (() => {
         const currentVersion = getCurrentProofVersion(selected);
@@ -2340,7 +2736,9 @@ export default function ProofApprovalPage() {
                         const proofUrl = currentVersion?.proofFullUrl || currentVersion?.proofThumbUrl;
                         if (!proofUrl) return;
                         setFeedbackLightbox({
-                          src: currentVersion?.proofThumbUrl || proofUrl,
+                          src: proofUrl,
+                          fallbackSrc: currentVersion?.proofThumbUrl || undefined,
+                          openUrl: proofUrl,
                           title: currentVersion?.proofFilename || getProofFileName(selected),
                           subtitle: `Proof ID ${selected.liftProofingId || "—"}`,
                         });
@@ -2540,9 +2938,10 @@ export default function ProofApprovalPage() {
       <Lightbox
         isOpen={Boolean(feedbackLightbox)}
         src={feedbackLightbox?.src || ""}
+        fallbackSrc={feedbackLightbox?.fallbackSrc}
         title={feedbackLightbox?.title}
         subtitle={feedbackLightbox?.subtitle}
-        openInNewTabUrl={feedbackLightbox?.src}
+        openInNewTabUrl={feedbackLightbox?.openUrl || feedbackLightbox?.src}
         onClose={() => setFeedbackLightbox(null)}
       />
       {revisionJobs.length > 0 ? (

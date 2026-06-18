@@ -1,5 +1,5 @@
 // src/components/projects/InventoryScopeModal.tsx
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import Portal from "../common/Portal";
 import type { InventoryItem, MapLayer, MediaVariant } from "../../logic/mockAssignment";
 import { mediaLabelFromKey, mockMediaVariants } from "../../logic/mockAssignment";
@@ -21,6 +21,14 @@ type Props = {
 
   // Future hook: show inactive items (Intersection preference)
   showInactiveItems?: boolean;
+  title?: string;
+  subtitle?: string;
+  inventoryLabel?: string;
+  confirmLabel?: string;
+  savingLabel?: string;
+  headerAddon?: ReactNode;
+  canConfirm?: boolean;
+  validationMessage?: string;
 };
 
 export default function InventoryScopeModal({
@@ -33,6 +41,14 @@ export default function InventoryScopeModal({
   initialIncludedIds,
   onConfirm,
   showInactiveItems = false,
+  title = "Included Inventory",
+  subtitle,
+  inventoryLabel = "Inventory",
+  confirmLabel = "Confirm Scope",
+  savingLabel = "Saving Scope...",
+  headerAddon,
+  canConfirm = true,
+  validationMessage,
 }: Props) {
   const [activeMapId, setActiveMapId] = useState(maps[0]?.id ?? "");
   const [q, setQ] = useState("");
@@ -47,6 +63,7 @@ export default function InventoryScopeModal({
   const {
     viewportRef: mapViewportRef,
     imageRef: mapImgRef,
+    mapFrameStyle,
     zoom,
     pan,
     mapLoading,
@@ -181,20 +198,21 @@ export default function InventoryScopeModal({
           {/* Header */}
           <div className="scope-head">
             <div className="scope-head-left">
-              <div className="scope-title">Included Inventory</div>
-              <div className="scope-sub">{projectTitle} · {venueName}</div>
+              <div className="scope-title">{title}</div>
+              <div className="scope-sub">{subtitle || `${projectTitle} · ${venueName}`}</div>
             </div>
             <div className="scope-head-right">
               <button className="btn btn-ghost btn-soft" type="button" onClick={onClose}>✕</button>
             </div>
           </div>
+          {headerAddon ? <div className="scope-addon">{headerAddon}</div> : null}
 
           {/* Body: 3-rail */}
           <div className="scope-body">
             {/* Left rail */}
             <div className="scope-left">
               <div className="scope-left-top">
-                <div className="scope-left-title">Inventory</div>
+                <div className="scope-left-title">{inventoryLabel}</div>
 
                 <div className="scope-fieldRow">
                   <div className="scope-search">
@@ -282,7 +300,7 @@ export default function InventoryScopeModal({
               >
                 <div
                   className="map-transform"
-                  style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+                  style={{ ...mapFrameStyle, transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
                 >
                   {activeMap?.imageUrl ? (
                     <img
@@ -390,9 +408,10 @@ export default function InventoryScopeModal({
 
           {/* Footer */}
           <div className="scope-foot">
+            {validationMessage ? <div className="scope-footNote">{validationMessage}</div> : null}
             <button className="btn btn-ghost btn-soft" type="button" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary btn-wide" type="button" onClick={() => void handleConfirm()} disabled={isSaving}>
-              {isSaving ? "Saving Scope…" : "Confirm Scope"}
+            <button className="btn btn-primary btn-wide" type="button" onClick={() => void handleConfirm()} disabled={isSaving || !canConfirm}>
+              {isSaving ? savingLabel : confirmLabel}
             </button>
           </div>
         </div>

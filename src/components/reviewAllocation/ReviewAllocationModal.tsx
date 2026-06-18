@@ -98,6 +98,41 @@ export default function ReviewAllocationModal({
     if (isDemo && isOpen) demoStore.actions.hydrateDemo();
   }, [isDemo, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+
+    const scrollY = window.scrollY;
+    const shouldFixBody =
+      window.matchMedia?.("(pointer: coarse)").matches ||
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const prevOverflow = document.body.style.overflow;
+    const prevPosition = document.body.style.position;
+    const prevTop = document.body.style.top;
+    const prevWidth = document.body.style.width;
+
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    if (shouldFixBody) {
+      document.body.style.position = "fixed";
+      document.body.style.top = `-${scrollY}px`;
+      document.body.style.width = "100%";
+    }
+
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      document.body.style.position = prevPosition;
+      document.body.style.top = prevTop;
+      document.body.style.width = prevWidth;
+      if (shouldFixBody) window.scrollTo(0, scrollY);
+    };
+  }, [isOpen, onClose]);
+
   // UI state
   const [tab, setTab] = useState<"details" | "inventory" | "summary" | "submit">("details");
   const [termsChecked, setTermsChecked] = useState(false);
@@ -133,6 +168,7 @@ export default function ReviewAllocationModal({
 
   const [lb, setLb] = useState<{
     src: string;
+    fallbackSrc?: string;
     title?: string;
     subtitle?: string;
     openUrl?: string;
@@ -502,8 +538,8 @@ export default function ReviewAllocationModal({
 
   return (
     <Portal>
-      <div className="review-backdrop" onMouseDown={onClose}>
-        <div className="review-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div className="review-backdrop" onClick={onClose}>
+        <div className="review-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
           <div className="review-head">
             <div className="review-head-left">
               <div className="review-titleRow">
@@ -587,7 +623,7 @@ export default function ReviewAllocationModal({
                 creativeById={creativeById}
                 proofsForProject={isDemo ? (demoProofLines as any[]) : []}
                 onPreviewProof={({ previewSrc, openUrl, title, subtitle, assetType }) => {
-                  setLb({ src: previewSrc, title, subtitle, openUrl, assetType });
+                  setLb({ src: openUrl || previewSrc, fallbackSrc: previewSrc, title, subtitle, openUrl, assetType });
                 }}
               />
             )}
@@ -599,7 +635,7 @@ export default function ReviewAllocationModal({
                 mapOptions={mapFilterOptions}
                 variantOptions={variantFilterOptions}
                 onPreview={({ previewSrc, openUrl, filename, fileMeta, assetType }) => {
-                  setLb({ src: previewSrc, title: filename, subtitle: fileMeta, openUrl, assetType });
+                  setLb({ src: openUrl || previewSrc, fallbackSrc: previewSrc, title: filename, subtitle: fileMeta, openUrl, assetType });
                 }}
               />
             )}
@@ -697,6 +733,7 @@ export default function ReviewAllocationModal({
           <Lightbox
             isOpen={!!lb}
             src={lb?.src || ""}
+            fallbackSrc={lb?.fallbackSrc}
             title={lb?.title}
             subtitle={lb?.subtitle}
             openInNewTabUrl={lb?.openUrl}

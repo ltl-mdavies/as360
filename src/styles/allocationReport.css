@@ -19,8 +19,8 @@
 
 .alloc-title{
   font-size: 18px;
-  font-weight: 850;
-  letter-spacing: -.02em;
+  font-weight: 760;
+  letter-spacing: 0;
 }
 
 .alloc-sub{
@@ -131,7 +131,7 @@
 
 .alloc-statValue{
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 760;
   color: #111827;
 }
 

@@ -28,7 +28,7 @@ export function buildMockThumbUrl(seed: string, w = 160, h = 120) {
 
 export function buildDocumentThumbUrl(args?: { label?: string; accent?: string }) {
   const label = (args?.label || "PDF").slice(0, 8);
-  const accent = args?.accent || "#2563eb";
+  const accent = args?.accent || "#3F6ED8";
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="320" height="240" viewBox="0 0 320 240" fill="none">
       <rect width="320" height="240" rx="28" fill="#f8fafc"/>

@@ -47,7 +47,7 @@ export function buildAllocationOverrideDomain(response: ApiAllocationOverrideRes
     filename: row.asset.filename,
     fileMeta: `${row.productLabel}${row.dimensionsLabel ? ` · ${row.dimensionsLabel}` : ""}`,
     mediaVariantKey: row.mediaVariantKey,
-    color: "#2563eb",
+    color: "#3F6ED8",
     thumbUrl: row.asset.thumbUrl || row.asset.fullUrl || "",
     fullUrl: row.asset.fullUrl || row.asset.thumbUrl || "",
     createdAt: row.createdAt,

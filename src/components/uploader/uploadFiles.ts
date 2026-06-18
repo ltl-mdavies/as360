@@ -154,7 +154,7 @@ export async function addUploadedArtworkToProject(args: {
           ? URL.createObjectURL(file)
           : buildDocumentThumbUrl({
               label: isPdf ? "PDF" : "FILE",
-              accent: variant?.color || "#2563eb",
+              accent: variant?.color || "#3F6ED8",
             });
 
       args.setLegacyCreatives?.((prev) => [
@@ -298,7 +298,7 @@ export async function addUploadedArtworkToProject(args: {
       mediaVariantKey: args.variantKey,
       color: variant?.color || "rgba(148,163,184,.9)",
       thumbUrl: objectUrl || buildMockThumbUrl(id, 240, 180),
-      fullUrl: objectUrl || (isPdf ? buildDocumentThumbUrl({ label: "PDF", accent: variant?.color || "#2563eb" }) : buildMockFullPreviewUrl(id, fileMeta, 1800)),
+      fullUrl: objectUrl || (isPdf ? buildDocumentThumbUrl({ label: "PDF", accent: variant?.color || "#3F6ED8" }) : buildMockFullPreviewUrl(id, fileMeta, 1800)),
       uploadState: "ready" as const,
       isOptimistic: false,
     };

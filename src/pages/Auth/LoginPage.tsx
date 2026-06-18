@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { Lock, Mail } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import adspaceLogo from "../../assets/adspace_logo_v1.svg";
+import adspaceLogoDark from "../../assets/adspace_logo_v1_dark.svg";
 import { useAuth } from "../../auth/AuthProvider";
 
 export default function LoginPage() {
@@ -53,59 +55,67 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <img className="auth-logo" src={adspaceLogo} alt="Adspace360" />
+        <div className="auth-logoStack" role="img" aria-label="Adspace">
+          <img className="auth-logo auth-logo-light" src={adspaceLogo} alt="" aria-hidden="true" />
+          <img className="auth-logo auth-logo-dark" src={adspaceLogoDark} alt="" aria-hidden="true" />
+        </div>
         <div className="auth-copy">
-          <div className="auth-eyebrow">Secure Access</div>
-          <h1 className="auth-title">Sign in to Adspace360</h1>
-          <p className="auth-subtitle">
-            Use your internal or customer-admin credentials to access the workspace. Shared project links still work for
-            external collaborators.
-          </p>
+          <h1 className="auth-title">Welcome to Adspace</h1>
+          <p className="auth-subtitle">Sign in to enter your workspace.</p>
         </div>
 
         <form className="auth-form" onSubmit={handleSubmit}>
           <label className="auth-field">
             <span className="auth-label">Email</span>
-            <input
-              className="auth-input"
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@adspace360.com"
-              disabled={isSubmitting || Boolean(challenge)}
-              required
-            />
+            <span className="auth-inputShell">
+              <Mail className="auth-inputIcon" aria-hidden="true" strokeWidth={2.2} />
+              <input
+                className="auth-input"
+                type="email"
+                autoComplete="username"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@adspace360.com"
+                disabled={isSubmitting || Boolean(challenge)}
+                required
+              />
+            </span>
           </label>
 
           {!challenge ? (
             <label className="auth-field">
               <span className="auth-label">Password</span>
-              <input
-                className="auth-input"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Enter your password"
-                disabled={isSubmitting}
-                required
-              />
+              <span className="auth-inputShell">
+                <Lock className="auth-inputIcon" aria-hidden="true" strokeWidth={2.2} />
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Enter your password"
+                  disabled={isSubmitting}
+                  required
+                />
+              </span>
             </label>
           ) : (
             <label className="auth-field">
               <span className="auth-label">Set a new password</span>
-              <input
-                className="auth-input"
-                type="password"
-                autoComplete="new-password"
-                value={newPassword}
-                onChange={(event) => setNewPassword(event.target.value)}
-                placeholder="Create a permanent password"
-                disabled={isSubmitting}
-                minLength={8}
-                required
-              />
+              <span className="auth-inputShell">
+                <Lock className="auth-inputIcon" aria-hidden="true" strokeWidth={2.2} />
+                <input
+                  className="auth-input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  placeholder="Create a permanent password"
+                  disabled={isSubmitting}
+                  minLength={8}
+                  required
+                />
+              </span>
             </label>
           )}
 

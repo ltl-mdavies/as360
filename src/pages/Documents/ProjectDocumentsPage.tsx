@@ -596,6 +596,11 @@ export default function ProjectDocumentsPage() {
       <Lightbox
         isOpen={Boolean(lightboxDoc)}
         src={
+          lightboxDoc?.fullUrl ||
+          lightboxDoc?.thumbUrl ||
+          (lightboxDoc ? buildDocumentThumbUrl({ label: lightboxDoc.contentType === "application/pdf" ? "PDF" : "FILE" }) : "")
+        }
+        fallbackSrc={
           lightboxDoc?.thumbUrl ||
           (lightboxDoc ? buildDocumentThumbUrl({ label: lightboxDoc.contentType === "application/pdf" ? "PDF" : "FILE" }) : "")
         }

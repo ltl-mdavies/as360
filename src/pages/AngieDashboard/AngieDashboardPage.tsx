@@ -1,6 +1,7 @@
 // src/pages/AngieDashboard/AngieDashboardPage.tsx
 
 import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Search, SlidersHorizontal, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import AppShell from "../../app/AppShell";
@@ -15,6 +16,7 @@ import {
   getProductionLabel,
   getTransitChip,
 } from "../../logic/renderingRules";
+import type { Tone } from "../../logic/renderingRules";
 import { buildAngieProjectTableColumns } from "../../logic/tableColumnDefs";
 
 import CreateProjectModal, {
@@ -33,6 +35,13 @@ type ActiveFilterChip = {
   id: string;
   label: string;
   onClear: () => void;
+};
+
+type PortfolioSummaryItem = {
+  label: string;
+  value: number;
+  tone: "warning" | "info" | "danger" | "success";
+  filter: Exclude<StatusFilter, "all">;
 };
 
 type ApiCustomer = {
@@ -279,6 +288,7 @@ export default function AngieDashboardPage() {
   const [venue, setVenue] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [projectModeFilter, setProjectModeFilter] = useState<ProjectModeFilter>("all");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [isCreateOpen, setCreateOpen] = useState(false);
   const [customers, setCustomers] = useState<ApiCustomer[]>([]);
   const [markets, setMarkets] = useState<ApiMarket[]>([]);
@@ -430,7 +440,7 @@ export default function AngieDashboardPage() {
       { label: "Awaiting Proof", value: awaitingProofs, tone: "info", filter: "awaiting_proof" },
       { label: "Transit Blocked", value: transitBlocked, tone: "danger", filter: "transit_blocked" },
       { label: "Ready / Released", value: readyToRelease, tone: "success", filter: "ready" },
-    ] as const;
+    ] satisfies PortfolioSummaryItem[];
   }, [allRows]);
 
   const activeFilterChips = useMemo<ActiveFilterChip[]>(() => {
@@ -525,27 +535,38 @@ export default function AngieDashboardPage() {
           </div>
         </div>
 
-        <div className="hero-summary">
-          {portfolioSummary.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              className={`hero-summaryCard hero-summaryCard-${item.tone} ${
-                statusFilter === item.filter ? "is-active" : ""
-              }`}
-              onClick={() => {
-                setTab("all");
-                setStatusFilter(statusFilter === item.filter ? "all" : item.filter);
-              }}
-            >
-              <div className="hero-summaryLabel">
-                <span className="hero-summaryDot" />
-                {item.label}
-              </div>
-              <div className="hero-summaryValue">{item.value}</div>
-            </button>
-          ))}
-        </div>
+        {showMobileDashboardCards ? (
+          <DashboardMobileSummary
+            items={portfolioSummary}
+            activeFilter={statusFilter}
+            onToggle={(filter) => {
+              setTab("all");
+              setStatusFilter(statusFilter === filter ? "all" : filter);
+            }}
+          />
+        ) : (
+          <div className="hero-summary">
+            {portfolioSummary.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                className={`hero-summaryCard hero-summaryCard-${item.tone} ${
+                  statusFilter === item.filter ? "is-active" : ""
+                }`}
+                onClick={() => {
+                  setTab("all");
+                  setStatusFilter(statusFilter === item.filter ? "all" : item.filter);
+                }}
+              >
+                <div className="hero-summaryLabel">
+                  <span className="hero-summaryDot" />
+                  {item.label}
+                </div>
+                <div className="hero-summaryValue">{item.value}</div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       
 		<CreateProjectModal
@@ -565,144 +586,170 @@ export default function AngieDashboardPage() {
           </div>
         ) : null}
 
-        <div className="dashboard-command">
-          <div className="dashboard-commandTop">
-            <div className="tabbar">
-              <button
-                className={`tab ${tab === "all" ? "tab-active" : ""}`}
-                onClick={() => setTab("all")}
-              >
-                All ({tabCounts.all})
-              </button>
-              <button
-                className={`tab ${tab === "needs_attention" ? "tab-active" : ""}`}
-                onClick={() => setTab("needs_attention")}
-              >
-                Needs Attention ({tabCounts.needs_attention})
-              </button>
-              <button
-                className={`tab ${tab === "active" ? "tab-active" : ""}`}
-                onClick={() => setTab("active")}
-              >
-                Active ({tabCounts.active})
-              </button>
-              <button
-                className={`tab ${tab === "ready" ? "tab-active" : ""}`}
-                onClick={() => setTab("ready")}
-              >
-                Ready ({tabCounts.ready})
-              </button>
-            </div>
-
-            {hasSandboxProjects ? (
-              <div className="tabbar tabbar-compact">
-            <button
-              className={`tab ${projectModeFilter === "all" ? "tab-active" : ""}`}
-              onClick={() => setProjectModeFilter("all")}
-            >
-              All Modes
-            </button>
-            <button
-              className={`tab ${projectModeFilter === "live" ? "tab-active" : ""}`}
-              onClick={() => setProjectModeFilter("live")}
-            >
-              Live
-            </button>
-            <button
-              className={`tab ${projectModeFilter === "internal_sandbox" ? "tab-active" : ""}`}
-              onClick={() => setProjectModeFilter("internal_sandbox")}
-            >
-              Sandbox
-            </button>
-              </div>
-            ) : null}
-
-            <button
-              className="iconbtn iconbtn-sm dashboard-refresh"
-              title="Clear filters"
-              onClick={clearAllFilters}
-            >
-              ↺
-            </button>
-          </div>
-
-        {/* Filter row */}
-          <div className="filters">
-          <div className="field field-search">
-            <span className="field-icon">⌕</span>
-            <input
-              className="field-input"
-              placeholder="Search all orders…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
-
-          <div className="field">
-            <span className="field-label">Venue</span>
-            <select
-              className="select"
-              value={venue}
-              onChange={(e) => setVenue(e.target.value)}
-            >
-              {venueOptions.map((v) => (
-                <option key={v} value={v}>
-                  {v === "all" ? "All" : v}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <span className="field-label">Focus</span>
-            <select
-              className="select"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            >
-              <option value="all">All</option>
-              <option value="needs_attention">Needs Attention</option>
-              <option value="awaiting_proof">Awaiting Proof</option>
-              <option value="ready">Ready / Released</option>
-              <option value="transit_blocked">Transit Blocked</option>
-            </select>
-          </div>
-          </div>
-        </div>
-
-        <div className="dashboard-subbar">
-          <div className="dashboard-subbarLeft">
-            <div className="dashboard-subbarText">
-              {activeFilterChips.length === 0
-                ? `Showing all ${allRows.length} projects`
-                : `Filtered view: ${filteredRows.length} project${filteredRows.length === 1 ? "" : "s"}`}
-            </div>
-
-            {activeFilterChips.length > 0 ? (
-              <div className="dashboard-filterChips" aria-label="Active dashboard filters">
-                {activeFilterChips.map((chip) => (
+        {showMobileDashboardCards ? (
+          <DashboardMobileCommandDock
+            isOpen={mobileFiltersOpen}
+            onToggleOpen={() => setMobileFiltersOpen((current) => !current)}
+            totalCount={allRows.length}
+            filteredCount={filteredRows.length}
+            activeFilterChips={activeFilterChips}
+            query={query}
+            onQueryChange={setQuery}
+            venue={venue}
+            venueOptions={venueOptions}
+            onVenueChange={setVenue}
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            tab={tab}
+            tabCounts={tabCounts}
+            onTabChange={setTab}
+            hasSandboxProjects={hasSandboxProjects}
+            projectModeFilter={projectModeFilter}
+            onProjectModeFilterChange={setProjectModeFilter}
+            onClearAll={clearAllFilters}
+          />
+        ) : (
+          <>
+            <div className="dashboard-command">
+              <div className="dashboard-commandTop">
+                <div className="tabbar">
                   <button
-                    key={chip.id}
-                    type="button"
-                    className="dashboard-filterChip"
-                    onClick={chip.onClear}
-                    title={`Remove ${chip.label}`}
+                    className={`tab ${tab === "all" ? "tab-active" : ""}`}
+                    onClick={() => setTab("all")}
                   >
-                    <span>{chip.label}</span>
-                    <span aria-hidden="true" className="dashboard-filterChipX">×</span>
+                    All ({tabCounts.all})
                   </button>
-                ))}
+                  <button
+                    className={`tab ${tab === "needs_attention" ? "tab-active" : ""}`}
+                    onClick={() => setTab("needs_attention")}
+                  >
+                    Needs Attention ({tabCounts.needs_attention})
+                  </button>
+                  <button
+                    className={`tab ${tab === "active" ? "tab-active" : ""}`}
+                    onClick={() => setTab("active")}
+                  >
+                    Active ({tabCounts.active})
+                  </button>
+                  <button
+                    className={`tab ${tab === "ready" ? "tab-active" : ""}`}
+                    onClick={() => setTab("ready")}
+                  >
+                    Ready ({tabCounts.ready})
+                  </button>
+                </div>
 
-                {activeFilterChips.length > 1 ? (
-                  <button type="button" className="dashboard-clearAll" onClick={clearAllFilters}>
-                    Clear all
-                  </button>
+                {hasSandboxProjects ? (
+                  <div className="tabbar tabbar-compact">
+                    <button
+                      className={`tab ${projectModeFilter === "all" ? "tab-active" : ""}`}
+                      onClick={() => setProjectModeFilter("all")}
+                    >
+                      All Modes
+                    </button>
+                    <button
+                      className={`tab ${projectModeFilter === "live" ? "tab-active" : ""}`}
+                      onClick={() => setProjectModeFilter("live")}
+                    >
+                      Live
+                    </button>
+                    <button
+                      className={`tab ${projectModeFilter === "internal_sandbox" ? "tab-active" : ""}`}
+                      onClick={() => setProjectModeFilter("internal_sandbox")}
+                    >
+                      Sandbox
+                    </button>
+                  </div>
+                ) : null}
+
+                <button
+                  className="iconbtn iconbtn-sm dashboard-refresh"
+                  title="Clear filters"
+                  onClick={clearAllFilters}
+                >
+                  ↺
+                </button>
+              </div>
+
+              {/* Filter row */}
+              <div className="filters">
+                <div className="field field-search">
+                  <span className="field-icon">⌕</span>
+                  <input
+                    className="field-input"
+                    placeholder="Search all orders…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+
+                <div className="field">
+                  <span className="field-label">Venue</span>
+                  <select
+                    className="select"
+                    value={venue}
+                    onChange={(e) => setVenue(e.target.value)}
+                  >
+                    {venueOptions.map((v) => (
+                      <option key={v} value={v}>
+                        {v === "all" ? "All" : v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <span className="field-label">Focus</span>
+                  <select
+                    className="select"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                  >
+                    <option value="all">All</option>
+                    <option value="needs_attention">Needs Attention</option>
+                    <option value="awaiting_proof">Awaiting Proof</option>
+                    <option value="ready">Ready / Released</option>
+                    <option value="transit_blocked">Transit Blocked</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="dashboard-subbar">
+              <div className="dashboard-subbarLeft">
+                <div className="dashboard-subbarText">
+                  {activeFilterChips.length === 0
+                    ? `Showing all ${allRows.length} projects`
+                    : `Filtered view: ${filteredRows.length} project${filteredRows.length === 1 ? "" : "s"}`}
+                </div>
+
+                {activeFilterChips.length > 0 ? (
+                  <div className="dashboard-filterChips" aria-label="Active dashboard filters">
+                    {activeFilterChips.map((chip) => (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        className="dashboard-filterChip"
+                        onClick={chip.onClear}
+                        title={`Remove ${chip.label}`}
+                      >
+                        <span>{chip.label}</span>
+                        <span aria-hidden="true" className="dashboard-filterChipX">×</span>
+                      </button>
+                    ))}
+
+                    {activeFilterChips.length > 1 ? (
+                      <button type="button" className="dashboard-clearAll" onClick={clearAllFilters}>
+                        Clear all
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
-            ) : null}
-          </div>
-          <div className="dashboard-subbarHint">Updated just now</div>
-        </div>
+              <div className="dashboard-subbarHint">Updated just now</div>
+            </div>
+          </>
+        )}
 
         {showMobileDashboardCards ? (
           <div className="dashboard-mobileList dashboard-mobileList-active" aria-label="Project cards">
@@ -743,24 +790,225 @@ export default function AngieDashboardPage() {
                 columns={columns}
                 rows={filteredRows}
                 getRowKey={(r) => r.projectId}
+                getRowClassName={(r) => `dashboard-rowAccent ${dashboardToneClass(getDashboardProjectTone(r))}`}
                 onRowClick={(r) => navigate(`/p/${r.projectId}?mode=customer`)}
               />
             )}
           </div>
         )}
 
-        <div className="table-footer">
-          {filteredRows.length === 0
-            ? `No orders match the current filters`
-            : `Showing ${filteredRows.length} of ${allRows.length} orders`}
-          <div className="pager">
-            <button className="pager-btn">‹</button>
-            <button className="pager-btn pager-active">1</button>
-            <button className="pager-btn">›</button>
+        {!showMobileDashboardCards ? (
+          <div className="table-footer">
+            {filteredRows.length === 0
+              ? `No orders match the current filters`
+              : `Showing ${filteredRows.length} of ${allRows.length} orders`}
+            <div className="pager">
+              <button className="pager-btn">‹</button>
+              <button className="pager-btn pager-active">1</button>
+              <button className="pager-btn">›</button>
+            </div>
           </div>
-        </div>
+        ) : null}
       </Panel>
     </AppShell>
+  );
+}
+
+type DashboardMobileSummaryProps = {
+  items: PortfolioSummaryItem[];
+  activeFilter: StatusFilter;
+  onToggle: (filter: PortfolioSummaryItem["filter"]) => void;
+};
+
+function DashboardMobileSummary({ items, activeFilter, onToggle }: DashboardMobileSummaryProps) {
+  return (
+    <div className="dashboard-mobileSummary" aria-label="Project status summary">
+      {items.map((item) => (
+        <button
+          key={item.label}
+          type="button"
+          className={`dashboard-mobileSummaryCard dashboard-mobileSummaryCard-${item.tone} ${
+            activeFilter === item.filter ? "is-active" : ""
+          }`}
+          onClick={() => onToggle(item.filter)}
+        >
+          <span className="dashboard-mobileSummaryLabel">{item.label}</span>
+          <strong>{item.value}</strong>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+type DashboardMobileCommandDockProps = {
+  isOpen: boolean;
+  onToggleOpen: () => void;
+  totalCount: number;
+  filteredCount: number;
+  activeFilterChips: ActiveFilterChip[];
+  query: string;
+  onQueryChange: (value: string) => void;
+  venue: string;
+  venueOptions: string[];
+  onVenueChange: (value: string) => void;
+  statusFilter: StatusFilter;
+  onStatusFilterChange: (value: StatusFilter) => void;
+  tab: TabKey;
+  tabCounts: Record<TabKey, number>;
+  onTabChange: (value: TabKey) => void;
+  hasSandboxProjects: boolean;
+  projectModeFilter: ProjectModeFilter;
+  onProjectModeFilterChange: (value: ProjectModeFilter) => void;
+  onClearAll: () => void;
+};
+
+function DashboardMobileCommandDock({
+  isOpen,
+  onToggleOpen,
+  totalCount,
+  filteredCount,
+  activeFilterChips,
+  query,
+  onQueryChange,
+  venue,
+  venueOptions,
+  onVenueChange,
+  statusFilter,
+  onStatusFilterChange,
+  tab,
+  tabCounts,
+  onTabChange,
+  hasSandboxProjects,
+  projectModeFilter,
+  onProjectModeFilterChange,
+  onClearAll,
+}: DashboardMobileCommandDockProps) {
+  const hasActiveFilters = activeFilterChips.length > 0;
+  const activeSummary = hasActiveFilters ? activeFilterChips[0]?.label.replace(/^(View|Mode|Venue|Focus|Search):\s*/, "") : "All";
+
+  function scrollToTop() {
+    if (typeof window === "undefined") return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  return (
+    <div className={`dashboard-mobileDock ${isOpen ? "is-open" : ""}`}>
+      <div className="dashboard-mobileDockBar">
+        <button
+          type="button"
+          className="dashboard-mobileDockSummary"
+          onClick={onToggleOpen}
+          aria-expanded={isOpen}
+        >
+          <strong>{filteredCount}</strong>
+          <span>shown</span>
+          <em>{activeSummary}</em>
+        </button>
+
+        <button type="button" className="dashboard-mobileDockIcon" onClick={onToggleOpen} aria-label="Search projects">
+          <Search size={19} strokeWidth={2.4} />
+        </button>
+        <button type="button" className="dashboard-mobileDockIcon" onClick={onToggleOpen} aria-label="Filter projects">
+          <SlidersHorizontal size={19} strokeWidth={2.4} />
+        </button>
+        {hasActiveFilters ? (
+          <button type="button" className="dashboard-mobileDockAction" onClick={onClearAll}>
+            <X size={15} strokeWidth={2.6} />
+            Clear
+          </button>
+        ) : (
+          <button type="button" className="dashboard-mobileDockAction" onClick={scrollToTop}>
+            Top
+          </button>
+        )}
+      </div>
+
+      {isOpen ? (
+        <div className="dashboard-mobileDockExpanded">
+          <div className="dashboard-mobileTabGrid" aria-label="Project views">
+            {(["all", "needs_attention", "active", "ready"] as TabKey[]).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`dashboard-mobileTab ${tab === item ? "is-active" : ""}`}
+                onClick={() => onTabChange(item)}
+              >
+                {tabLabel(item)} <span>{tabCounts[item]}</span>
+              </button>
+            ))}
+          </div>
+
+          {hasSandboxProjects ? (
+            <div className="dashboard-mobileModeTabs" aria-label="Project mode">
+              {(["all", "live", "internal_sandbox"] as ProjectModeFilter[]).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className={`dashboard-mobileModeTab ${projectModeFilter === item ? "is-active" : ""}`}
+                  onClick={() => onProjectModeFilterChange(item)}
+                >
+                  {modeFilterLabel(item)}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="dashboard-mobileFilterGrid">
+            <label className="dashboard-mobileSearch">
+              <Search size={16} strokeWidth={2.2} aria-hidden="true" />
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                placeholder="Search orders..."
+              />
+            </label>
+
+            <label className="dashboard-mobileSelect">
+              <span>Venue</span>
+              <select value={venue} onChange={(event) => onVenueChange(event.target.value)}>
+                {venueOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {item === "all" ? "All venues" : item}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="dashboard-mobileSelect">
+              <span>Focus</span>
+              <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as StatusFilter)}>
+                <option value="all">All focus areas</option>
+                <option value="needs_attention">Needs Attention</option>
+                <option value="awaiting_proof">Awaiting Proof</option>
+                <option value="ready">Ready / Released</option>
+                <option value="transit_blocked">Transit Blocked</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="dashboard-mobileDockFooter">
+            <strong>{filteredCount}</strong> of {totalCount} shown
+            {activeFilterChips.length > 0 ? (
+              <div className="dashboard-filterChips" aria-label="Active dashboard filters">
+                {activeFilterChips.map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    className="dashboard-filterChip"
+                    onClick={chip.onClear}
+                    title={`Remove ${chip.label}`}
+                  >
+                    <span>{chip.label}</span>
+                    <span aria-hidden="true" className="dashboard-filterChipX">×</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -771,6 +1019,24 @@ type DashboardProjectCardProps = {
 
 function dashboardToneClass(tone?: string | null) {
   return `tone-${tone || "neutral"}`;
+}
+
+function getDashboardProjectTone(row: ProjectRollup): Tone {
+  if (row.transit.enabled && row.transit.status !== "approved" && row.transit.status !== "not_required") {
+    return row.transit.status === "rejected" || row.transit.status === "changes_requested" ? "danger" : "warning";
+  }
+
+  if (row.needsAttention) return "warning";
+
+  if (row.proofs.total > 0 && (row.proofs.pending > 0 || (row.proofs.waitingForProof || 0) > 0)) {
+    return "info";
+  }
+
+  if ((row.production.policy === "hold_for_release" && row.production.released) || row.production.ready) {
+    return "success";
+  }
+
+  return "neutral";
 }
 
 function getProjectActionPath(
@@ -811,75 +1077,95 @@ function DashboardProjectCard({ row, onNavigate }: DashboardProjectCardProps) {
   const hasPrimaryAction = primaryAction.kind !== "none";
   const primaryActionLabel = hasPrimaryAction ? primaryAction.label : "";
   const primaryPath = getProjectActionPath(row, primaryAction.kind);
+  const hubPath = `/p/${row.projectId}?mode=customer`;
+  const smartPath = hasPrimaryAction ? primaryPath : hubPath;
+  const statusItems = [
+    {
+      label: "Assignment",
+      value: assignment.label,
+      meta: assignment.sublabel || (row.assignment.complete ? "Complete" : "In progress"),
+      tone: assignment.tone,
+    },
+    {
+      label: "Proofs",
+      value: proofs.label,
+      meta: proofMeta || "No proof notes",
+      tone: proofs.tone,
+    },
+    {
+      label: "Transit",
+      value: transitValue,
+      meta: transitMeta,
+      tone: transit?.tone || "neutral",
+    },
+    {
+      label: hasPrimaryAction ? "Next" : "Production",
+      value: hasPrimaryAction ? primaryActionLabel : production.label,
+      meta: hasPrimaryAction ? "Recommended" : "Current state",
+      tone: hasPrimaryAction ? "primary" : production.tone,
+    },
+  ];
+  const venueLine = [row.marketName, row.endClientName].filter(Boolean).join(" · ");
+  const projectTone = getDashboardProjectTone(row);
 
   return (
-    <article className="dashboard-projectCard">
-      <div className="dashboard-projectCardTop">
-        <div className="dashboard-projectIdentity">
-          <button
-            type="button"
-            className="dashboard-projectTitleButton"
-            onClick={() => onNavigate(`/p/${row.projectId}?mode=customer`)}
-          >
-            {row.title}
-          </button>
-          <div className="dashboard-projectMeta">{projectMeta}</div>
-        </div>
-        <span className={`dashboard-projectPill ${dashboardToneClass(production.tone)}`}>
-          {production.label}
+    <article className={`dashboard-projectCard ${dashboardToneClass(projectTone)}`}>
+      <button type="button" className="dashboard-projectCardMain" onClick={() => onNavigate(smartPath)}>
+        <span className="dashboard-projectCardAccent" aria-hidden="true" />
+        <span className="dashboard-projectCardTop">
+          <span className="dashboard-projectIdentity">
+            <span className="dashboard-projectTitle">{row.title}</span>
+            <span className="dashboard-projectMeta">{projectMeta}</span>
+          </span>
+          <span className="dashboard-projectArrow" aria-hidden="true">
+            <ArrowRight size={19} strokeWidth={2.6} />
+          </span>
         </span>
-      </div>
 
-      <div className="dashboard-projectVenue">
-        <strong>{row.venueName}</strong>
-        <span>{venueMeta}</span>
-      </div>
+        <span className="dashboard-projectVenue">
+          <strong>{row.venueName}</strong>
+          <span>{venueLine || venueMeta || "Venue workspace"}</span>
+        </span>
 
-      <div className="dashboard-projectCardGrid">
-        <div>
-          <span>Client</span>
-          <strong>{row.endClientName || "—"}</strong>
-        </div>
-        <div>
-          <span>Dates</span>
-          <strong>Art Due {row.dates.artworkDue || "—"}</strong>
-          <em>Post {row.dates.postDate || "—"}</em>
-        </div>
-        <div className={`dashboard-projectCardKpi-${dashboardToneClass(assignment.tone)}`}>
-          <span>Assignment</span>
-          <strong>{assignment.label}</strong>
-          <em>{assignment.sublabel || "Complete"}</em>
-        </div>
-        <div className={`dashboard-projectCardKpi-${dashboardToneClass(proofs.tone)}`}>
-          <span>Proofs</span>
-          <strong>{proofs.label}</strong>
-          <em>{proofMeta || "—"}</em>
-        </div>
-        <div className={`dashboard-projectCardKpi-${dashboardToneClass(transit?.tone || "neutral")}`}>
-          <span>Transit</span>
-          <strong>{transitValue}</strong>
-          <em>{transitMeta}</em>
-        </div>
-      </div>
+        <span className="dashboard-projectDates">
+          <span><em>Art</em>{row.dates.artworkDue || "—"}</span>
+          <span><em>Post</em>{row.dates.postDate || "—"}</span>
+        </span>
 
-      <div className="dashboard-projectActions">
-        {hasPrimaryAction ? (
+        <span className="dashboard-projectStatusGrid">
+          {statusItems.map((item) => (
+            <span key={item.label} className={`dashboard-projectStatusItem ${dashboardToneClass(item.tone)}`}>
+              <span className="dashboard-projectStatusDot" aria-hidden="true" />
+              <span>
+                <em>{item.label}</em>
+                <strong>{item.value}</strong>
+                <small>{item.meta}</small>
+              </span>
+            </span>
+          ))}
+        </span>
+      </button>
+
+      {hasPrimaryAction && primaryPath !== hubPath ? (
+        <div className="dashboard-projectActions">
+          <span className={`dashboard-projectPill ${dashboardToneClass(production.tone)}`}>
+            {production.label}
+          </span>
           <button
             type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => onNavigate(primaryPath)}
+            className="dashboard-projectHubLink"
+            onClick={() => onNavigate(hubPath)}
           >
-            {primaryActionLabel}
+            Open Hub
           </button>
-        ) : null}
-        <button
-          type="button"
-          className={`btn ${hasPrimaryAction ? "btn-ghost" : "btn-primary"} btn-sm`}
-          onClick={() => onNavigate(`/p/${row.projectId}?mode=customer`)}
-        >
-          Open Hub
-        </button>
-      </div>
+        </div>
+      ) : (
+        <div className="dashboard-projectActions">
+          <span className={`dashboard-projectPill ${dashboardToneClass(production.tone)}`}>
+            {production.label}
+          </span>
+        </div>
+      )}
     </article>
   );
 }
