@@ -42,7 +42,7 @@ type ActiveFilterChip = {
 type PortfolioSummaryItem = {
   label: string;
   value: number;
-  tone: "warning" | "info" | "danger" | "success";
+  tone: "warning" | "info" | "danger" | "success" | "complete";
   filter: Exclude<StatusFilter, "all">;
 };
 
@@ -459,7 +459,7 @@ export default function AngieDashboardPage() {
       { label: "Awaiting Proof", value: awaitingProofs, tone: "info", filter: "awaiting_proof" },
       { label: "Transit Blocked", value: transitBlocked, tone: "danger", filter: "transit_blocked" },
       { label: "Ready / Released", value: readyToRelease, tone: "success", filter: "ready" },
-      { label: "Complete", value: complete, tone: "success", filter: "complete" },
+      { label: "Complete", value: complete, tone: "complete", filter: "complete" },
     ] satisfies PortfolioSummaryItem[];
   }, [allRows]);
 

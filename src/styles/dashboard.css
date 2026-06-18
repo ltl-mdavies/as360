@@ -60,8 +60,8 @@
 
 .hero-summary{
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .hero-summaryCard{
@@ -70,7 +70,7 @@
   width: 100%;
   text-align: left;
   min-height: 104px;
-  padding: 18px 20px 18px;
+  padding: 18px 18px 18px;
   border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--stroke2) 82%, white);
   background:
@@ -544,10 +544,12 @@ html[data-theme="dark"] .pager-btn{
 .hero-summaryCard-info::before{ background: rgba(63,110,216,.7); }
 .hero-summaryCard-danger::before{ background: rgba(220,38,38,.65); }
 .hero-summaryCard-success::before{ background: rgba(22,163,74,.7); }
+.hero-summaryCard-complete::before{ background: rgba(99,102,241,.72); }
 .hero-summaryCard-warning .hero-summaryDot{ background: rgba(217,119,6,.78); }
 .hero-summaryCard-info .hero-summaryDot{ background: rgba(63,110,216,.78); }
 .hero-summaryCard-danger .hero-summaryDot{ background: rgba(220,38,38,.72); }
 .hero-summaryCard-success .hero-summaryDot{ background: rgba(22,163,74,.76); }
+.hero-summaryCard-complete .hero-summaryDot{ background: rgba(99,102,241,.82); }
 
 .dashboard-tableWrap{
   border: 0 !important;
@@ -1562,6 +1564,7 @@ html[data-theme="dark"] .scope-sumRow{
 .dashboard-mobileSummaryCard-info::before{ background:var(--primary); }
 .dashboard-mobileSummaryCard-danger::before{ background:#ef4444; }
 .dashboard-mobileSummaryCard-success::before{ background:var(--brand-green); }
+.dashboard-mobileSummaryCard-complete::before{ background:#6366f1; }
 
 .dashboard-mobileDock{
   display:none;
