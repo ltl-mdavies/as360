@@ -71,6 +71,16 @@ type VendorProofStage =
   | "client_approved"
   | "production_ready";
 
+type LineBucket =
+  | "all"
+  | "needs_proof"
+  | "client_review"
+  | "revision_requested"
+  | "approved_ready"
+  | "in_production"
+  | "shipped_complete"
+  | "blocked";
+
 function formatDate(value?: string | null, includeTime = false) {
   if (!value) return "—";
   const date = new Date(value);
@@ -110,6 +120,28 @@ const proofStageLabels: Record<VendorProofStage, string> = {
   production_ready: "Production Ready",
 };
 
+const lineBucketLabels: Record<LineBucket, string> = {
+  all: "All",
+  needs_proof: "Needs Proof",
+  client_review: "Client Review",
+  revision_requested: "Revision",
+  approved_ready: "Approved / Ready",
+  in_production: "In Production",
+  shipped_complete: "Shipped / Complete",
+  blocked: "Blocked",
+};
+
+const lineBuckets: LineBucket[] = [
+  "all",
+  "needs_proof",
+  "client_review",
+  "revision_requested",
+  "approved_ready",
+  "in_production",
+  "shipped_complete",
+  "blocked",
+];
+
 function proofStage(line: ApiVendorOrderLine): VendorProofStage {
   if (
     line.workflow.stage === "production_ready" ||
@@ -123,6 +155,21 @@ function proofStage(line: ApiVendorOrderLine): VendorProofStage {
   if (line.proof?.fullUrl || line.proof?.thumbUrl || line.proof?.liftProofStatus || line.proof?.status === "pending") return "client_review";
   if (line.creative?.fullUrl || line.creative?.thumbUrl) return "needs_proof";
   return "artwork_pending";
+}
+
+function lineMatchesBucket(line: ApiVendorOrderLine, bucket: LineBucket) {
+  if (bucket === "all") return true;
+  const stage = proofStage(line);
+  if (bucket === "needs_proof") return stage === "needs_proof" || stage === "artwork_pending";
+  if (bucket === "client_review") return stage === "vendor_submitted" || stage === "client_review";
+  if (bucket === "revision_requested") return stage === "revision_requested";
+  if (bucket === "approved_ready") return stage === "client_approved" || stage === "production_ready" || line.workflow.stage === "production_ready";
+  if (bucket === "in_production") return line.workflow.stage === "in_production" || line.productionStatus === "in_production";
+  if (bucket === "shipped_complete") {
+    return line.workflow.stage === "shipped" || line.workflow.stage === "complete" || line.productionStatus === "shipped" || line.productionStatus === "complete";
+  }
+  if (bucket === "blocked") return line.workflow.stage === "blocked" || line.productionStatus === "blocked";
+  return true;
 }
 
 function proofStageClass(stage: VendorProofStage) {
@@ -283,6 +330,7 @@ export default function VendorOrderPage() {
   const [selectedLineIds, setSelectedLineIds] = useState<string[]>([]);
   const [lineSearch, setLineSearch] = useState("");
   const [productFilter, setProductFilter] = useState("all");
+  const [lineBucket, setLineBucket] = useState<LineBucket>("all");
   const [savingLineId, setSavingLineId] = useState<string | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [savingBulk, setSavingBulk] = useState(false);
@@ -311,6 +359,7 @@ export default function VendorOrderPage() {
         setSelectedLineIds([]);
         setLineSearch("");
         setProductFilter("all");
+        setLineBucket("all");
       } catch (loadError) {
         if (!cancelled) {
           console.error("Failed to load vendor order", loadError);
@@ -335,7 +384,7 @@ export default function VendorOrderPage() {
     const names = new Set((order?.lines || []).map((line) => line.productLabel).filter(Boolean));
     return Array.from(names).sort((a, b) => a.localeCompare(b));
   }, [order]);
-  const visibleLines = useMemo(() => {
+  const searchProductFilteredLines = useMemo(() => {
     const query = lineSearch.trim().toLowerCase();
     return (order?.lines || []).filter((line) => {
       const productMatches = productFilter === "all" || line.productLabel === productFilter;
@@ -355,6 +404,15 @@ export default function VendorOrderPage() {
       return haystack.includes(query);
     });
   }, [lineSearch, order, productFilter]);
+  const lineBucketCounts = useMemo(() => {
+    return Object.fromEntries(
+      lineBuckets.map((bucket) => [bucket, searchProductFilteredLines.filter((line) => lineMatchesBucket(line, bucket)).length])
+    ) as Record<LineBucket, number>;
+  }, [searchProductFilteredLines]);
+  const visibleLines = useMemo(
+    () => searchProductFilteredLines.filter((line) => lineMatchesBucket(line, lineBucket)),
+    [lineBucket, searchProductFilteredLines]
+  );
   const productionEditableLineIds = useMemo(
     () => new Set((order?.lines || []).filter((line) => line.workflow.canUpdateProduction).map((line) => line.id)),
     [order]
@@ -801,12 +859,21 @@ export default function VendorOrderPage() {
                     type="search"
                     value={lineSearch}
                     placeholder="Search lines, artwork, locations..."
-                    onChange={(event) => setLineSearch(event.target.value)}
+                    onChange={(event) => {
+                      setLineSearch(event.target.value);
+                      setSelectedLineIds([]);
+                    }}
                   />
                 </label>
                 <label className="vendor-lines-filter">
                   <span>Product</span>
-                  <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
+                  <select
+                    value={productFilter}
+                    onChange={(event) => {
+                      setProductFilter(event.target.value);
+                      setSelectedLineIds([]);
+                    }}
+                  >
                     <option value="all">All Products</option>
                     {productOptions.map((product) => (
                       <option key={product} value={product}>{product}</option>
@@ -819,6 +886,22 @@ export default function VendorOrderPage() {
                     <span>Select visible production-ready lines</span>
                   </label>
                 ) : null}
+              </div>
+              <div className="vendor-line-buckets" aria-label="Line status buckets">
+                {lineBuckets.map((bucket) => (
+                  <button
+                    key={bucket}
+                    className={`vendor-line-bucket${lineBucket === bucket ? " is-active" : ""}`}
+                    type="button"
+                    onClick={() => {
+                      setLineBucket(bucket);
+                      setSelectedLineIds([]);
+                    }}
+                  >
+                    <span>{lineBucketLabels[bucket]}</span>
+                    <strong>{lineBucketCounts[bucket]}</strong>
+                  </button>
+                ))}
               </div>
 
               {bulkDraft && productionEditableLineIds.size ? (
