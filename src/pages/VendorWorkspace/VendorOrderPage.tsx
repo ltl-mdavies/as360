@@ -648,54 +648,49 @@ export default function VendorOrderPage() {
               </div>
             </Panel>
 
-            <div className="vendor-order-side">
-              <Panel title="Current State" subtitle={proofActionTotal ? `${proofActionTotal} proof action ${proofActionTotal === 1 ? "item" : "items"}` : "No proof blockers"} className="vendor-panel">
-                <div className="vendor-health">
-                  <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
-                  <div>
-                    <strong>{routeLabel(order)}</strong>
-                    <p>
-                      {isPrimaryPrintOrder(order)
-                        ? order.integrationHealth.liftSync?.label || "No Lift sync state available yet."
-                        : "This vendor route is managed in Adspace and is not connected to Lift order/proof sync."}
-                    </p>
-                    <small>
-                      {isPrimaryPrintOrder(order)
-                        ? "Healing and resubmission actions are managed by Adspace operators."
-                        : "Use AS360 order, PO, and contract references for this vendor work."}
-                    </small>
-                  </div>
+            <Panel title="Current State" subtitle={proofActionTotal ? `${proofActionTotal} proof action ${proofActionTotal === 1 ? "item" : "items"}` : "No proof blockers"} className="vendor-panel">
+              <div className="vendor-health">
+                <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
+                <div>
+                  <strong>{routeLabel(order)}</strong>
+                  <p>
+                    {isPrimaryPrintOrder(order)
+                      ? order.integrationHealth.liftSync?.label || "No Lift sync state available yet."
+                      : "This vendor route is managed in Adspace and is not connected to Lift order/proof sync."}
+                  </p>
+                  <small>
+                    {isPrimaryPrintOrder(order)
+                      ? "Healing and resubmission actions are managed by Adspace operators."
+                      : "Use AS360 order, PO, and contract references for this vendor work."}
+                  </small>
                 </div>
-                <div className="vendor-proof-summary" aria-label="Proofing status">
-                  {proofSummaryItems.map((item) => (
-                    <span key={item.label} className={item.value ? "" : "is-empty"}>
-                      <small>{item.label}</small>
-                      <strong>{item.value}</strong>
-                    </span>
-                  ))}
+              </div>
+              <div className="vendor-proof-summary" aria-label="Proofing status">
+                {proofSummaryItems.map((item) => (
+                  <span key={item.label} className={item.value ? "" : "is-empty"}>
+                    <small>{item.label}</small>
+                    <strong>{item.value}</strong>
+                  </span>
+                ))}
+              </div>
+              <div className="vendor-state-package">
+                <PackageCheck size={18} aria-hidden="true" />
+                <div>
+                  <strong>{latestPackage ? latestPackage.filename : "Package not generated"}</strong>
+                  <p>
+                    {latestPackage
+                      ? `${formatDate(latestPackage.createdAt, true)} · ${formatBytes(latestPackage.sizeBytes)}`
+                      : "Scoped artwork ZIP and manifests."}
+                  </p>
                 </div>
-              </Panel>
-
-              <Panel title="Order Package" className="vendor-panel">
-                <div className="vendor-package">
-                  <PackageCheck size={22} aria-hidden="true" />
-                  <div>
-                    <strong>{latestPackage ? latestPackage.filename : "Vendor package not generated yet"}</strong>
-                    <p>
-                      {latestPackage
-                        ? `Generated ${formatDate(latestPackage.createdAt, true)} · ${formatBytes(latestPackage.sizeBytes)} · ${latestPackage.uploadedByName}`
-                        : "Scoped ZIP with assigned artwork and manifests."}
-                    </p>
-                  </div>
-                  {latestPackage ? (
-                    <button className="btn btn-ghost btn-soft" type="button" onClick={() => triggerBrowserDownload(latestPackage.fullUrl, latestPackage.filename)}>
-                      <Download size={16} aria-hidden="true" />
-                      Download
-                    </button>
-                  ) : null}
-                </div>
-              </Panel>
-            </div>
+                {latestPackage ? (
+                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => triggerBrowserDownload(latestPackage.fullUrl, latestPackage.filename)}>
+                    <Download size={16} aria-hidden="true" />
+                    Download
+                  </button>
+                ) : null}
+              </div>
+            </Panel>
           </div>
 
           {orderDraft && order.summary.workflow.canUpdateProduction ? (
@@ -760,7 +755,7 @@ export default function VendorOrderPage() {
             </Panel>
           ) : null}
 
-          {bulkDraft && productionEditableLineIds.size ? (
+          {bulkDraft && productionEditableLineIds.size && selectedLineCount ? (
             <Panel title="Selected Line Bulk Update" subtitle={`${selectedLineCount} ${selectedLineCount === 1 ? "line" : "lines"} selected.`} className="vendor-panel">
               <div className="vendor-bulk-toolbar">
                 <label className="vendor-select-all">
@@ -773,8 +768,7 @@ export default function VendorOrderPage() {
                   </button>
                 ) : null}
               </div>
-              {selectedLineCount ? (
-                <div className="vendor-bulk-update">
+              <div className="vendor-bulk-update">
                   <label className="vendor-bulk-field">
                     <span>
                       <input
@@ -878,14 +872,21 @@ export default function VendorOrderPage() {
                       {savingBulk ? "Applying..." : `Apply to ${selectedLineCount || 0} Selected`}
                     </button>
                   </div>
-                </div>
-              ) : (
-                <div className="vendor-bulk-empty">Select production-ready lines below to update only those items.</div>
-              )}
+              </div>
             </Panel>
           ) : null}
 
-          <Panel title="Assigned Lines" subtitle="Only lines assigned to your vendor account are visible here." className="vendor-panel">
+          <Panel
+            title="Assigned Lines"
+            subtitle="Only lines assigned to your vendor account are visible here."
+            className="vendor-panel"
+            right={productionEditableLineIds.size ? (
+              <label className="vendor-select-all">
+                <input type="checkbox" checked={allLinesSelected} onChange={toggleAllLines} />
+                <span>Select all production-ready lines</span>
+              </label>
+            ) : null}
+          >
             <div className="vendor-lines">
               {order.lines.map((line) => {
                 const draft = drafts[line.id] || lineDraft(line);

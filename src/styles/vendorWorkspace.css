@@ -266,15 +266,6 @@
   align-items: start;
 }
 
-.vendor-order-side {
-  display: grid;
-  gap: 12px;
-}
-
-.vendor-panel-job .panel-body {
-  min-height: 256px;
-}
-
 .vendor-job-brief {
   display: grid;
   gap: 18px;
@@ -372,6 +363,31 @@
 .vendor-proof-summary strong {
   color: var(--vendor-ink);
   font-size: 1rem;
+}
+
+.vendor-state-package {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vendor-border);
+  color: var(--vendor-muted);
+}
+
+.vendor-state-package > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.vendor-state-package strong {
+  display: block;
+  color: var(--vendor-ink);
+  font-size: 0.88rem;
+}
+
+.vendor-state-package p {
+  margin: 2px 0 0;
 }
 
 .vendor-line-card {
@@ -585,16 +601,6 @@
   align-items: end;
 }
 
-.vendor-bulk-empty {
-  padding: 10px 12px;
-  border: 1px dashed var(--vendor-border);
-  border-radius: 8px;
-  background: var(--vendor-soft);
-  color: var(--vendor-muted);
-  font-size: 0.86rem;
-  font-weight: 700;
-}
-
 .vendor-order-update label,
 .vendor-bulk-field,
 .vendor-line-form label {
@@ -720,10 +726,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .vendor-panel-job .panel-body {
-    min-height: 0;
-  }
-
   .vendor-kpis-workflow {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -754,7 +756,6 @@
   .vendor-detail-grid,
   .vendor-line-meta,
   .vendor-proof-summary,
-  .vendor-order-side,
   .vendor-proof-workflow,
   .vendor-order-update,
   .vendor-bulk-update,
