@@ -10,6 +10,11 @@ export type ProofLineMock = {
   liftProofingId?: number | null;
   liftProofStatus?: string | null;
   clientCreativeId?: string;
+  productionRoute?: "primary_print_vendor" | "external_vendor";
+  vendorAccountId?: string | null;
+  vendorName?: string | null;
+  routeLabel?: string | null;
+  integrationMode?: "lift" | "adspace";
 
   mediaVariantLabel?: string;
   mediaName: string;

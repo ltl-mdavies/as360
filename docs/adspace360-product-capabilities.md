@@ -338,6 +338,7 @@ Capabilities:
 - scoped vendor order detail
 - assigned-line artwork visibility
 - route-aware references for LTL/Lift versus external Adspace-managed vendors
+- persisted proof-line route metadata for Lift-backed versus Adspace-managed production paths
 - vendor proof upload for client/admin approval
 - vendor package download with assigned artwork and scoped manifests
 - selected-line bulk production/shipping updates

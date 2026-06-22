@@ -386,6 +386,11 @@ function toLiveProofLine(line: any): ProofLineMock {
     liftProofingId: line.liftProofingId ?? null,
     liftProofStatus: line.liftProofStatus ?? null,
     clientCreativeId: line.clientCreativeId,
+    productionRoute: line.productionRoute,
+    vendorAccountId: line.vendorAccountId ?? null,
+    vendorName: line.vendorName ?? null,
+    routeLabel: line.routeLabel ?? null,
+    integrationMode: line.integrationMode,
     mediaVariantLabel: line.mediaVariantLabel,
     mediaName: line.mediaName,
     w: line.w,
@@ -890,6 +895,7 @@ export default function ProofApprovalPage() {
 
     return [
       { label: "Adspace Proof Line", value: getProofLineLabel(line) },
+      { label: "Production Route", value: line.routeLabel || (line.integrationMode === "adspace" ? "Adspace-managed vendor" : "Lift-backed primary print") },
       ...(line.liftOrderLineId ? [{ label: "Lift Line ID", value: line.liftOrderLineId }] : []),
       ...(line.liftProofingId ? [{ label: "Proof ID", value: line.liftProofingId }] : []),
       { label: "Client Upload Filename", value: line.clientFileName || "Unavailable" },

@@ -644,6 +644,16 @@ type ShareParticipantItem = {
 
 type ProofLineStatus = "waiting" | "pending" | "approved";
 type TransitApprovalStatus = "not_started" | "pending" | "approved" | "rejected";
+type ProofProductionRoute = "primary_print_vendor" | "external_vendor";
+type ProofIntegrationMode = "lift" | "adspace";
+
+type ProofLineRouteMetadata = {
+  productionRoute: ProofProductionRoute;
+  vendorAccountId: string;
+  vendorName: string;
+  routeLabel: string;
+  integrationMode: ProofIntegrationMode;
+};
 
 type ProjectProofLineItem = {
   entityType: "ProjectProofLine";
@@ -656,6 +666,11 @@ type ProjectProofLineItem = {
   liftProofingId?: number | null;
   mediaVariantKey: string;
   mediaVariantLabel?: string;
+  productionRoute?: ProofProductionRoute;
+  vendorAccountId?: string | null;
+  vendorName?: string | null;
+  routeLabel?: string | null;
+  integrationMode?: ProofIntegrationMode;
   unitNumber?: string | null;
   quantity?: number | null;
   locations: string[];
@@ -2898,6 +2913,7 @@ type LiftCreateOrderProduct = {
 type LiftCreateOrderProductInternal = LiftCreateOrderProduct & {
   mediaVariantKey: string;
   clientCreativeId: string;
+  route: ProofLineRouteMetadata;
 };
 
 type LiftCreateOrderPayload = {
@@ -2922,24 +2938,30 @@ async function buildLiftCreateOrderPayload(args: {
   const { project, customer, scopedInventory, creatives, assignments, note, actorName } = args;
   const errors: string[] = [];
   const warnings: string[] = [];
-
-  if (!customer.liftCustomerId?.trim()) {
-    errors.push(`Customer ${customer.name} is missing a Lift customer ID in Internal Admin setup.`);
-  }
+  const [variants, customerVendors, settings] = await Promise.all([
+    listVariantsForVenue(project.venueId),
+    listCustomerVendors(project.customerId).catch(() => [] as CustomerVendorItem[]),
+    findAppSettings(),
+  ]);
+  const hydratedSettings = hydrateAppSettings(settings, actorName);
+  const primaryVendorName = hydratedSettings.integrations.primaryPrintVendor.vendorName || "Primary Print Vendor";
+  const variantsByKey = new Map(variants.map((variant) => [variant.mediaVariantKey, variant] as const));
+  const customerVendorsById = new Map(customerVendors.map((vendor) => [vendor.id, vendor] as const));
 
   const creativesById = new Map(creatives.map((creative) => [creative.id, creative]));
   const inventoryByRecordId = new Map(scopedInventory.map((item) => [item.id, item]));
   const grouped = new Map<string, {
     creative: ProjectCreativeAssetItem;
-    unitNumber: string;
+    unitNumber: string | null;
     mediaVariantKey: string;
     mediaVariantLabel: string;
+    route: ProofLineRouteMetadata;
     trimHeight: number | null;
     trimWidth: number | null;
     safeHeight: number | null;
     safeWidth: number | null;
     locations: string[];
-    artFileUrl: string;
+    artFileUrl: string | null;
   }>();
 
   for (const assignment of assignments) {
@@ -2951,8 +2973,15 @@ async function buildLiftCreateOrderPayload(args: {
       errors.push(`Assigned creative ${assignment.creativeId} could not be found for inventory ${inventory.inventoryId}.`);
       continue;
     }
+    const variant = variantsByKey.get(inventory.mediaVariantKey);
+    const route = resolveProofLineRouteMetadata({
+      variant,
+      customerId: project.customerId,
+      customerVendorsById,
+      primaryVendorName,
+    });
     const unitNumber = String(inventory.unitNumber || "").trim();
-    if (!unitNumber) {
+    if (route.integrationMode === "lift" && !unitNumber) {
       errors.push(`Inventory ${inventory.inventoryId} is missing a Lift product SKU / unit number.`);
       continue;
     }
@@ -2960,21 +2989,25 @@ async function buildLiftCreateOrderPayload(args: {
     const trimWidth = inventory.trimWidth ?? null;
     const safeHeight = inventory.safeHeight ?? null;
     const safeWidth = inventory.safeWidth ?? null;
-    if ([trimHeight, trimWidth, safeHeight, safeWidth].some((value) => value == null)) {
+    if (route.integrationMode === "lift" && [trimHeight, trimWidth, safeHeight, safeWidth].some((value) => value == null)) {
       errors.push(`Inventory ${inventory.inventoryId} is missing trim or safe dimensions required for Lift.`);
       continue;
     }
 
-    const artFileUrl = await signLiftOutboundAssetUrl(creative.bucketName || PROJECT_ASSETS_BUCKET_NAME, creative.objectKey);
-    const groupKey = `${creative.id}||${unitNumber}||${inventory.mediaVariantKey}`;
+    const artFileUrl =
+      route.integrationMode === "lift"
+        ? await signLiftOutboundAssetUrl(creative.bucketName || PROJECT_ASSETS_BUCKET_NAME, creative.objectKey)
+        : null;
+    const groupKey = `${route.vendorAccountId}||${creative.id}||${unitNumber || "adspace"}||${inventory.mediaVariantKey}`;
     const existing = grouped.get(groupKey);
     const mediaVariantLabel = formatVariantLabel(inventory.mediaVariantKey);
     if (!existing) {
       grouped.set(groupKey, {
         creative,
-        unitNumber,
+        unitNumber: unitNumber || null,
         mediaVariantKey: inventory.mediaVariantKey,
         mediaVariantLabel,
+        route,
         trimHeight,
         trimWidth,
         safeHeight,
@@ -2986,10 +3019,13 @@ async function buildLiftCreateOrderPayload(args: {
     }
 
     if (
-      existing.trimHeight !== trimHeight ||
-      existing.trimWidth !== trimWidth ||
-      existing.safeHeight !== safeHeight ||
-      existing.safeWidth !== safeWidth
+      route.integrationMode === "lift" &&
+      (
+        existing.trimHeight !== trimHeight ||
+        existing.trimWidth !== trimWidth ||
+        existing.safeHeight !== safeHeight ||
+        existing.safeWidth !== safeWidth
+      )
     ) {
       errors.push(
         `Grouped Lift line mismatch for ${creative.filename} / ${unitNumber}: trim or safe dimensions differ across assigned locations.`
@@ -2999,26 +3035,43 @@ async function buildLiftCreateOrderPayload(args: {
     existing.locations.push(inventory.inventoryId);
   }
 
+  const sortedGroups = Array.from(grouped.values()).sort((a, b) => {
+    const byVariant = a.mediaVariantLabel.localeCompare(b.mediaVariantLabel, undefined, { sensitivity: "base" });
+    if (byVariant !== 0) return byVariant;
+    const byFilename = a.creative.filename.localeCompare(b.creative.filename, undefined, { sensitivity: "base" });
+    if (byFilename !== 0) return byFilename;
+    return String(a.unitNumber || "").localeCompare(String(b.unitNumber || ""), undefined, { sensitivity: "base" });
+  });
+  const liftGroups = sortedGroups.filter((group) => group.route.integrationMode === "lift");
+  const adspaceManagedGroups = sortedGroups.filter((group) => group.route.integrationMode === "adspace");
+  if (liftGroups.length && !customer.liftCustomerId?.trim()) {
+    errors.push(`Customer ${customer.name} is missing a Lift customer ID in Internal Admin setup.`);
+  }
+  if (adspaceManagedGroups.length) {
+    warnings.push(`${adspaceManagedGroups.length} Adspace-managed vendor line(s) will be tracked outside Lift.`);
+  }
+
   const adspaceOrderNumber = getProjectAdspaceOrderNumber(project);
   const extId = makeAdspaceExternalId(adspaceOrderNumber);
   const poNumber = normalizeLiftPoNumber(project.poNumber, adspaceOrderNumber);
-  const product_data: LiftCreateOrderProductInternal[] = Array.from(grouped.values())
+  const product_data: LiftCreateOrderProductInternal[] = liftGroups
     .map((group) => {
       group.locations.sort((a, b) => a.localeCompare(b));
       return {
-        productSku: group.unitNumber,
+        productSku: group.unitNumber || "",
         productCategory: "Art" as const,
         productQty: group.locations.length,
         file_name: sanitizeLiftFilename(group.creative.filename),
-        art_file: group.artFileUrl,
-        trim_height: String(group.trimHeight),
-        trim_width: String(group.trimWidth),
-        safe_height: String(group.safeHeight),
-        safe_width: String(group.safeWidth),
+        art_file: group.artFileUrl || "",
+        trim_height: String(group.trimHeight ?? ""),
+        trim_width: String(group.trimWidth ?? ""),
+        safe_height: String(group.safeHeight ?? ""),
+        safe_width: String(group.safeWidth ?? ""),
         mediaVariantLabel: group.mediaVariantLabel,
         assigned_Locations: group.locations.join(", "),
         mediaVariantKey: group.mediaVariantKey,
         clientCreativeId: group.creative.id,
+        route: group.route,
       };
     })
     .sort((a, b) => {
@@ -3036,21 +3089,40 @@ async function buildLiftCreateOrderPayload(args: {
     customer_id: customer.liftCustomerId || "",
     order_title: project.title,
     order_note: note || undefined,
-    product_data: product_data.map(({ mediaVariantKey: _mvk, clientCreativeId: _creativeId, ...line }) => line),
+    product_data: product_data.map((line) => ({
+      productSku: line.productSku,
+      productCategory: line.productCategory,
+      productQty: line.productQty,
+      file_name: line.file_name,
+      art_file: line.art_file,
+      trim_height: line.trim_height,
+      trim_width: line.trim_width,
+      safe_height: line.safe_height,
+      safe_width: line.safe_width,
+      assigned_Locations: line.assigned_Locations,
+      mediaVariantLabel: line.mediaVariantLabel,
+    })),
   };
 
-  const baselineProofs: ProjectProofLineItem[] = product_data.map((line, index) => ({
+  const baselineGroups = [...liftGroups, ...adspaceManagedGroups];
+  baselineGroups.forEach((group) => group.locations.sort((a, b) => a.localeCompare(b)));
+  const baselineProofs: ProjectProofLineItem[] = baselineGroups.map((group, index) => ({
     entityType: "ProjectProofLine",
     id: makeId("proof"),
     projectId: project.id,
     lineNumber: index + 1,
-    mediaVariantKey: line.mediaVariantKey,
-    mediaVariantLabel: line.mediaVariantLabel,
-    unitNumber: line.productSku,
-    quantity: line.productQty,
-    locations: line.assigned_Locations.split(",").map((value) => value.trim()).filter(Boolean),
-    clientCreativeId: line.clientCreativeId,
-    clientFileName: line.file_name,
+    mediaVariantKey: group.mediaVariantKey,
+    mediaVariantLabel: group.mediaVariantLabel,
+    productionRoute: group.route.productionRoute,
+    vendorAccountId: group.route.vendorAccountId,
+    vendorName: group.route.vendorName,
+    routeLabel: group.route.routeLabel,
+    integrationMode: group.route.integrationMode,
+    unitNumber: group.unitNumber,
+    quantity: group.locations.length,
+    locations: group.locations,
+    clientCreativeId: group.creative.id,
+    clientFileName: sanitizeLiftFilename(group.creative.filename),
     liftOrderLineId: null,
     liftProofingId: null,
     liftProofThumbUrl: null,
@@ -3695,7 +3767,9 @@ export function mergeProjectProofLinesFromLift(args: {
       if (nextProof.liftProofingId != null) existingByProofingId.set(nextProof.liftProofingId, nextProof);
     }
   }
-  const obsoleteProofs = args.existingProofs.filter((proof) => !activeProofIds.has(proof.id));
+  const obsoleteProofs = args.existingProofs.filter(
+    (proof) => !activeProofIds.has(proof.id) && proof.integrationMode !== "adspace" && proof.productionRoute !== "external_vendor"
+  );
   preserveObsoleteProofVersions(nextById, changedProofs, obsoleteProofs, syncedAt);
   for (const proof of obsoleteProofs) {
     nextById.delete(proof.id);
@@ -4017,6 +4091,11 @@ function buildLiftProofLineShell(args: {
     liftProofingId: optionalNumber(proofRecord?.ATTACHMENT_ID) ?? args.existing?.liftProofingId ?? null,
     mediaVariantKey,
     mediaVariantLabel: formatVariantLabel(mediaVariantKey),
+    productionRoute: args.existing?.productionRoute || "primary_print_vendor",
+    vendorAccountId: args.existing?.vendorAccountId || "vendor_primary_print",
+    vendorName: args.existing?.vendorName || null,
+    routeLabel: args.existing?.routeLabel || "Lift-backed primary print",
+    integrationMode: args.existing?.integrationMode || "lift",
     unitNumber,
     quantity,
     locations: args.existing?.locations || [],
@@ -6186,6 +6265,49 @@ async function getVendorAccountForVariant(
     if (customerVendor?.isActive) return ensureCustomerVendorAccount(customerVendor, actorName);
   }
   return primaryVendor;
+}
+
+function resolveProofLineRouteMetadata(args: {
+  variant?: MediaVariantItem;
+  customerId: string;
+  customerVendorsById: Map<string, CustomerVendorItem>;
+  primaryVendorName: string;
+}): ProofLineRouteMetadata {
+  if (args.variant?.productionRouting === "external" && args.variant.externalVendorId) {
+    const customerVendor = args.customerVendorsById.get(args.variant.externalVendorId);
+    if (customerVendor?.isActive) {
+      return {
+        productionRoute: "external_vendor",
+        vendorAccountId: customerVendor.vendorAccountId || vendorAccountIdForCustomerVendor(customerVendor.customerId, customerVendor.id),
+        vendorName: customerVendor.name,
+        routeLabel: "Adspace-managed vendor",
+        integrationMode: "adspace",
+      };
+    }
+  }
+
+  return {
+    productionRoute: "primary_print_vendor",
+    vendorAccountId: "vendor_primary_print",
+    vendorName: args.primaryVendorName || "Primary Print Vendor",
+    routeLabel: "Lift-backed primary print",
+    integrationMode: "lift",
+  };
+}
+
+function proofRouteFallback(
+  proof: ProjectProofLineItem,
+  variant?: MediaVariantItem,
+): Pick<ProofLineRouteMetadata, "productionRoute" | "routeLabel" | "integrationMode"> {
+  const productionRoute =
+    proof.productionRoute ||
+    (variant?.productionRouting === "external" ? "external_vendor" : "primary_print_vendor");
+  const integrationMode = proof.integrationMode || (productionRoute === "external_vendor" ? "adspace" : "lift");
+  const routeLabel =
+    proof.routeLabel ||
+    (integrationMode === "adspace" ? "Adspace-managed vendor" : "Lift-backed primary print");
+
+  return { productionRoute, routeLabel, integrationMode };
 }
 
 async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAccountIds?: Set<string>, actorName = "System") {
@@ -9531,6 +9653,7 @@ async function toProjectProofLineResponse(
 ) {
   const creative = creativesById?.get(proof.clientCreativeId) || await findProjectCreativeById(proof.projectId, proof.clientCreativeId);
   const variant = variants.find((item) => item.mediaVariantKey === proof.mediaVariantKey);
+  const route = proofRouteFallback(proof, variant);
   const [fallbackMediaName, fallbackW, fallbackH] = parseVariantKey(proof.mediaVariantKey);
   const mediaVariantLabel = variant?.label || proof.mediaVariantLabel || formatVariantLabel(proof.mediaVariantKey);
 
@@ -9555,6 +9678,11 @@ async function toProjectProofLineResponse(
     liftProofingId: proof.liftProofingId ?? null,
     mediaVariantKey: proof.mediaVariantKey,
     mediaVariantLabel,
+    productionRoute: route.productionRoute,
+    vendorAccountId: proof.vendorAccountId || null,
+    vendorName: proof.vendorName || null,
+    routeLabel: route.routeLabel,
+    integrationMode: route.integrationMode,
     mediaName: variant?.mediaType || variant?.label.split("·")[0]?.trim() || fallbackMediaName,
     w: fallbackW,
     h: fallbackH,

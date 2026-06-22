@@ -180,6 +180,11 @@ export type ApiProjectProofLineResponse = {
   liftProofingId?: number | null;
   mediaVariantKey: string;
   mediaVariantLabel?: string;
+  productionRoute?: "primary_print_vendor" | "external_vendor";
+  vendorAccountId?: string | null;
+  vendorName?: string | null;
+  routeLabel?: string | null;
+  integrationMode?: "lift" | "adspace";
   mediaName: string;
   w: number;
   h: number;

@@ -79,6 +79,14 @@ Shipping:
 
 Lift references are route-specific.
 
+Proof lines persist explicit route metadata:
+
+- `productionRoute`: `primary_print_vendor` or `external_vendor`.
+- `integrationMode`: `lift` or `adspace`.
+- `vendorAccountId`, `vendorName`, and `routeLabel` for production/internal organization.
+
+These fields are written when orders are submitted and preserved through Lift proof sync. Lift sync does not prune Adspace-managed external proof lines simply because Lift does not return them.
+
 Primary/LTL route:
 
 - Lift order number is relevant.
@@ -118,7 +126,6 @@ Package generation is locked until the order is submitted to print.
 
 ## Current Deferred Items
 
-- Persist explicit proof/production route on proof lines instead of deriving from Lift IDs or vendor order context.
 - Admin/internal grouping of proof lines by Lift-backed versus Adspace-managed vendor routes.
 - Installer vendor workspace and post-print handoff.
 - Vendor notification preferences and forwarding.

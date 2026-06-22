@@ -135,17 +135,19 @@ Vendor-specific watch items:
 - Confirm vendor proof upload can be tested with a real proof file later.
 - Confirm external vendor lines are not accidentally included in Lift order payloads.
 
-## Pending Deeper Slice
+## Completed Deeper Slice: Proof Production Route
 
-Persist explicit proof/production route on proof lines.
+Explicit proof/production route metadata is now persisted on proof lines.
 
-Goal:
+Implemented behavior:
 
-- A proof line should know whether it is Lift-backed or Adspace-managed.
-- Admin/internal views can group Lift-backed versus external vendor lines without inferring from missing Lift IDs.
-- End-client Proof Approval remains neutral and organized.
+- Proof lines know whether they are Lift-backed or Adspace-managed.
+- Primary/LTL proof lines continue to map to Lift payload line numbers.
+- External routed lines are kept as Adspace-managed proof lines and are not included in Lift `product_data`.
+- Lift proof sync preserves route metadata and does not prune Adspace-managed external proof lines.
+- End-client Proof Approval remains neutral and organized, with route shown only in technical details.
 
-Suggested fields:
+Persisted fields:
 
 - `productionRoute`: `primary_print_vendor | external_vendor`
 - `vendorAccountId`
@@ -153,21 +155,23 @@ Suggested fields:
 - `routeLabel`
 - `integrationMode`: `lift | adspace`
 
-Likely backend touch points:
+Touched backend areas:
 
 - `ProjectProofLineItem`
 - `buildLiftCreateOrderPayload`
 - proof-line seeding after submit
 - `toProjectProofLineResponse`
 - proof sync merge preservation
-- allocation override proof response hydration
 
-Likely frontend touch points:
+Touched frontend areas:
 
 - `ApiProjectProofLineResponse`
 - `ProofLineMock`
 - Proof Approval technical details
-- Admin/internal proof group display if added
+
+## Remaining Deeper Slice
+
+Admin/internal proof group display can now use persisted route fields instead of inferring from missing Lift IDs.
 
 ## Suggested Next Prompt
 
