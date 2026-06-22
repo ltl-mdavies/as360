@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, ExternalLink, MapPin, PackageCheck, Save, Upload } from "lucide-react";
+import { Download, ExternalLink, MapPin, PackageCheck, Save, Search, Upload } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "../../app/AppShell";
 import PageHeader from "../../components/common/PageHeader";
@@ -281,6 +281,8 @@ export default function VendorOrderPage() {
   const [orderDraft, setOrderDraft] = useState<LineDraft | null>(null);
   const [bulkDraft, setBulkDraft] = useState<BulkLineDraft | null>(null);
   const [selectedLineIds, setSelectedLineIds] = useState<string[]>([]);
+  const [lineSearch, setLineSearch] = useState("");
+  const [productFilter, setProductFilter] = useState("all");
   const [savingLineId, setSavingLineId] = useState<string | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const [savingBulk, setSavingBulk] = useState(false);
@@ -307,6 +309,8 @@ export default function VendorOrderPage() {
         setOrderDraft(defaultOrderDraft(response.order));
         setBulkDraft(defaultBulkDraft(response.order));
         setSelectedLineIds([]);
+        setLineSearch("");
+        setProductFilter("all");
       } catch (loadError) {
         if (!cancelled) {
           console.error("Failed to load vendor order", loadError);
@@ -327,13 +331,41 @@ export default function VendorOrderPage() {
     [order]
   );
   const packageActionLabel = latestPackage ? "Regenerate Package" : "Generate Package";
+  const productOptions = useMemo(() => {
+    const names = new Set((order?.lines || []).map((line) => line.productLabel).filter(Boolean));
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [order]);
+  const visibleLines = useMemo(() => {
+    const query = lineSearch.trim().toLowerCase();
+    return (order?.lines || []).filter((line) => {
+      const productMatches = productFilter === "all" || line.productLabel === productFilter;
+      if (!productMatches) return false;
+      if (!query) return true;
+      const haystack = [
+        line.productLabel,
+        line.creative?.filename,
+        line.lineNumber,
+        line.liftOrderLineId,
+        line.liftProofingId,
+        line.proofLineId,
+        proofStageLabels[proofStage(line)],
+        line.workflow.label,
+        line.inventory.map((item) => item.inventoryId).join(" "),
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [lineSearch, order, productFilter]);
   const productionEditableLineIds = useMemo(
     () => new Set((order?.lines || []).filter((line) => line.workflow.canUpdateProduction).map((line) => line.id)),
     [order]
   );
+  const visibleProductionEditableLineIds = useMemo(
+    () => new Set(visibleLines.filter((line) => line.workflow.canUpdateProduction).map((line) => line.id)),
+    [visibleLines]
+  );
   const selectedLineIdSet = useMemo(() => new Set(selectedLineIds), [selectedLineIds]);
   const selectedLineCount = selectedLineIds.length;
-  const allLinesSelected = Boolean(productionEditableLineIds.size) && Array.from(productionEditableLineIds).every((lineId) => selectedLineIdSet.has(lineId));
+  const allLinesSelected = Boolean(visibleProductionEditableLineIds.size) && Array.from(visibleProductionEditableLineIds).every((lineId) => selectedLineIdSet.has(lineId));
   const proofSummary = useMemo(() => {
     const stages = order?.lines.map(proofStage) || [];
     return {
@@ -393,8 +425,13 @@ export default function VendorOrderPage() {
   }
 
   function toggleAllLines() {
-    if (!order) return;
-    setSelectedLineIds(allLinesSelected ? [] : Array.from(productionEditableLineIds));
+    const visibleIds = Array.from(visibleProductionEditableLineIds);
+    if (!visibleIds.length) return;
+    setSelectedLineIds((current) => {
+      const visibleIdSet = new Set(visibleIds);
+      if (allLinesSelected) return current.filter((lineId) => !visibleIdSet.has(lineId));
+      return Array.from(new Set([...current, ...visibleIds]));
+    });
   }
 
   async function saveBulkUpdate() {
@@ -755,140 +792,162 @@ export default function VendorOrderPage() {
             </Panel>
           ) : null}
 
-          {bulkDraft && productionEditableLineIds.size && selectedLineCount ? (
-            <Panel title="Selected Line Bulk Update" subtitle={`${selectedLineCount} ${selectedLineCount === 1 ? "line" : "lines"} selected.`} className="vendor-panel">
-              <div className="vendor-bulk-toolbar">
-                <label className="vendor-select-all">
-                  <input type="checkbox" checked={allLinesSelected} onChange={toggleAllLines} />
-                  <span>Select all production-ready lines</span>
+          <Panel title="Assigned Lines" subtitle="Only lines assigned to your vendor account are visible here." className="vendor-panel">
+            <div className="vendor-lines-toolbar">
+              <div className="vendor-lines-filters">
+                <label className="vendor-lines-search">
+                  <Search size={16} aria-hidden="true" />
+                  <input
+                    type="search"
+                    value={lineSearch}
+                    placeholder="Search lines, artwork, locations..."
+                    onChange={(event) => setLineSearch(event.target.value)}
+                  />
                 </label>
-                {selectedLineCount ? (
-                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => setSelectedLineIds([])}>
-                    Clear Selection
-                  </button>
+                <label className="vendor-lines-filter">
+                  <span>Product</span>
+                  <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
+                    <option value="all">All Products</option>
+                    {productOptions.map((product) => (
+                      <option key={product} value={product}>{product}</option>
+                    ))}
+                  </select>
+                </label>
+                {productionEditableLineIds.size ? (
+                  <label className="vendor-select-all">
+                    <input type="checkbox" checked={allLinesSelected} onChange={toggleAllLines} disabled={!visibleProductionEditableLineIds.size} />
+                    <span>Select visible production-ready lines</span>
+                  </label>
                 ) : null}
               </div>
-              <div className="vendor-bulk-update">
-                  <label className="vendor-bulk-field">
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={bulkDraft.applyStatus}
-                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyStatus: event.target.checked } : current)}
-                      />
-                      Status
-                    </span>
-                    <select
-                      value={bulkDraft.productionStatus}
-                      disabled={!bulkDraft.applyStatus}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, productionStatus: event.target.value as ApiVendorProductionStatus } : current)}
-                    >
-                      <option value="not_started">Not Started</option>
-                      <option value="in_production">In Production</option>
-                      <option value="blocked">Blocked</option>
-                      <option value="shipped">Shipped</option>
-                      <option value="complete">Complete</option>
-                    </select>
-                  </label>
-                  <label className="vendor-bulk-field">
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={bulkDraft.applyVendorReference}
-                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyVendorReference: event.target.checked } : current)}
-                      />
-                      Vendor Ref / PO
-                    </span>
-                    <input
-                      value={bulkDraft.vendorReference}
-                      disabled={!bulkDraft.applyVendorReference}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, vendorReference: event.target.value, applyVendorReference: true } : current)}
-                    />
-                  </label>
-                  <label className="vendor-bulk-field">
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={bulkDraft.applyShippingCarrier}
-                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippingCarrier: event.target.checked } : current)}
-                      />
-                      Carrier
-                    </span>
-                    <input
-                      value={bulkDraft.shippingCarrier}
-                      disabled={!bulkDraft.applyShippingCarrier}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, shippingCarrier: event.target.value, applyShippingCarrier: true } : current)}
-                    />
-                  </label>
-                  <label className="vendor-bulk-field">
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={bulkDraft.applyTrackingNumber}
-                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyTrackingNumber: event.target.checked } : current)}
-                      />
-                      Tracking
-                    </span>
-                    <input
-                      value={bulkDraft.trackingNumber}
-                      disabled={!bulkDraft.applyTrackingNumber}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, trackingNumber: event.target.value, applyTrackingNumber: true } : current)}
-                    />
-                  </label>
-                  <label className="vendor-bulk-field">
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={bulkDraft.applyShippedAt}
-                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippedAt: event.target.checked } : current)}
-                      />
-                      Shipped At
-                    </span>
-                    <input
-                      type="datetime-local"
-                      value={datetimeInputValue(bulkDraft.shippedAt)}
-                      disabled={!bulkDraft.applyShippedAt}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, shippedAt: isoFromDatetimeInput(event.target.value), applyShippedAt: true } : current)}
-                    />
-                  </label>
-                  <label className="vendor-bulk-field vendor-bulk-note">
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={bulkDraft.applyNote}
-                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyNote: event.target.checked } : current)}
-                      />
-                      Internal Note
-                    </span>
-                    <textarea
-                      value={bulkDraft.note}
-                      disabled={!bulkDraft.applyNote}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, note: event.target.value, applyNote: true } : current)}
-                    />
-                  </label>
-                  <div className="vendor-bulk-actions">
-                    <button className="btn btn-primary" type="button" disabled={!bulkPatch || savingBulk} onClick={() => void saveBulkUpdate()}>
-                      <Save size={16} aria-hidden="true" />
-                      {savingBulk ? "Applying..." : `Apply to ${selectedLineCount || 0} Selected`}
-                    </button>
-                  </div>
-              </div>
-            </Panel>
-          ) : null}
 
-          <Panel
-            title="Assigned Lines"
-            subtitle="Only lines assigned to your vendor account are visible here."
-            className="vendor-panel"
-            right={productionEditableLineIds.size ? (
-              <label className="vendor-select-all">
-                <input type="checkbox" checked={allLinesSelected} onChange={toggleAllLines} />
-                <span>Select all production-ready lines</span>
-              </label>
-            ) : null}
-          >
+              {bulkDraft && productionEditableLineIds.size ? (
+                <div className="vendor-lines-bulk-tools">
+                  <div className="vendor-lines-selection">
+                    <strong>{selectedLineCount}</strong>
+                    <span>{selectedLineCount === 1 ? "line selected" : "lines selected"}</span>
+                    {selectedLineCount ? (
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => setSelectedLineIds([])}>
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="vendor-bulk-update">
+                    <label className="vendor-bulk-field">
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={bulkDraft.applyStatus}
+                          disabled={!selectedLineCount}
+                          onChange={(event) => setBulkDraft((current) => current ? { ...current, applyStatus: event.target.checked } : current)}
+                        />
+                        Status
+                      </span>
+                      <select
+                        value={bulkDraft.productionStatus}
+                        disabled={!selectedLineCount || !bulkDraft.applyStatus}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, productionStatus: event.target.value as ApiVendorProductionStatus } : current)}
+                      >
+                        <option value="not_started">Not Started</option>
+                        <option value="in_production">In Production</option>
+                        <option value="blocked">Blocked</option>
+                        <option value="shipped">Shipped</option>
+                        <option value="complete">Complete</option>
+                      </select>
+                    </label>
+                    <label className="vendor-bulk-field">
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={bulkDraft.applyVendorReference}
+                          disabled={!selectedLineCount}
+                          onChange={(event) => setBulkDraft((current) => current ? { ...current, applyVendorReference: event.target.checked } : current)}
+                        />
+                        Vendor Ref / PO
+                      </span>
+                      <input
+                        value={bulkDraft.vendorReference}
+                        disabled={!selectedLineCount || !bulkDraft.applyVendorReference}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, vendorReference: event.target.value, applyVendorReference: true } : current)}
+                      />
+                    </label>
+                    <label className="vendor-bulk-field">
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={bulkDraft.applyShippingCarrier}
+                          disabled={!selectedLineCount}
+                          onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippingCarrier: event.target.checked } : current)}
+                        />
+                        Carrier
+                      </span>
+                      <input
+                        value={bulkDraft.shippingCarrier}
+                        disabled={!selectedLineCount || !bulkDraft.applyShippingCarrier}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, shippingCarrier: event.target.value, applyShippingCarrier: true } : current)}
+                      />
+                    </label>
+                    <label className="vendor-bulk-field">
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={bulkDraft.applyTrackingNumber}
+                          disabled={!selectedLineCount}
+                          onChange={(event) => setBulkDraft((current) => current ? { ...current, applyTrackingNumber: event.target.checked } : current)}
+                        />
+                        Tracking
+                      </span>
+                      <input
+                        value={bulkDraft.trackingNumber}
+                        disabled={!selectedLineCount || !bulkDraft.applyTrackingNumber}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, trackingNumber: event.target.value, applyTrackingNumber: true } : current)}
+                      />
+                    </label>
+                    <label className="vendor-bulk-field">
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={bulkDraft.applyShippedAt}
+                          disabled={!selectedLineCount}
+                          onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippedAt: event.target.checked } : current)}
+                        />
+                        Shipped At
+                      </span>
+                      <input
+                        type="datetime-local"
+                        value={datetimeInputValue(bulkDraft.shippedAt)}
+                        disabled={!selectedLineCount || !bulkDraft.applyShippedAt}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, shippedAt: isoFromDatetimeInput(event.target.value), applyShippedAt: true } : current)}
+                      />
+                    </label>
+                    <label className="vendor-bulk-field vendor-bulk-note">
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={bulkDraft.applyNote}
+                          disabled={!selectedLineCount}
+                          onChange={(event) => setBulkDraft((current) => current ? { ...current, applyNote: event.target.checked } : current)}
+                        />
+                        Note
+                      </span>
+                      <input
+                        value={bulkDraft.note}
+                        disabled={!selectedLineCount || !bulkDraft.applyNote}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, note: event.target.value, applyNote: true } : current)}
+                      />
+                    </label>
+                    <div className="vendor-bulk-actions">
+                      <button className="btn btn-primary" type="button" disabled={!bulkPatch || savingBulk} onClick={() => void saveBulkUpdate()}>
+                        <Save size={16} aria-hidden="true" />
+                        {savingBulk ? "Applying..." : `Apply to ${selectedLineCount || 0}`}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <div className="vendor-lines">
-              {order.lines.map((line) => {
+              {visibleLines.map((line) => {
                 const draft = drafts[line.id] || lineDraft(line);
                 const changed = draftChanged(line, draft);
                 const selected = selectedLineIdSet.has(line.id);
@@ -1058,6 +1117,9 @@ export default function VendorOrderPage() {
                   </article>
                 );
               })}
+              {!visibleLines.length ? (
+                <div className="vendor-empty">No assigned lines match the current filters.</div>
+              ) : null}
             </div>
           </Panel>
 

@@ -73,6 +73,8 @@
 }
 
 .vendor-search input,
+.vendor-lines-search input,
+.vendor-lines-filter select,
 .vendor-filter select,
 .vendor-order-update input,
 .vendor-order-update select,
@@ -104,6 +106,76 @@
 .vendor-activity {
   display: grid;
   gap: 10px;
+}
+
+.vendor-lines-toolbar {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--vendor-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vendor-soft) 72%, transparent);
+}
+
+.vendor-lines-filters {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(180px, 260px) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.vendor-lines-search,
+.vendor-lines-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid var(--vendor-border);
+  border-radius: 8px;
+  background: var(--input-bg, #fff);
+  padding: 0 10px;
+}
+
+.vendor-lines-search svg {
+  color: var(--vendor-muted);
+  flex: 0 0 auto;
+}
+
+.vendor-lines-filter span {
+  color: var(--vendor-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.vendor-lines-bulk-tools {
+  display: grid;
+  grid-template-columns: minmax(104px, 132px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: end;
+}
+
+.vendor-lines-selection {
+  display: grid;
+  gap: 2px;
+  min-height: 38px;
+  align-content: center;
+  color: var(--vendor-muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.vendor-lines-selection strong {
+  color: var(--vendor-ink);
+  font-size: 1.18rem;
+  line-height: 1;
+}
+
+.vendor-lines-selection .btn {
+  justify-self: start;
+  margin-top: 4px;
 }
 
 .vendor-order-card {
@@ -601,6 +673,10 @@
   align-items: end;
 }
 
+.vendor-lines-bulk-tools .vendor-bulk-update {
+  grid-template-columns: minmax(120px, 0.85fr) repeat(5, minmax(116px, 1fr)) auto;
+}
+
 .vendor-order-update label,
 .vendor-bulk-field,
 .vendor-line-form label {
@@ -669,6 +745,20 @@
 
 .vendor-bulk-actions {
   grid-column: 1 / -1;
+}
+
+.vendor-lines-bulk-tools .vendor-bulk-note,
+.vendor-lines-bulk-tools .vendor-bulk-actions {
+  grid-column: auto;
+}
+
+.vendor-lines-bulk-tools .vendor-bulk-actions {
+  align-self: end;
+}
+
+.vendor-lines-bulk-tools .vendor-bulk-actions .btn {
+  min-height: 38px;
+  white-space: nowrap;
 }
 
 .vendor-empty,
@@ -759,11 +849,14 @@
   .vendor-proof-workflow,
   .vendor-order-update,
   .vendor-bulk-update,
+  .vendor-lines-filters,
+  .vendor-lines-bulk-tools,
   .vendor-line-form {
     grid-template-columns: 1fr;
   }
 
   .vendor-toolbar,
+  .vendor-lines-filters,
   .vendor-bulk-toolbar,
   .vendor-card-top,
   .vendor-line-head,
