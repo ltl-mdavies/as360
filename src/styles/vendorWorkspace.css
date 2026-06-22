@@ -351,6 +351,7 @@
 .vendor-workflow-incoming { color: #475569; background: rgba(100, 116, 139, 0.12); }
 .vendor-workflow-needs_proof { color: #0369a1; background: rgba(14, 165, 233, 0.12); }
 .vendor-workflow-client_review { color: #7c3aed; background: rgba(124, 58, 237, 0.12); }
+.vendor-workflow-client_approved { color: #0f766e; background: rgba(20, 184, 166, 0.12); }
 .vendor-workflow-production_ready { color: #047857; background: rgba(16, 185, 129, 0.12); }
 .vendor-workflow-in_production { color: #0369a1; background: rgba(14, 165, 233, 0.12); }
 .vendor-workflow-shipped { color: #7c3aed; background: rgba(124, 58, 237, 0.12); }

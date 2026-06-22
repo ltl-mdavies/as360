@@ -38,6 +38,7 @@ const workflowLabels: Record<ApiVendorWorkflowStage, string> = {
   incoming: "Incoming",
   needs_proof: "Needs Vendor Proof",
   client_review: "Client Review",
+  client_approved: "Client Approved",
   production_ready: "Ready for Production",
   in_production: "In Production",
   shipped: "Shipped",
@@ -76,7 +77,8 @@ type LineBucket =
   | "needs_proof"
   | "client_review"
   | "revision_requested"
-  | "approved_ready"
+  | "client_approved"
+  | "production_ready"
   | "in_production"
   | "shipped_complete"
   | "blocked";
@@ -125,7 +127,8 @@ const lineBucketLabels: Record<LineBucket, string> = {
   needs_proof: "Needs Proof",
   client_review: "Client Review",
   revision_requested: "Revision",
-  approved_ready: "Approved / Ready",
+  client_approved: "Client Approved",
+  production_ready: "Production Ready",
   in_production: "In Production",
   shipped_complete: "Shipped / Complete",
   blocked: "Blocked",
@@ -136,7 +139,8 @@ const lineBuckets: LineBucket[] = [
   "needs_proof",
   "client_review",
   "revision_requested",
-  "approved_ready",
+  "client_approved",
+  "production_ready",
   "in_production",
   "shipped_complete",
   "blocked",
@@ -163,7 +167,8 @@ function lineMatchesBucket(line: ApiVendorOrderLine, bucket: LineBucket) {
   if (bucket === "needs_proof") return stage === "needs_proof" || stage === "artwork_pending";
   if (bucket === "client_review") return stage === "vendor_submitted" || stage === "client_review";
   if (bucket === "revision_requested") return stage === "revision_requested";
-  if (bucket === "approved_ready") return stage === "client_approved" || stage === "production_ready" || line.workflow.stage === "production_ready";
+  if (bucket === "client_approved") return stage === "client_approved" || line.workflow.stage === "client_approved";
+  if (bucket === "production_ready") return stage === "production_ready" || line.workflow.stage === "production_ready";
   if (bucket === "in_production") return line.workflow.stage === "in_production" || line.productionStatus === "in_production";
   if (bucket === "shipped_complete") {
     return line.workflow.stage === "shipped" || line.workflow.stage === "complete" || line.productionStatus === "shipped" || line.productionStatus === "complete";

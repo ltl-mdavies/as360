@@ -72,7 +72,9 @@ Proofing:
 
 Production:
 
-- Unlocks after client/admin proof approval or a synced production-ready state.
+- Unlocks according to the configured production approval policy.
+- In `hold_for_release` mode, proof approval moves the vendor line to `Client Approved`, but production and shipping updates remain locked until Adspace/client admin releases production.
+- In `direct` mode, proof approval can immediately move the vendor line to `Ready for Production`.
 - Primary/LTL production status can be synced from Lift.
 - External vendors manually update production status, vendor reference/PO, carrier, tracking, shipped date, and internal notes.
 
@@ -143,12 +145,13 @@ Vendor dashboards are organized around vendor work queues:
 - Incoming
 - Needs Proof
 - Client Review
+- Client Approved
 - Ready for Production
 - In Production
 - Shipped / Complete
 - Blocked
 
-Vendor Order proof states distinguish artwork pending, needs proof, vendor proof submitted, client review, revision requested, client approved, and production ready. Vendor proof submission writes route-aware activity metadata for internal review and scoped vendor activity.
+Vendor Order proof states distinguish artwork pending, needs proof, vendor proof submitted, client review, revision requested, client approved, and production ready. `Client Approved` means the proof has been accepted but production may still be waiting for an explicit release. `Ready for Production` means the vendor is authorized to start production. Vendor proof submission writes route-aware activity metadata for internal review and scoped vendor activity.
 
 ## Current Deferred Items
 
@@ -164,6 +167,8 @@ Vendor Order proof states distinguish artwork pending, needs proof, vendor proof
 - Primary/LTL vendor sees primary-routed lines only.
 - External vendor sees only routed external lines.
 - Incoming order is visible but read-only.
+- In `hold_for_release` mode, proof-approved-but-not-released lines show `Client Approved` and keep production/shipping locked.
+- Released or direct-approved lines show `Ready for Production` and unlock production/shipping updates.
 - External vendor UI does not show irrelevant Lift order/line references.
 - Vendor package ZIP only includes assigned artwork and scoped manifest rows.
 - Vendor proof upload creates a pending proof visible to client/admin review without exposing vendor identity to end client.

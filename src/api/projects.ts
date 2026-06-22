@@ -487,7 +487,7 @@ export type ApiAdminSettings = {
     emailRecipients: string;
   };
   workflowPolicies: {
-    productionApprovalMode: "hold_for_release";
+    productionApprovalMode: "direct" | "hold_for_release";
     transitRunsInParallel: boolean;
     lockProofUndoAfterRelease: boolean;
   };
@@ -1731,6 +1731,7 @@ export type ApiVendorWorkflowStage =
   | "incoming"
   | "needs_proof"
   | "client_review"
+  | "client_approved"
   | "production_ready"
   | "in_production"
   | "shipped"

@@ -15,6 +15,7 @@ const workflowLabels: Record<ApiVendorWorkflowStage, string> = {
   incoming: "Incoming",
   needs_proof: "Needs Proof",
   client_review: "Client Review",
+  client_approved: "Client Approved",
   production_ready: "Ready",
   in_production: "In Production",
   shipped: "Shipped",
@@ -137,6 +138,7 @@ export default function VendorDashboardPage() {
       incoming: orders.filter((order) => order.summary.workflow.stage === "incoming").length,
       needsProof: orders.filter((order) => order.summary.workflow.stage === "needs_proof").length,
       clientReview: orders.filter((order) => order.summary.workflow.stage === "client_review").length,
+      clientApproved: orders.filter((order) => order.summary.workflow.stage === "client_approved").length,
       ready: orders.filter((order) => order.summary.workflow.stage === "production_ready").length,
       inProduction: orders.filter((order) => order.summary.workflow.stage === "in_production").length,
       shippedComplete: orders.filter((order) => order.summary.workflow.stage === "shipped" || order.summary.workflow.stage === "complete").length,
@@ -172,6 +174,9 @@ export default function VendorDashboardPage() {
         <button className={`vendor-kpi ${status === "client_review" ? "is-active" : ""}`} type="button" onClick={() => setStatus("client_review")}>
           <span>Client Review</span><strong>{counts.clientReview}</strong>
         </button>
+        <button className={`vendor-kpi ${status === "client_approved" ? "is-active" : ""}`} type="button" onClick={() => setStatus("client_approved")}>
+          <span>Client Approved</span><strong>{counts.clientApproved}</strong>
+        </button>
         <button className={`vendor-kpi ${status === "production_ready" ? "is-active" : ""}`} type="button" onClick={() => setStatus("production_ready")}>
           <span>Ready for Production</span><strong>{counts.ready}</strong>
         </button>
@@ -204,6 +209,7 @@ export default function VendorDashboardPage() {
               <option value="incoming">Incoming</option>
               <option value="needs_proof">Needs Proof</option>
               <option value="client_review">Client Review</option>
+              <option value="client_approved">Client Approved</option>
               <option value="production_ready">Ready for Production</option>
               <option value="attention">Needs Attention</option>
               <option value="in_production">In Production</option>

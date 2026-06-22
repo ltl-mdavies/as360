@@ -38,7 +38,9 @@ Print vendor phases:
 
 - Incoming/read-only before print submission.
 - Proof upload after order submission and proof actionability.
-- Production/shipping after client/admin proof approval or synced production-ready state.
+- Production/shipping according to the production approval policy.
+- In `hold_for_release`, client/admin proof approval produces a vendor-facing `Client Approved` state and production/shipping remains locked until production release.
+- In `direct`, line approval can become `Ready for Production` immediately.
 
 Vendors do not approve proofs. They submit proofs for client/admin approval.
 
@@ -49,6 +51,13 @@ End-client proof review should not expose vendor relationships. Proof Approval u
 ## Current Live Deployments
 
 The latest vendor-related frontend/backend updates were deployed during this thread.
+
+Latest deployment checkpoint:
+
+- Backend/CDK deploy completed on 2026-06-22 after adding policy-aware vendor production authorization.
+- Frontend `dist` was synced to the production app bucket.
+- CloudFront invalidation completed: `I6R16ERU8S20QG6X897ZNY0OGN`.
+- Live app reachability check returned `HTTP/2 200` for `https://app.adspace360.com`.
 
 Validation run during the work:
 
@@ -132,6 +141,8 @@ Vendor-specific watch items:
 - Confirm external routed vendor orders show `Adspace Line`, not `Lift Line`.
 - Confirm primary/LTL orders still show Lift references.
 - Confirm incoming vendor orders are read-only.
+- Confirm proof-approved-but-not-released vendor lines show `Client Approved` and keep production/shipping locked.
+- Confirm production-released vendor lines show `Ready for Production` and unlock production/shipping updates.
 - Confirm vendor proof upload can be tested with a real proof file later.
 - Confirm external vendor lines are not accidentally included in Lift order payloads.
 

@@ -108,10 +108,12 @@ type ShareAccessType = "collaboration" | "artwork_upload" | "transit_approval" |
 type ShareLinkStatus = "active" | "revoked";
 type ShareWorkspace = "hub" | "artwork" | "assignment" | "proofs" | "transit";
 type VendorOrderStatus = "not_started" | "in_production" | "blocked" | "shipped" | "complete";
+type ProductionApprovalMode = "direct" | "hold_for_release";
 type VendorWorkflowStage =
   | "incoming"
   | "needs_proof"
   | "client_review"
+  | "client_approved"
   | "production_ready"
   | "in_production"
   | "shipped"
@@ -478,7 +480,7 @@ type AppSettingsItem = {
     emailRecipients: string;
   };
   workflowPolicies: {
-    productionApprovalMode: "hold_for_release";
+    productionApprovalMode: ProductionApprovalMode;
     transitRunsInParallel: boolean;
     lockProofUndoAfterRelease: boolean;
   };
@@ -824,7 +826,7 @@ type ProjectListItem = {
     status: "not_required" | "not_started" | "pending" | "approved" | "rejected" | "changes_requested";
   };
   production: {
-    policy: "direct" | "hold_for_release";
+    policy: ProductionApprovalMode;
     ready: boolean;
     awaitingRelease: boolean;
     released: boolean;
@@ -6097,6 +6099,7 @@ function isVendorProgressStatus(status?: VendorOrderStatus | null) {
 
 function buildVendorLineWorkflow(args: {
   project: ProjectItem;
+  productionApprovalMode: ProductionApprovalMode;
   proof?: ProjectProofLineItem | null;
   proofLineId?: string | null;
   hasCreative: boolean;
@@ -6111,12 +6114,19 @@ function buildVendorLineWorkflow(args: {
   const proofSubmitted =
     Boolean(args.proof?.proofObjectKey || args.proof?.liftProofFullUrl || args.proof?.liftProofThumbUrl || args.proof?.vendorProofSubmittedAt) ||
     args.proof?.status === "pending";
-  const productionReady = submitted && (proofApproved || Boolean(args.project.productionReleasedAt));
+  const productionReady = submitted && (
+    args.productionApprovalMode === "direct"
+      ? proofApproved || Boolean(args.project.productionReleasedAt)
+      : Boolean(args.project.productionReleasedAt)
+  );
   const canSubmitProof = submitted && Boolean(args.proofLineId) && !proofApproved && !args.project.productionReleasedAt;
+  const awaitingProductionRelease = submitted && proofApproved && !productionReady;
   const lockReason = !submitted
     ? "Order has not been submitted to print yet. Vendor actions unlock after Adspace releases the order."
     : productionReady
     ? null
+    : awaitingProductionRelease
+    ? "Proof is approved. Production updates unlock after Adspace releases this order to production."
     : canSubmitProof
     ? null
     : "Production updates unlock after the client approves the proof.";
@@ -6181,6 +6191,16 @@ function buildVendorLineWorkflow(args: {
       lockReason: null,
     };
   }
+  if (awaitingProductionRelease) {
+    return {
+      stage: "client_approved",
+      label: "Client Approved",
+      canSubmitProof: false,
+      canUpdateProduction: false,
+      canUpdateShipping: false,
+      lockReason,
+    };
+  }
   if (proofSubmitted) {
     return {
       stage: "client_review",
@@ -6207,6 +6227,7 @@ function rollupVendorWorkflow(
   status: VendorOrderStatus
 ): VendorWorkspaceOrder["summary"]["workflow"] {
   const submitted = isVendorOrderSubmitted(project);
+  const allLinesProductionEditable = lines.length > 0 && lines.every((line) => line.workflow.canUpdateProduction);
   if (!submitted) {
     return {
       stage: "incoming",
@@ -6221,21 +6242,30 @@ function rollupVendorWorkflow(
       stage: "blocked",
       label: "Blocked",
       canGeneratePackage: true,
-      canUpdateProduction: lines.some((line) => line.workflow.canUpdateProduction),
+      canUpdateProduction: allLinesProductionEditable,
       lockReason: null,
     };
   }
   if (status === "complete") {
-    return { stage: "complete", label: "Complete", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+    return { stage: "complete", label: "Complete", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
   }
   if (status === "shipped") {
-    return { stage: "shipped", label: "Shipped", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+    return { stage: "shipped", label: "Shipped", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
   }
   if (lines.some((line) => line.workflow.stage === "in_production")) {
-    return { stage: "in_production", label: "In Production", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+    return { stage: "in_production", label: "In Production", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
   }
   if (lines.some((line) => line.workflow.stage === "production_ready")) {
-    return { stage: "production_ready", label: "Ready for Production", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+    return { stage: "production_ready", label: "Ready for Production", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
+  }
+  if (lines.some((line) => line.workflow.stage === "client_approved")) {
+    return {
+      stage: "client_approved",
+      label: "Client Approved",
+      canGeneratePackage: true,
+      canUpdateProduction: false,
+      lockReason: "Production updates unlock after Adspace releases this order to production.",
+    };
   }
   if (lines.some((line) => line.workflow.stage === "client_review")) {
     return {
@@ -6369,6 +6399,7 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
     const hasCreative = Boolean(args.asset?.fullUrl || args.asset?.thumbUrl || creativeAsset?.fullUrl || creativeAsset?.thumbUrl);
     const workflow = buildVendorLineWorkflow({
       project,
+      productionApprovalMode: hydratedSettings.workflowPolicies.productionApprovalMode,
       proof: args.proof,
       proofLineId: args.proof?.id || null,
       hasCreative,
