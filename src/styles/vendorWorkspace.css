@@ -261,8 +261,23 @@
 
 .vendor-order-overview {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr) minmax(280px, 0.9fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 0.95fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.vendor-order-side {
+  display: grid;
+  gap: 12px;
+}
+
+.vendor-panel-job .panel-body {
+  min-height: 256px;
+}
+
+.vendor-job-brief {
+  display: grid;
+  gap: 18px;
 }
 
 .vendor-health,
@@ -275,6 +290,11 @@
 
 .vendor-package {
   align-items: center;
+}
+
+.vendor-health {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--vendor-border);
 }
 
 .vendor-package > div,
@@ -319,35 +339,39 @@
 
 .vendor-proof-summary {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
 }
 
 .vendor-proof-summary span {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
-  padding: 10px;
+  padding: 7px 9px;
   border: 1px solid var(--vendor-border);
   border-radius: 8px;
   background: var(--vendor-soft);
 }
 
-.vendor-proof-summary svg {
+.vendor-proof-summary span.is-empty {
+  background: transparent;
   color: var(--vendor-muted);
 }
 
 .vendor-proof-summary small,
 .vendor-proof-cell small {
   color: var(--vendor-muted);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .vendor-proof-summary strong {
   color: var(--vendor-ink);
-  font-size: 1.15rem;
+  font-size: 1rem;
 }
 
 .vendor-line-card {
@@ -532,7 +556,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .vendor-select-all,
@@ -559,6 +583,16 @@
   grid-template-columns: 180px repeat(4, minmax(0, 1fr));
   gap: 10px;
   align-items: end;
+}
+
+.vendor-bulk-empty {
+  padding: 10px 12px;
+  border: 1px dashed var(--vendor-border);
+  border-radius: 8px;
+  background: var(--vendor-soft);
+  color: var(--vendor-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 .vendor-order-update label,
@@ -686,6 +720,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .vendor-panel-job .panel-body {
+    min-height: 0;
+  }
+
   .vendor-kpis-workflow {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -695,7 +733,7 @@
   }
 
   .vendor-proof-summary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .vendor-proof-cell-wide {
@@ -716,6 +754,7 @@
   .vendor-detail-grid,
   .vendor-line-meta,
   .vendor-proof-summary,
+  .vendor-order-side,
   .vendor-proof-workflow,
   .vendor-order-update,
   .vendor-bulk-update,

@@ -28,6 +28,12 @@ Vendor users should not gain customer admin access through `customerIds`; backen
 
 Share links are separate. Vendor Workspace V1 does not use share links.
 
+Recommended next access model:
+
+- Repeat production vendors should use canonical vendor accounts and authenticated vendor users.
+- One-off or low-frequency specialty vendors can be considered for a project-scoped vendor share link, similar to end-client proof links, with permissions limited to that vendor's assigned project/lines.
+- Project-scoped vendor links should still write vendor-scoped audit activity and must not expose other vendors, customer admin tools, or unassigned line files.
+
 ## Vendor Account Model
 
 Canonical vendor accounts are represented separately from customer vendor registry rows.

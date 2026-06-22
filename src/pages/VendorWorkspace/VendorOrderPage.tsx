@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, ExternalLink, FileCheck, FileClock, MapPin, PackageCheck, Save, Upload } from "lucide-react";
+import { Download, ExternalLink, MapPin, PackageCheck, Save, Upload } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "../../app/AppShell";
 import PageHeader from "../../components/common/PageHeader";
@@ -346,6 +346,19 @@ export default function VendorOrderPage() {
       artworkPending: stages.filter((stage) => stage === "artwork_pending").length,
     };
   }, [order]);
+  const proofSummaryItems = useMemo(
+    () => [
+      { label: "Artwork Pending", value: proofSummary.artworkPending },
+      { label: "Needs Proof", value: proofSummary.needsProof },
+      { label: "Submitted", value: proofSummary.vendorSubmitted },
+      { label: "Client Review", value: proofSummary.clientReview },
+      { label: "Revision", value: proofSummary.revisionRequested },
+      { label: "Approved", value: proofSummary.approved },
+      { label: "Production Ready", value: proofSummary.productionReady },
+    ],
+    [proofSummary]
+  );
+  const proofActionTotal = proofSummary.artworkPending + proofSummary.needsProof + proofSummary.revisionRequested;
   const bulkPatch = useMemo(() => {
     if (!bulkDraft || !selectedLineCount) return null;
     const patch: VendorLineUpdateInput = {};
@@ -600,120 +613,89 @@ export default function VendorOrderPage() {
             </div>
           ) : null}
           <div className="vendor-order-overview">
-            <Panel title="Order Details" className="vendor-panel">
-              <div className="vendor-detail-grid">
-                <span><small>Customer</small>{order.project.customerName}</span>
-                <span><small>Venue</small>{order.project.venueName}</span>
-                <span><small>PO</small>{order.project.poNumber || "—"}</span>
-                <span><small>Contract</small>{order.project.contractNumber || "—"}</span>
-                <span><small>Artwork Due</small>{formatDate(order.project.artworkDueDate)}</span>
-                <span><small>Post Date</small>{formatDate(order.project.postDate)}</span>
-              </div>
-            </Panel>
-
-            <Panel title="Ship-To Destination" className="vendor-panel">
-              <div className={`vendor-ship-to ${order.shippingDestination.configured ? "" : "is-missing"}`}>
-                <MapPin size={22} aria-hidden="true" />
-                <div>
-                  <strong>{order.shippingDestination.configured ? order.shippingDestination.label || order.shippingDestination.company || "Configured destination" : "Shipping destination not configured"}</strong>
-                  <small>{order.shippingDestination.sourceLabel}</small>
-                  {order.shippingDestination.configured ? (
-                    <>
-                      <address>
-                        {shippingAddressLines(order.shippingDestination).map((line) => (
-                          <span key={line}>{line}</span>
-                        ))}
-                      </address>
-                      {order.shippingDestination.phone || order.shippingDestination.email ? (
-                        <p>{[order.shippingDestination.phone, order.shippingDestination.email].filter(Boolean).join(" · ")}</p>
-                      ) : null}
-                      {order.shippingDestination.instructions ? <p>{order.shippingDestination.instructions}</p> : null}
-                    </>
-                  ) : (
-                    <p>Ask Adspace operations to configure a market default or venue override before shipping this order.</p>
-                  )}
+            <Panel title="Job Brief" className="vendor-panel vendor-panel-job">
+              <div className="vendor-job-brief">
+                <div className="vendor-detail-grid">
+                  <span><small>Customer</small>{order.project.customerName}</span>
+                  <span><small>Venue</small>{order.project.venueName}</span>
+                  <span><small>PO</small>{order.project.poNumber || "—"}</span>
+                  <span><small>Contract</small>{order.project.contractNumber || "—"}</span>
+                  <span><small>Artwork Due</small>{formatDate(order.project.artworkDueDate)}</span>
+                  <span><small>Post Date</small>{formatDate(order.project.postDate)}</span>
+                </div>
+                <div className={`vendor-ship-to ${order.shippingDestination.configured ? "" : "is-missing"}`}>
+                  <MapPin size={20} aria-hidden="true" />
+                  <div>
+                    <strong>{order.shippingDestination.configured ? order.shippingDestination.label || order.shippingDestination.company || "Configured destination" : "Shipping destination not configured"}</strong>
+                    <small>{order.shippingDestination.sourceLabel}</small>
+                    {order.shippingDestination.configured ? (
+                      <>
+                        <address>
+                          {shippingAddressLines(order.shippingDestination).map((line) => (
+                            <span key={line}>{line}</span>
+                          ))}
+                        </address>
+                        {order.shippingDestination.phone || order.shippingDestination.email ? (
+                          <p>{[order.shippingDestination.phone, order.shippingDestination.email].filter(Boolean).join(" · ")}</p>
+                        ) : null}
+                        {order.shippingDestination.instructions ? <p>{order.shippingDestination.instructions}</p> : null}
+                      </>
+                    ) : (
+                      <p>Ask Adspace operations to configure a market default or venue override before shipping this order.</p>
+                    )}
+                  </div>
                 </div>
               </div>
             </Panel>
 
-            <Panel title="Integration Health" className="vendor-panel">
-              <div className="vendor-health">
-                <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
-                <div>
-                  <strong>{routeLabel(order)}</strong>
-                  <p>
-                    {isPrimaryPrintOrder(order)
-                      ? order.integrationHealth.liftSync?.label || "No Lift sync state available yet."
-                      : "This vendor route is managed in Adspace and is not connected to Lift order/proof sync."}
-                  </p>
-                  <small>
-                    {isPrimaryPrintOrder(order)
-                      ? "Healing and resubmission actions are managed by Adspace operators."
-                      : "Use AS360 order, PO, and contract references for this vendor work."}
-                  </small>
+            <div className="vendor-order-side">
+              <Panel title="Current State" subtitle={proofActionTotal ? `${proofActionTotal} proof action ${proofActionTotal === 1 ? "item" : "items"}` : "No proof blockers"} className="vendor-panel">
+                <div className="vendor-health">
+                  <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
+                  <div>
+                    <strong>{routeLabel(order)}</strong>
+                    <p>
+                      {isPrimaryPrintOrder(order)
+                        ? order.integrationHealth.liftSync?.label || "No Lift sync state available yet."
+                        : "This vendor route is managed in Adspace and is not connected to Lift order/proof sync."}
+                    </p>
+                    <small>
+                      {isPrimaryPrintOrder(order)
+                        ? "Healing and resubmission actions are managed by Adspace operators."
+                        : "Use AS360 order, PO, and contract references for this vendor work."}
+                    </small>
+                  </div>
                 </div>
-              </div>
-            </Panel>
-
-            <Panel title="Proofing Status" className="vendor-panel">
-              <div className="vendor-proof-summary">
-                <span>
-                  <FileClock size={18} aria-hidden="true" />
-                  <small>Artwork Pending</small>
-                  <strong>{proofSummary.artworkPending}</strong>
-                </span>
-                <span>
-                  <FileClock size={18} aria-hidden="true" />
-                  <small>Needs Proof</small>
-                  <strong>{proofSummary.needsProof}</strong>
-                </span>
-                <span>
-                  <FileClock size={18} aria-hidden="true" />
-                  <small>Submitted</small>
-                  <strong>{proofSummary.vendorSubmitted}</strong>
-                </span>
-                <span>
-                  <FileClock size={18} aria-hidden="true" />
-                  <small>Client Review</small>
-                  <strong>{proofSummary.clientReview}</strong>
-                </span>
-                <span>
-                  <FileClock size={18} aria-hidden="true" />
-                  <small>Revision</small>
-                  <strong>{proofSummary.revisionRequested}</strong>
-                </span>
-                <span>
-                  <FileCheck size={18} aria-hidden="true" />
-                  <small>Approved</small>
-                  <strong>{proofSummary.approved}</strong>
-                </span>
-                <span>
-                  <FileCheck size={18} aria-hidden="true" />
-                  <small>Production Ready</small>
-                  <strong>{proofSummary.productionReady}</strong>
-                </span>
-              </div>
-            </Panel>
-
-            <Panel title="Order Package" className="vendor-panel">
-              <div className="vendor-package">
-                <PackageCheck size={22} aria-hidden="true" />
-                <div>
-                  <strong>{latestPackage ? latestPackage.filename : "Vendor package not generated yet"}</strong>
-                  <p>
-                    {latestPackage
-                      ? `Generated ${formatDate(latestPackage.createdAt, true)} · ${formatBytes(latestPackage.sizeBytes)} · ${latestPackage.uploadedByName}`
-                      : "Generate a scoped ZIP with assigned artwork and vendor allocation manifests."}
-                  </p>
+                <div className="vendor-proof-summary" aria-label="Proofing status">
+                  {proofSummaryItems.map((item) => (
+                    <span key={item.label} className={item.value ? "" : "is-empty"}>
+                      <small>{item.label}</small>
+                      <strong>{item.value}</strong>
+                    </span>
+                  ))}
                 </div>
-                {latestPackage ? (
-                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => triggerBrowserDownload(latestPackage.fullUrl, latestPackage.filename)}>
-                    <Download size={16} aria-hidden="true" />
-                    Download
-                  </button>
-                ) : null}
-              </div>
-            </Panel>
+              </Panel>
+
+              <Panel title="Order Package" className="vendor-panel">
+                <div className="vendor-package">
+                  <PackageCheck size={22} aria-hidden="true" />
+                  <div>
+                    <strong>{latestPackage ? latestPackage.filename : "Vendor package not generated yet"}</strong>
+                    <p>
+                      {latestPackage
+                        ? `Generated ${formatDate(latestPackage.createdAt, true)} · ${formatBytes(latestPackage.sizeBytes)} · ${latestPackage.uploadedByName}`
+                        : "Scoped ZIP with assigned artwork and manifests."}
+                    </p>
+                  </div>
+                  {latestPackage ? (
+                    <button className="btn btn-ghost btn-soft" type="button" onClick={() => triggerBrowserDownload(latestPackage.fullUrl, latestPackage.filename)}>
+                      <Download size={16} aria-hidden="true" />
+                      Download
+                    </button>
+                  ) : null}
+                </div>
+              </Panel>
+            </div>
           </div>
 
           {orderDraft && order.summary.workflow.canUpdateProduction ? (
@@ -791,111 +773,115 @@ export default function VendorOrderPage() {
                   </button>
                 ) : null}
               </div>
-              <div className="vendor-bulk-update">
-                <label className="vendor-bulk-field">
-                  <span>
+              {selectedLineCount ? (
+                <div className="vendor-bulk-update">
+                  <label className="vendor-bulk-field">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={bulkDraft.applyStatus}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyStatus: event.target.checked } : current)}
+                      />
+                      Status
+                    </span>
+                    <select
+                      value={bulkDraft.productionStatus}
+                      disabled={!bulkDraft.applyStatus}
+                      onChange={(event) => setBulkDraft((current) => current ? { ...current, productionStatus: event.target.value as ApiVendorProductionStatus } : current)}
+                    >
+                      <option value="not_started">Not Started</option>
+                      <option value="in_production">In Production</option>
+                      <option value="blocked">Blocked</option>
+                      <option value="shipped">Shipped</option>
+                      <option value="complete">Complete</option>
+                    </select>
+                  </label>
+                  <label className="vendor-bulk-field">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={bulkDraft.applyVendorReference}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyVendorReference: event.target.checked } : current)}
+                      />
+                      Vendor Ref / PO
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={bulkDraft.applyStatus}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, applyStatus: event.target.checked } : current)}
+                      value={bulkDraft.vendorReference}
+                      disabled={!bulkDraft.applyVendorReference}
+                      onChange={(event) => setBulkDraft((current) => current ? { ...current, vendorReference: event.target.value, applyVendorReference: true } : current)}
                     />
-                    Status
-                  </span>
-                  <select
-                    value={bulkDraft.productionStatus}
-                    disabled={!bulkDraft.applyStatus}
-                    onChange={(event) => setBulkDraft((current) => current ? { ...current, productionStatus: event.target.value as ApiVendorProductionStatus } : current)}
-                  >
-                    <option value="not_started">Not Started</option>
-                    <option value="in_production">In Production</option>
-                    <option value="blocked">Blocked</option>
-                    <option value="shipped">Shipped</option>
-                    <option value="complete">Complete</option>
-                  </select>
-                </label>
-                <label className="vendor-bulk-field">
-                  <span>
+                  </label>
+                  <label className="vendor-bulk-field">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={bulkDraft.applyShippingCarrier}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippingCarrier: event.target.checked } : current)}
+                      />
+                      Carrier
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={bulkDraft.applyVendorReference}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, applyVendorReference: event.target.checked } : current)}
+                      value={bulkDraft.shippingCarrier}
+                      disabled={!bulkDraft.applyShippingCarrier}
+                      onChange={(event) => setBulkDraft((current) => current ? { ...current, shippingCarrier: event.target.value, applyShippingCarrier: true } : current)}
                     />
-                    Vendor Ref / PO
-                  </span>
-                  <input
-                    value={bulkDraft.vendorReference}
-                    disabled={!bulkDraft.applyVendorReference}
-                    onChange={(event) => setBulkDraft((current) => current ? { ...current, vendorReference: event.target.value, applyVendorReference: true } : current)}
-                  />
-                </label>
-                <label className="vendor-bulk-field">
-                  <span>
+                  </label>
+                  <label className="vendor-bulk-field">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={bulkDraft.applyTrackingNumber}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyTrackingNumber: event.target.checked } : current)}
+                      />
+                      Tracking
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={bulkDraft.applyShippingCarrier}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippingCarrier: event.target.checked } : current)}
+                      value={bulkDraft.trackingNumber}
+                      disabled={!bulkDraft.applyTrackingNumber}
+                      onChange={(event) => setBulkDraft((current) => current ? { ...current, trackingNumber: event.target.value, applyTrackingNumber: true } : current)}
                     />
-                    Carrier
-                  </span>
-                  <input
-                    value={bulkDraft.shippingCarrier}
-                    disabled={!bulkDraft.applyShippingCarrier}
-                    onChange={(event) => setBulkDraft((current) => current ? { ...current, shippingCarrier: event.target.value, applyShippingCarrier: true } : current)}
-                  />
-                </label>
-                <label className="vendor-bulk-field">
-                  <span>
+                  </label>
+                  <label className="vendor-bulk-field">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={bulkDraft.applyShippedAt}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippedAt: event.target.checked } : current)}
+                      />
+                      Shipped At
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={bulkDraft.applyTrackingNumber}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, applyTrackingNumber: event.target.checked } : current)}
+                      type="datetime-local"
+                      value={datetimeInputValue(bulkDraft.shippedAt)}
+                      disabled={!bulkDraft.applyShippedAt}
+                      onChange={(event) => setBulkDraft((current) => current ? { ...current, shippedAt: isoFromDatetimeInput(event.target.value), applyShippedAt: true } : current)}
                     />
-                    Tracking
-                  </span>
-                  <input
-                    value={bulkDraft.trackingNumber}
-                    disabled={!bulkDraft.applyTrackingNumber}
-                    onChange={(event) => setBulkDraft((current) => current ? { ...current, trackingNumber: event.target.value, applyTrackingNumber: true } : current)}
-                  />
-                </label>
-                <label className="vendor-bulk-field">
-                  <span>
-                    <input
-                      type="checkbox"
-                      checked={bulkDraft.applyShippedAt}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, applyShippedAt: event.target.checked } : current)}
+                  </label>
+                  <label className="vendor-bulk-field vendor-bulk-note">
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={bulkDraft.applyNote}
+                        onChange={(event) => setBulkDraft((current) => current ? { ...current, applyNote: event.target.checked } : current)}
+                      />
+                      Internal Note
+                    </span>
+                    <textarea
+                      value={bulkDraft.note}
+                      disabled={!bulkDraft.applyNote}
+                      onChange={(event) => setBulkDraft((current) => current ? { ...current, note: event.target.value, applyNote: true } : current)}
                     />
-                    Shipped At
-                  </span>
-                  <input
-                    type="datetime-local"
-                    value={datetimeInputValue(bulkDraft.shippedAt)}
-                    disabled={!bulkDraft.applyShippedAt}
-                    onChange={(event) => setBulkDraft((current) => current ? { ...current, shippedAt: isoFromDatetimeInput(event.target.value), applyShippedAt: true } : current)}
-                  />
-                </label>
-                <label className="vendor-bulk-field vendor-bulk-note">
-                  <span>
-                    <input
-                      type="checkbox"
-                      checked={bulkDraft.applyNote}
-                      onChange={(event) => setBulkDraft((current) => current ? { ...current, applyNote: event.target.checked } : current)}
-                    />
-                    Internal Note
-                  </span>
-                  <textarea
-                    value={bulkDraft.note}
-                    disabled={!bulkDraft.applyNote}
-                    onChange={(event) => setBulkDraft((current) => current ? { ...current, note: event.target.value, applyNote: true } : current)}
-                  />
-                </label>
-                <div className="vendor-bulk-actions">
-                  <button className="btn btn-primary" type="button" disabled={!bulkPatch || savingBulk} onClick={() => void saveBulkUpdate()}>
-                    <Save size={16} aria-hidden="true" />
-                    {savingBulk ? "Applying..." : `Apply to ${selectedLineCount || 0} Selected`}
-                  </button>
+                  </label>
+                  <div className="vendor-bulk-actions">
+                    <button className="btn btn-primary" type="button" disabled={!bulkPatch || savingBulk} onClick={() => void saveBulkUpdate()}>
+                      <Save size={16} aria-hidden="true" />
+                      {savingBulk ? "Applying..." : `Apply to ${selectedLineCount || 0} Selected`}
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="vendor-bulk-empty">Select production-ready lines below to update only those items.</div>
+              )}
             </Panel>
           ) : null}
 
