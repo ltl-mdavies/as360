@@ -143,7 +143,7 @@ export type ApiProjectWorkspaceResponse = {
 export type ApiProjectHubBootstrapResponse = ApiProjectWorkspaceResponse & {
   viewer: {
     isPlatformAdmin: boolean;
-    role: "platform_admin" | "customer_admin";
+    role: "platform_admin" | "customer_admin" | "vendor_admin" | "vendor_user";
     customerIds: string[];
   };
   transit: ApiProjectTransitResponse;
@@ -202,6 +202,13 @@ export type ApiProjectProofLineResponse = {
   proofCommentAttachmentCount?: number;
   latestProofCommentAt?: string | null;
   proofVersions?: ApiProjectProofVersion[];
+  vendorProofSubmittedAt?: string | null;
+  vendorProofSubmittedByName?: string | null;
+  vendorProofSubmittedByVendorAccountId?: string | null;
+  vendorProofFilename?: string | null;
+  vendorProofContentType?: string | null;
+  vendorProofSizeBytes?: number | null;
+  vendorProofNote?: string | null;
   updatedAt?: string;
   updatedByName?: string | null;
 };
@@ -392,6 +399,8 @@ export type ApiProjectAuditEvent = {
 export type ApiProjectDocument = {
   id: string;
   projectId: string;
+  vendorOrderId?: string | null;
+  vendorAccountId?: string | null;
   category: "project_document" | "lift_payload" | "allocation_report" | "order_package" | "reconciliation";
   assetKind: "projectDocument" | "liftPayload" | "allocationReport" | "orderPackage" | "reconciliation";
   filename: string;
@@ -590,6 +599,7 @@ export type ApiCustomerSettings = {
 export type ApiCustomerVendor = {
   id: string;
   customerId: string;
+  vendorAccountId?: string;
   name: string;
   contactName: string;
   email: string;
@@ -598,6 +608,24 @@ export type ApiCustomerVendor = {
   isActive: boolean;
   updatedAt: string;
   updatedByName: string;
+};
+
+export type ApiShippingDestination = {
+  configured: boolean;
+  source: "venue_override" | "market_default" | "not_configured";
+  sourceLabel: string;
+  label?: string;
+  company?: string;
+  attention?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  country?: string;
+  phone?: string;
+  email?: string;
+  instructions?: string;
 };
 
 export type ApiCustomerAccount = {
@@ -625,8 +653,9 @@ export type ApiAdminSettingsResponse = {
     id: string;
     displayName: string;
     email: string;
-    role: "platform_admin" | "customer_admin";
+    role: "platform_admin" | "customer_admin" | "vendor_admin" | "vendor_user";
     customerIds: string[];
+    vendorAccountIds?: string[];
     isActive: boolean;
     updatedAt: string;
   }>;
@@ -644,8 +673,9 @@ export type ApiAdminSettingsResponse = {
 export type ApiAdminBrandingResponse = {
   viewer: {
     isPlatformAdmin: boolean;
-    role: "platform_admin" | "customer_admin";
+    role: "platform_admin" | "customer_admin" | "vendor_admin" | "vendor_user";
     customerIds: string[];
+    vendorAccountIds?: string[];
     displayName?: string | null;
     email?: string | null;
   };
@@ -671,7 +701,7 @@ export type ApiCustomerSettingsResponse = {
   };
   viewer: {
     isPlatformAdmin: boolean;
-    role: "platform_admin" | "customer_admin";
+    role: "platform_admin" | "customer_admin" | "vendor_admin" | "vendor_user";
     customerIds: string[];
   };
   settings: ApiCustomerSettings;
@@ -1689,6 +1719,230 @@ export async function logProjectErrorEvent(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type ApiVendorProductionStatus = "not_started" | "in_production" | "blocked" | "shipped" | "complete";
+export type ApiVendorWorkflowStage =
+  | "incoming"
+  | "needs_proof"
+  | "client_review"
+  | "production_ready"
+  | "in_production"
+  | "shipped"
+  | "complete"
+  | "blocked";
+
+export type ApiVendorWorkflowState = {
+  stage: ApiVendorWorkflowStage;
+  label: string;
+  canSubmitProof?: boolean;
+  canGeneratePackage?: boolean;
+  canUpdateProduction: boolean;
+  canUpdateShipping?: boolean;
+  lockReason?: string | null;
+};
+
+export type ApiVendorWorkspaceViewer = {
+  role: "vendor_admin" | "vendor_user";
+  displayName: string;
+  email: string;
+  accounts: Array<{
+    id: string;
+    name: string;
+    accountType: "primary_print" | "external";
+    customerId?: string | null;
+    isActive: boolean;
+  }>;
+};
+
+export type ApiVendorOrderSummary = {
+  id: string;
+  vendorAccountId: string;
+  vendorName: string;
+  project: {
+    id: string;
+    title: string;
+    projectMode: "live" | "internal_sandbox";
+    customerId: string;
+    customerName: string;
+    sourceCustomerName?: string | null;
+    marketName: string;
+    venueName: string;
+    adspaceOrderNumber: string;
+    liftOrderId?: string | null;
+    poNumber?: string | null;
+    contractNumber?: string | null;
+    artworkDueDate?: string | null;
+    postDate?: string | null;
+    orderSubmittedAt?: string | null;
+  };
+  summary: {
+    lineCount: number;
+    inventoryCount: number;
+    status: ApiVendorProductionStatus;
+    needsAttention: boolean;
+    latestActivityAt: string;
+    workflow: ApiVendorWorkflowState;
+  };
+  integrationHealth: {
+    route: "primary_print_vendor" | "external_vendor";
+    liftOrderId?: string | null;
+    liftSync?: ApiProjectWorkspaceResponse["project"]["liftSync"];
+    packageScope: "vendor";
+    healingAvailableToVendor: boolean;
+  };
+  shippingDestination: ApiShippingDestination;
+};
+
+export type ApiVendorOrderLine = {
+  id: string;
+  sourceType: "allocation_override" | "proof" | "assignment";
+  lineNumber?: number | null;
+  proofLineId?: string | null;
+  liftOrderLineId?: number | null;
+  liftProofingId?: number | null;
+  mediaVariantKey: string;
+  mediaVariantLabel: string;
+  productLabel: string;
+  quantity: number;
+  inventory: Array<{
+    id: string;
+    inventoryId: string;
+    mapName?: string;
+    unitNumber?: string;
+  }>;
+  creative?: {
+    id: string;
+    filename: string;
+    thumbUrl?: string | null;
+    fullUrl?: string | null;
+    contentType?: string | null;
+  } | null;
+  proof?: {
+    status: "waiting" | "pending" | "approved";
+    lineStepNumber?: number | null;
+    liftProofStatus?: string | null;
+    thumbUrl?: string | null;
+    fullUrl?: string | null;
+    vendorSubmittedAt?: string | null;
+    vendorSubmittedByName?: string | null;
+    vendorAccountId?: string | null;
+    vendorFilename?: string | null;
+    vendorNote?: string | null;
+    sizeBytes?: number | null;
+  } | null;
+  productionStatus: ApiVendorProductionStatus;
+  baselineProductionStatus: ApiVendorProductionStatus;
+  workflow: ApiVendorWorkflowState & {
+    canSubmitProof: boolean;
+    canUpdateShipping: boolean;
+  };
+  vendorReference: string;
+  note: string;
+  shippingCarrier: string;
+  trackingNumber: string;
+  shippedAt: string;
+  updatedAt: string;
+  updatedByName: string;
+};
+
+export type ApiVendorOrderDetail = ApiVendorOrderSummary & {
+  lines: ApiVendorOrderLine[];
+  documents: ApiProjectDocument[];
+  activity: ApiProjectAuditEvent[];
+};
+
+export type ApiVendorOrdersResponse = {
+  vendor: ApiVendorWorkspaceViewer;
+  orders: ApiVendorOrderSummary[];
+};
+
+export type ApiVendorOrderResponse = {
+  vendor: ApiVendorWorkspaceViewer;
+  order: ApiVendorOrderDetail;
+};
+
+export type VendorLineUpdateInput = {
+  productionStatus?: ApiVendorProductionStatus;
+  vendorReference?: string;
+  note?: string;
+  shippingCarrier?: string;
+  trackingNumber?: string;
+  shippedAt?: string;
+};
+
+export type VendorLinesBulkUpdateInput = {
+  lineIds: string[];
+  update: VendorLineUpdateInput;
+};
+
+export async function fetchVendorOrders(api: ApiClientLike) {
+  return api.request<ApiVendorOrdersResponse>("/api/vendor/orders");
+}
+
+export async function fetchVendorOrder(api: ApiClientLike, vendorOrderId: string) {
+  return api.request<ApiVendorOrderResponse>(`/api/vendor/orders/${encodeURIComponent(vendorOrderId)}`);
+}
+
+export async function updateVendorOrder(api: ApiClientLike, vendorOrderId: string, payload: VendorLineUpdateInput) {
+  return api.request<ApiVendorOrderResponse>(`/api/vendor/orders/${encodeURIComponent(vendorOrderId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateVendorOrderLine(
+  api: ApiClientLike,
+  vendorOrderId: string,
+  lineId: string,
+  payload: VendorLineUpdateInput
+) {
+  return api.request<ApiVendorOrderResponse>(
+    `/api/vendor/orders/${encodeURIComponent(vendorOrderId)}/lines/${encodeURIComponent(lineId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function updateVendorOrderLines(api: ApiClientLike, vendorOrderId: string, payload: VendorLinesBulkUpdateInput) {
+  return api.request<ApiVendorOrderResponse>(`/api/vendor/orders/${encodeURIComponent(vendorOrderId)}/lines`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function submitVendorOrderLineProof(
+  api: ApiClientLike,
+  vendorOrderId: string,
+  lineId: string,
+  payload: {
+    proofObjectKey: string;
+    proofThumbObjectKey?: string;
+    filename: string;
+    contentType?: string;
+    sizeBytes?: number;
+    note?: string;
+  }
+) {
+  return api.request<ApiVendorOrderResponse>(
+    `/api/vendor/orders/${encodeURIComponent(vendorOrderId)}/lines/${encodeURIComponent(lineId)}/proof`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function generateVendorOrderPackage(api: ApiClientLike, vendorOrderId: string) {
+  return api.request<{ document: ApiProjectDocument; manifestSummary: Record<string, unknown> }>(
+    `/api/vendor/orders/${encodeURIComponent(vendorOrderId)}/package`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    }
+  );
 }
 
 export function normalizeCreativeAsset(

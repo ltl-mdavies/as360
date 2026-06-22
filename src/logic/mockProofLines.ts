@@ -38,6 +38,13 @@ export type ProofLineMock = {
   proofCommentAttachmentCount?: number;
   latestProofCommentAt?: string | null;
   proofVersions?: ProofVersionMock[];
+  vendorProofSubmittedAt?: string | null;
+  vendorProofSubmittedByName?: string | null;
+  vendorProofSubmittedByVendorAccountId?: string | null;
+  vendorProofFilename?: string | null;
+  vendorProofContentType?: string | null;
+  vendorProofSizeBytes?: number | null;
+  vendorProofNote?: string | null;
   updatedAt?: string | null;
 };
 

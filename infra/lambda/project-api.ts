@@ -43,10 +43,80 @@ type ApiEvent = {
   queryStringParameters?: Record<string, string | undefined>;
 };
 
-type UserRole = "platform_admin" | "customer_admin";
+const ROUTE_TEMPLATES: Array<{ method: HttpMethod; template: string }> = [
+  { method: "GET", template: "/api/share/realtime/config" },
+  { method: "GET", template: "/api/share-links/resolve" },
+  { method: "POST", template: "/api/share-links/identify" },
+  { method: "GET", template: "/api/share/projects/{projectId}" },
+  { method: "GET", template: "/api/share/projects/{projectId}/workspace" },
+  { method: "GET", template: "/api/share/projects/{projectId}/documents" },
+  { method: "GET", template: "/api/share/projects/{projectId}/creatives" },
+  { method: "POST", template: "/api/share/projects/{projectId}/creatives" },
+  { method: "PATCH", template: "/api/share/projects/{projectId}/creatives/{creativeId}" },
+  { method: "DELETE", template: "/api/share/projects/{projectId}/creatives/{creativeId}" },
+  { method: "POST", template: "/api/share/projects/{projectId}/submit" },
+  { method: "POST", template: "/api/share/projects/{projectId}/submit-preview" },
+  { method: "PATCH", template: "/api/share/projects/{projectId}/assignments/{inventoryId}" },
+  { method: "GET", template: "/api/share/projects/{projectId}/proofs" },
+  { method: "PATCH", template: "/api/share/projects/{projectId}/proofs/{lineItemId}" },
+  { method: "GET", template: "/api/share/projects/{projectId}/transit" },
+  { method: "PUT", template: "/api/share/projects/{projectId}/transit" },
+  { method: "POST", template: "/api/share/projects/{projectId}/errors" },
+  { method: "GET", template: "/api/realtime/config" },
+  { method: "GET", template: "/api/vendor/orders" },
+  { method: "GET", template: "/api/vendor/orders/{vendorOrderId}" },
+  { method: "PATCH", template: "/api/vendor/orders/{vendorOrderId}" },
+  { method: "PATCH", template: "/api/vendor/orders/{vendorOrderId}/lines" },
+  { method: "PATCH", template: "/api/vendor/orders/{vendorOrderId}/lines/{lineId}" },
+  { method: "POST", template: "/api/vendor/orders/{vendorOrderId}/lines/{lineId}/proof" },
+  { method: "POST", template: "/api/vendor/orders/{vendorOrderId}/package" },
+  { method: "GET", template: "/api/projects" },
+  { method: "POST", template: "/api/projects" },
+  { method: "GET", template: "/api/projects/{projectId}" },
+  { method: "GET", template: "/api/projects/{projectId}/workspace" },
+  { method: "GET", template: "/api/projects/{projectId}/allocation-override" },
+  { method: "POST", template: "/api/projects/{projectId}/allocation-override/rows" },
+  { method: "PATCH", template: "/api/projects/{projectId}/allocation-override/rows/{rowId}" },
+  { method: "DELETE", template: "/api/projects/{projectId}/allocation-override/rows/{rowId}" },
+  { method: "GET", template: "/api/projects/{projectId}/lift-order-url" },
+  { method: "GET", template: "/api/projects/{projectId}/activity" },
+  { method: "GET", template: "/api/projects/{projectId}/documents" },
+  { method: "POST", template: "/api/projects/{projectId}/documents" },
+  { method: "POST", template: "/api/projects/{projectId}/errors" },
+  { method: "GET", template: "/api/projects/{projectId}/share-links" },
+  { method: "POST", template: "/api/projects/{projectId}/share-links" },
+  { method: "PATCH", template: "/api/share-links/{shareLinkId}" },
+  { method: "GET", template: "/api/projects/{projectId}/creatives" },
+  { method: "POST", template: "/api/projects/{projectId}/creatives" },
+  { method: "PATCH", template: "/api/projects/{projectId}/creatives/{creativeId}" },
+  { method: "DELETE", template: "/api/projects/{projectId}/creatives/{creativeId}" },
+  { method: "GET", template: "/api/projects/{projectId}/proofs" },
+  { method: "PATCH", template: "/api/projects/{projectId}/proofs/{lineItemId}" },
+  { method: "GET", template: "/api/projects/{projectId}/transit" },
+  { method: "PUT", template: "/api/projects/{projectId}/transit" },
+  { method: "POST", template: "/api/projects/{projectId}/release-production" },
+  { method: "POST", template: "/api/projects/{projectId}/submit" },
+  { method: "POST", template: "/api/projects/{projectId}/submit-preview" },
+  { method: "PATCH", template: "/api/projects/{projectId}/assignments/{inventoryId}" },
+  { method: "PATCH", template: "/api/projects/{projectId}" },
+  { method: "GET", template: "/api/admin/settings" },
+  { method: "PATCH", template: "/api/admin/settings" },
+];
+
+type UserRole = "platform_admin" | "customer_admin" | "vendor_admin" | "vendor_user";
 type ShareAccessType = "collaboration" | "artwork_upload" | "transit_approval" | "view_only";
 type ShareLinkStatus = "active" | "revoked";
 type ShareWorkspace = "hub" | "artwork" | "assignment" | "proofs" | "transit";
+type VendorOrderStatus = "not_started" | "in_production" | "blocked" | "shipped" | "complete";
+type VendorWorkflowStage =
+  | "incoming"
+  | "needs_proof"
+  | "client_review"
+  | "production_ready"
+  | "in_production"
+  | "shipped"
+  | "complete"
+  | "blocked";
 
 type UserProfileItem = {
   entityType: "UserProfile";
@@ -56,6 +126,7 @@ type UserProfileItem = {
   displayName: string;
   role: UserRole;
   customerIds: string[];
+  vendorAccountIds?: string[];
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -83,6 +154,7 @@ type MarketItem = {
   customerName: string;
   name: string;
   isActive: boolean;
+  shippingDestination?: ShippingDestination;
   createdAt: string;
   updatedAt: string;
 };
@@ -98,8 +170,31 @@ type VenueItem = {
   isActive: boolean;
   documentSourceMode?: "adspace" | "external" | "hybrid";
   documentLibraryUrl: string;
+  shippingDestinationOverrideEnabled?: boolean;
+  shippingDestination?: ShippingDestination;
   createdAt: string;
   updatedAt: string;
+};
+
+type ShippingDestination = {
+  label?: string;
+  company?: string;
+  attention?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  country?: string;
+  phone?: string;
+  email?: string;
+  instructions?: string;
+};
+
+type ResolvedShippingDestination = ShippingDestination & {
+  configured: boolean;
+  source: "venue_override" | "market_default" | "not_configured";
+  sourceLabel: string;
 };
 
 type InventoryItem = {
@@ -156,7 +251,26 @@ type MediaVariantItem = {
   color?: string;
   abbreviation?: string;
   unitNumber?: string;
+  productionRouting?: "primary" | "external";
+  externalVendorId?: string;
   updatedAt: string;
+};
+
+type VendorAccountItem = {
+  entityType: "VendorAccount";
+  id: string;
+  name: string;
+  accountType: "primary_print" | "external";
+  customerId?: string;
+  customerVendorId?: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  notes?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  updatedByName: string;
 };
 
 type ProjectCreativeAssetItem = {
@@ -184,6 +298,8 @@ type ProjectDocumentItem = {
   entityType: "ProjectDocument";
   id: string;
   projectId: string;
+  vendorOrderId?: string;
+  vendorAccountId?: string;
   category: ProjectDocumentCategory;
   assetKind: "projectDocument" | "liftPayload" | "allocationReport" | "orderPackage" | "reconciliation";
   bucketName: string;
@@ -308,6 +424,23 @@ type ProjectAllocationOverrideRowItem = {
   adminNote?: string | null;
   createdAt: string;
   createdByName: string;
+  updatedAt: string;
+  updatedByName: string;
+};
+
+type ProjectVendorLineStatusItem = {
+  entityType: "ProjectVendorLineStatus";
+  id: string;
+  projectId: string;
+  vendorOrderId: string;
+  vendorLineId: string;
+  vendorAccountId: string;
+  productionStatus: VendorOrderStatus;
+  vendorReference?: string | null;
+  note?: string | null;
+  shippingCarrier?: string | null;
+  trackingNumber?: string | null;
+  shippedAt?: string | null;
   updatedAt: string;
   updatedByName: string;
 };
@@ -474,6 +607,7 @@ type CustomerVendorItem = {
   entityType: "CustomerVendor";
   id: string;
   customerId: string;
+  vendorAccountId?: string;
   name: string;
   contactName?: string;
   email?: string;
@@ -541,6 +675,13 @@ type ProjectProofLineItem = {
   proofCommentAttachmentCount?: number;
   latestProofCommentAt?: string | null;
   proofVersions?: ProjectProofVersion[];
+  vendorProofSubmittedAt?: string | null;
+  vendorProofSubmittedByName?: string | null;
+  vendorProofSubmittedByVendorAccountId?: string | null;
+  vendorProofFilename?: string | null;
+  vendorProofContentType?: string | null;
+  vendorProofSizeBytes?: number | null;
+  vendorProofNote?: string | null;
   createdAt: string;
   updatedAt: string;
   updatedByName?: string;
@@ -605,6 +746,7 @@ type AuthContext = {
   actorName: string;
   isPlatformAdmin: boolean;
   customerIds: Set<string>;
+  vendorAccountIds: Set<string>;
   shareLink?: ProjectShareLinkItem | null;
   participant?: ShareParticipantItem | null;
 };
@@ -729,9 +871,52 @@ const projectListResponseCache = new Map<string, LocalCacheEntry<ProjectListItem
 const projectWorkspaceResponseCache = new Map<string, LocalCacheEntry<Record<string, unknown>>>();
 const projectHubBootstrapResponseCache = new Map<string, LocalCacheEntry<Record<string, unknown>>>();
 
+function getEventMethod(event: ApiEvent) {
+  return (event.requestContext?.http?.method || event.routeKey?.split(" ")[0] || "UNKNOWN") as HttpMethod | "UNKNOWN";
+}
+
+function getEventPath(event: ApiEvent) {
+  const rawPath = event.rawPath || event.requestContext?.http?.path || "";
+  const clean = rawPath.split("?")[0] || "/";
+  return clean.length > 1 ? clean.replace(/\/+$/g, "") : clean;
+}
+
+function canonicalizeRoute(event: ApiEvent, method: HttpMethod | "UNKNOWN") {
+  if (method === "UNKNOWN") {
+    return event.routeKey || `UNKNOWN ${getEventPath(event)}`;
+  }
+  const path = getEventPath(event);
+  for (const route of ROUTE_TEMPLATES) {
+    if (route.method !== method) continue;
+    const params = matchRouteTemplate(route.template, path);
+    if (!params) continue;
+    event.pathParameters = { ...(event.pathParameters || {}), ...params };
+    return `${method} ${route.template}`;
+  }
+  return event.routeKey || `${method} ${path}`;
+}
+
+function matchRouteTemplate(template: string, path: string) {
+  const templateSegments = template.split("/").filter(Boolean);
+  const pathSegments = path.split("/").filter(Boolean);
+  if (templateSegments.length !== pathSegments.length) return null;
+  const params: Record<string, string> = {};
+  for (let index = 0; index < templateSegments.length; index += 1) {
+    const templateSegment = templateSegments[index];
+    const pathSegment = pathSegments[index];
+    const paramMatch = templateSegment.match(/^\{(.+)\}$/);
+    if (paramMatch) {
+      params[paramMatch[1]] = decodeURIComponent(pathSegment);
+      continue;
+    }
+    if (templateSegment !== pathSegment) return null;
+  }
+  return params;
+}
+
 export async function handler(event: ApiEvent) {
-  const method = (event.requestContext?.http?.method || event.routeKey?.split(" ")[0] || "UNKNOWN") as HttpMethod | "UNKNOWN";
-  const routeKey = event.routeKey || `${method} ${event.rawPath || event.requestContext?.http?.path || ""}`;
+  const method = getEventMethod(event);
+  const routeKey = canonicalizeRoute(event, method);
   responsePerfContext = { routeKey, startedAt: Date.now() };
 
   try {
@@ -798,6 +983,20 @@ export async function handler(event: ApiEvent) {
     switch (routeKey) {
       case "GET /api/realtime/config":
         return ok(getRealtimeConfig());
+      case "GET /api/vendor/orders":
+        return ok(await listVendorWorkspaceOrders(auth));
+      case "GET /api/vendor/orders/{vendorOrderId}":
+        return ok(await getVendorWorkspaceOrder(requirePath(event, "vendorOrderId"), auth));
+      case "PATCH /api/vendor/orders/{vendorOrderId}":
+        return ok(await updateVendorWorkspaceOrder(requirePath(event, "vendorOrderId"), getBody(event), auth));
+      case "PATCH /api/vendor/orders/{vendorOrderId}/lines":
+        return ok(await updateVendorWorkspaceLines(requirePath(event, "vendorOrderId"), getBody(event), auth));
+      case "PATCH /api/vendor/orders/{vendorOrderId}/lines/{lineId}":
+        return ok(await updateVendorWorkspaceLine(requirePath(event, "vendorOrderId"), requirePath(event, "lineId"), getBody(event), auth));
+      case "POST /api/vendor/orders/{vendorOrderId}/lines/{lineId}/proof":
+        return created(await submitVendorWorkspaceProof(requirePath(event, "vendorOrderId"), requirePath(event, "lineId"), getBody(event), auth));
+      case "POST /api/vendor/orders/{vendorOrderId}/package":
+        return created(await createVendorWorkspacePackage(requirePath(event, "vendorOrderId"), auth));
       case "GET /api/projects":
         return ok({ projects: await listProjects(event.queryStringParameters?.customerId, auth) });
       case "GET /api/projects/{projectId}":
@@ -930,6 +1129,9 @@ export async function handler(event: ApiEvent) {
 
 async function listProjects(customerId: string | undefined, auth: AuthContext) {
   const startedAt = Date.now();
+  if (isVendorRole(auth.profile?.role)) {
+    throw new HttpError(403, "Vendor users must use the Vendor Workspace API.");
+  }
   if (customerId) assertCustomerAccess(auth, customerId);
   if (customerId) {
     const customer = await findCustomerById(customerId);
@@ -1001,6 +1203,7 @@ type ProjectRecordBundle = ProjectSummaryChildCollections & {
   project: ProjectItem | null;
   creatives: ProjectCreativeAssetItem[];
   allocationOverrideRows: ProjectAllocationOverrideRowItem[];
+  vendorLineStatuses: ProjectVendorLineStatusItem[];
 };
 
 function emptyProjectSummaryChildCollections(): ProjectSummaryChildCollections {
@@ -3833,6 +4036,13 @@ function buildLiftProofLineShell(args: {
     proofCommentAttachmentCount: args.existing?.proofCommentAttachmentCount || 0,
     latestProofCommentAt: args.existing?.latestProofCommentAt || null,
     proofVersions: args.existing?.proofVersions || [],
+    vendorProofSubmittedAt: args.existing?.vendorProofSubmittedAt || null,
+    vendorProofSubmittedByName: args.existing?.vendorProofSubmittedByName || null,
+    vendorProofSubmittedByVendorAccountId: args.existing?.vendorProofSubmittedByVendorAccountId || null,
+    vendorProofFilename: args.existing?.vendorProofFilename || null,
+    vendorProofContentType: args.existing?.vendorProofContentType || null,
+    vendorProofSizeBytes: args.existing?.vendorProofSizeBytes ?? null,
+    vendorProofNote: args.existing?.vendorProofNote || null,
     createdAt: args.existing?.createdAt || args.syncedAt,
     updatedAt: args.syncedAt,
     updatedByName: args.actorName,
@@ -5228,6 +5438,7 @@ async function identifyShareParticipant(payload: Record<string, unknown>) {
       actorName: participant.displayName,
       isPlatformAdmin: false,
       customerIds: new Set<string>(),
+      vendorAccountIds: new Set<string>(),
       shareLink,
       participant,
     },
@@ -5335,6 +5546,7 @@ async function ensureInternalSandboxCustomer(actorName: string) {
     actorName,
     isPlatformAdmin: true,
     customerIds: new Set<string>(),
+    vendorAccountIds: new Set<string>(),
   }, {
     customerId: customer.id,
     name: customer.name,
@@ -5365,7 +5577,7 @@ async function loadProjectRecordBundle(projectId: string): Promise<ProjectRecord
   return parseProjectRecordBundle(items);
 }
 
-function parseProjectRecordBundle(items: Array<Record<string, any>>): ProjectRecordBundle {
+function parseProjectRecordBundle(items: Array<Record<string, unknown>>): ProjectRecordBundle {
   return {
     project: items.find((item): item is ProjectItem => item.entityType === "Project") || null,
     scope: items.find((item): item is ProjectScopeItem => item.entityType === "ProjectScope") || null,
@@ -5381,6 +5593,9 @@ function parseProjectRecordBundle(items: Array<Record<string, any>>): ProjectRec
     allocationOverrideRows: items
       .filter((item): item is ProjectAllocationOverrideRowItem => item.entityType === "ProjectAllocationOverrideRow")
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    vendorLineStatuses: items
+      .filter((item): item is ProjectVendorLineStatusItem => item.entityType === "ProjectVendorLineStatus")
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)),
     transit: items.find((item): item is ProjectTransitApprovalItem => item.entityType === "ProjectTransitApproval") || null,
   };
 }
@@ -5419,6 +5634,74 @@ async function listCustomerVendors(customerId: string) {
 async function findCustomerVendor(customerId: string, vendorId: string) {
   const items = await queryByPk(`CUSTOMER#${customerId}`, `VENDOR#${vendorId}`);
   return items.find((item): item is CustomerVendorItem => item.entityType === "CustomerVendor") || null;
+}
+
+async function findVendorAccount(vendorAccountId: string) {
+  const items = await queryByPk(`VENDORACCOUNT#${vendorAccountId}`, "PROFILE");
+  return items.find((item): item is VendorAccountItem => item.entityType === "VendorAccount") || null;
+}
+
+async function ensurePrimaryVendorAccount(settings?: AppSettingsItem | null, actorName = "System") {
+  const configured = settings ? hydrateAppSettings(settings, actorName) : hydrateAppSettings(await findAppSettings(), actorName);
+  const now = isoNow();
+  const existing = await findVendorAccount("vendor_primary_print");
+  const vendor: VendorAccountItem = {
+    entityType: "VendorAccount",
+    id: "vendor_primary_print",
+    name: configured.integrations.primaryPrintVendor.vendorName || "Primary Print Vendor",
+    accountType: "primary_print",
+    isActive: configured.integrations.primaryPrintVendor.enabled !== false,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+    updatedByName: actorName,
+  };
+  if (
+    !existing ||
+    existing.name !== vendor.name ||
+    existing.isActive !== vendor.isActive ||
+    existing.accountType !== vendor.accountType
+  ) {
+    await putCore(buildVendorAccountRecord(vendor));
+  }
+  return vendor;
+}
+
+function vendorAccountIdForCustomerVendor(customerId: string, vendorId: string) {
+  return `vendor_${customerId}_${vendorId}`.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+async function ensureCustomerVendorAccount(vendor: CustomerVendorItem, actorName = "System") {
+  const id = vendor.vendorAccountId || vendorAccountIdForCustomerVendor(vendor.customerId, vendor.id);
+  const now = isoNow();
+  const existing = await findVendorAccount(id);
+  const account: VendorAccountItem = {
+    entityType: "VendorAccount",
+    id,
+    name: vendor.name,
+    accountType: "external",
+    customerId: vendor.customerId,
+    customerVendorId: vendor.id,
+    contactName: vendor.contactName,
+    email: vendor.email,
+    phone: vendor.phone,
+    notes: vendor.notes,
+    isActive: vendor.isActive,
+    createdAt: existing?.createdAt || vendor.createdAt || now,
+    updatedAt: now,
+    updatedByName: actorName,
+  };
+  await putCore(buildVendorAccountRecord(account));
+  if (vendor.vendorAccountId !== id) {
+    await putCore(buildCustomerVendorRecord({ ...vendor, vendorAccountId: id }));
+  }
+  return account;
+}
+
+async function listProjectVendorLineStatuses(projectId: string) {
+  const items = await queryByPk(`PROJECT#${projectId}`, "VENDORLINE#");
+  return items
+    .filter((item): item is ProjectVendorLineStatusItem => item.entityType === "ProjectVendorLineStatus")
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
 }
 
 async function listInventoryForVenue(venueId: string) {
@@ -5527,6 +5810,1069 @@ async function listProjectAllocationOverrideRows(projectId: string) {
   return items
     .filter((item): item is ProjectAllocationOverrideRowItem => item.entityType === "ProjectAllocationOverrideRow")
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+type VendorWorkspaceLine = {
+  id: string;
+  projectId: string;
+  vendorOrderId: string;
+  vendorAccountId: string;
+  sourceType: "allocation_override" | "proof" | "assignment";
+  lineNumber: number | null;
+  proofLineId: string | null;
+  liftOrderLineId: number | null;
+  liftProofingId: number | null;
+  mediaVariantKey: string;
+  mediaVariantLabel: string;
+  productLabel: string;
+  quantity: number;
+  inventory: Array<{ id: string; inventoryId: string; mapName: string; unitNumber: string }>;
+  creative: {
+    id: string;
+    filename: string;
+    thumbUrl?: string | null;
+    fullUrl?: string | null;
+    contentType?: string | null;
+  } | null;
+  proof: {
+    status: ProofLineStatus;
+    lineStepNumber?: number | null;
+    liftProofStatus?: string | null;
+    thumbUrl?: string | null;
+    fullUrl?: string | null;
+    vendorSubmittedAt?: string | null;
+    vendorSubmittedByName?: string | null;
+    vendorAccountId?: string | null;
+    vendorFilename?: string | null;
+    vendorNote?: string | null;
+    sizeBytes?: number | null;
+  } | null;
+  productionStatus: VendorOrderStatus;
+  baselineProductionStatus: VendorOrderStatus;
+  workflow: {
+    stage: VendorWorkflowStage;
+    label: string;
+    canSubmitProof: boolean;
+    canUpdateProduction: boolean;
+    canUpdateShipping: boolean;
+    lockReason: string | null;
+  };
+  vendorReference: string;
+  note: string;
+  shippingCarrier: string;
+  trackingNumber: string;
+  shippedAt: string;
+  updatedAt: string;
+  updatedByName: string;
+};
+
+type VendorWorkspaceOrder = {
+  id: string;
+  projectId: string;
+  vendorAccountId: string;
+  vendorName: string;
+  project: {
+    id: string;
+    title: string;
+    projectMode: "live" | "internal_sandbox";
+    customerId: string;
+    customerName: string;
+    sourceCustomerName: string | null;
+    marketName: string;
+    venueName: string;
+    adspaceOrderNumber: string;
+    liftOrderId: string | null;
+    poNumber: string | null;
+    contractNumber: string | null;
+    artworkDueDate: string | null;
+    postDate: string | null;
+    orderSubmittedAt: string | null;
+  };
+  summary: {
+    lineCount: number;
+    inventoryCount: number;
+    status: VendorOrderStatus;
+    needsAttention: boolean;
+    latestActivityAt: string;
+    workflow: {
+      stage: VendorWorkflowStage;
+      label: string;
+      canGeneratePackage: boolean;
+      canUpdateProduction: boolean;
+      lockReason: string | null;
+    };
+  };
+  integrationHealth: {
+    route: "primary_print_vendor" | "external_vendor";
+    liftOrderId: string | null;
+    liftSync: ProjectLiftSyncSummary;
+    packageScope: "vendor";
+    healingAvailableToVendor: false;
+  };
+  shippingDestination: ResolvedShippingDestination;
+  lines: VendorWorkspaceLine[];
+  activity: Array<Record<string, unknown>>;
+};
+
+function buildVendorOrderId(projectId: string, vendorAccountId: string) {
+  return `${projectId}__${vendorAccountId}`;
+}
+
+function parseVendorOrderId(vendorOrderId: string) {
+  const [projectId, ...vendorParts] = vendorOrderId.split("__");
+  const vendorAccountId = vendorParts.join("__");
+  if (!projectId || !vendorAccountId) throw new HttpError(400, "Invalid vendor order id");
+  return { projectId, vendorAccountId };
+}
+
+function normalizeVendorOrderStatus(value: unknown): VendorOrderStatus | undefined {
+  const parsed = optionalString(value);
+  if (
+    parsed === "not_started" ||
+    parsed === "in_production" ||
+    parsed === "blocked" ||
+    parsed === "shipped" ||
+    parsed === "complete"
+  ) {
+    return parsed;
+  }
+  return undefined;
+}
+
+function vendorStatusRank(status: VendorOrderStatus) {
+  if (status === "blocked") return 0;
+  if (status === "not_started") return 1;
+  if (status === "in_production") return 2;
+  if (status === "shipped") return 3;
+  return 4;
+}
+
+function rollupVendorStatus(lines: Array<{ productionStatus: VendorOrderStatus }>): VendorOrderStatus {
+  if (!lines.length) return "not_started";
+  if (lines.some((line) => line.productionStatus === "blocked")) return "blocked";
+  if (lines.every((line) => line.productionStatus === "complete")) return "complete";
+  if (lines.every((line) => line.productionStatus === "shipped" || line.productionStatus === "complete")) return "shipped";
+  if (lines.some((line) => line.productionStatus === "in_production" || line.productionStatus === "shipped" || line.productionStatus === "complete")) {
+    return "in_production";
+  }
+  return "not_started";
+}
+
+function shippingDestinationHasValue(destination?: ShippingDestination | null) {
+  if (!destination) return false;
+  return Boolean(
+    destination.label ||
+    destination.company ||
+    destination.attention ||
+    destination.addressLine1 ||
+    destination.addressLine2 ||
+    destination.city ||
+    destination.region ||
+    destination.postalCode ||
+    destination.phone ||
+    destination.email ||
+    destination.instructions
+  );
+}
+
+function resolveShippingDestination(market: MarketItem | null | undefined, venue: VenueItem | null | undefined): ResolvedShippingDestination {
+  if (venue?.shippingDestinationOverrideEnabled && shippingDestinationHasValue(venue.shippingDestination)) {
+    return {
+      ...venue.shippingDestination,
+      configured: true,
+      source: "venue_override",
+      sourceLabel: `${venue.name} venue override`,
+    };
+  }
+  if (shippingDestinationHasValue(market?.shippingDestination)) {
+    return {
+      ...market?.shippingDestination,
+      configured: true,
+      source: "market_default",
+      sourceLabel: `${market?.name || "Market"} default`,
+    };
+  }
+  return {
+    configured: false,
+    source: "not_configured",
+    sourceLabel: "Not configured",
+  };
+}
+
+function vendorStatusFromProof(proof?: ProjectProofLineItem | null): VendorOrderStatus {
+  const step = optionalNumber(proof?.lineStepNumber);
+  if (step != null && step >= LIFT_COMPLETED_STEP) return "complete";
+  if (step != null && step >= LIFT_IN_PRODUCTION_STEP) return "in_production";
+  return "not_started";
+}
+
+function isVendorOrderSubmitted(project: ProjectItem) {
+  return Boolean(project.orderSubmittedAt || project.liftOrderId);
+}
+
+function isVendorProgressStatus(status?: VendorOrderStatus | null) {
+  return status === "in_production" || status === "shipped" || status === "complete";
+}
+
+function buildVendorLineWorkflow(args: {
+  project: ProjectItem;
+  proof?: ProjectProofLineItem | null;
+  proofLineId?: string | null;
+  hasCreative: boolean;
+  productionStatus: VendorOrderStatus;
+  baselineProductionStatus: VendorOrderStatus;
+}): VendorWorkspaceLine["workflow"] {
+  const submitted = isVendorOrderSubmitted(args.project);
+  const proofApproved =
+    args.proof?.status === "approved" ||
+    String(args.proof?.liftProofStatus || "").toUpperCase() === "APPROVED" ||
+    isVendorProgressStatus(args.baselineProductionStatus);
+  const proofSubmitted =
+    Boolean(args.proof?.proofObjectKey || args.proof?.liftProofFullUrl || args.proof?.liftProofThumbUrl || args.proof?.vendorProofSubmittedAt) ||
+    args.proof?.status === "pending";
+  const productionReady = submitted && (proofApproved || Boolean(args.project.productionReleasedAt));
+  const canSubmitProof = submitted && Boolean(args.proofLineId) && !proofApproved && !args.project.productionReleasedAt;
+  const lockReason = !submitted
+    ? "Order has not been submitted to print yet. Vendor actions unlock after Adspace releases the order."
+    : productionReady
+    ? null
+    : canSubmitProof
+    ? null
+    : "Production updates unlock after the client approves the proof.";
+
+  if (!submitted) {
+    return {
+      stage: "incoming",
+      label: "Incoming",
+      canSubmitProof: false,
+      canUpdateProduction: false,
+      canUpdateShipping: false,
+      lockReason,
+    };
+  }
+  if (args.productionStatus === "blocked") {
+    return {
+      stage: "blocked",
+      label: "Blocked",
+      canSubmitProof,
+      canUpdateProduction: productionReady,
+      canUpdateShipping: productionReady,
+      lockReason,
+    };
+  }
+  if (args.productionStatus === "complete") {
+    return {
+      stage: "complete",
+      label: "Complete",
+      canSubmitProof: false,
+      canUpdateProduction: productionReady,
+      canUpdateShipping: productionReady,
+      lockReason: null,
+    };
+  }
+  if (args.productionStatus === "shipped") {
+    return {
+      stage: "shipped",
+      label: "Shipped",
+      canSubmitProof: false,
+      canUpdateProduction: productionReady,
+      canUpdateShipping: productionReady,
+      lockReason: null,
+    };
+  }
+  if (args.productionStatus === "in_production" || isVendorProgressStatus(args.baselineProductionStatus)) {
+    return {
+      stage: "in_production",
+      label: "In Production",
+      canSubmitProof: false,
+      canUpdateProduction: productionReady,
+      canUpdateShipping: productionReady,
+      lockReason: null,
+    };
+  }
+  if (productionReady) {
+    return {
+      stage: "production_ready",
+      label: "Ready for Production",
+      canSubmitProof: false,
+      canUpdateProduction: true,
+      canUpdateShipping: true,
+      lockReason: null,
+    };
+  }
+  if (proofSubmitted) {
+    return {
+      stage: "client_review",
+      label: "Client Review",
+      canSubmitProof,
+      canUpdateProduction: false,
+      canUpdateShipping: false,
+      lockReason,
+    };
+  }
+  return {
+    stage: "needs_proof",
+    label: args.hasCreative ? "Needs Vendor Proof" : "Artwork Pending",
+    canSubmitProof,
+    canUpdateProduction: false,
+    canUpdateShipping: false,
+    lockReason,
+  };
+}
+
+function rollupVendorWorkflow(
+  project: ProjectItem,
+  lines: VendorWorkspaceLine[],
+  status: VendorOrderStatus
+): VendorWorkspaceOrder["summary"]["workflow"] {
+  const submitted = isVendorOrderSubmitted(project);
+  if (!submitted) {
+    return {
+      stage: "incoming",
+      label: "Incoming",
+      canGeneratePackage: false,
+      canUpdateProduction: false,
+      lockReason: "Order has not been submitted to print yet.",
+    };
+  }
+  if (status === "blocked") {
+    return {
+      stage: "blocked",
+      label: "Blocked",
+      canGeneratePackage: true,
+      canUpdateProduction: lines.some((line) => line.workflow.canUpdateProduction),
+      lockReason: null,
+    };
+  }
+  if (status === "complete") {
+    return { stage: "complete", label: "Complete", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+  }
+  if (status === "shipped") {
+    return { stage: "shipped", label: "Shipped", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+  }
+  if (lines.some((line) => line.workflow.stage === "in_production")) {
+    return { stage: "in_production", label: "In Production", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+  }
+  if (lines.some((line) => line.workflow.stage === "production_ready")) {
+    return { stage: "production_ready", label: "Ready for Production", canGeneratePackage: true, canUpdateProduction: true, lockReason: null };
+  }
+  if (lines.some((line) => line.workflow.stage === "client_review")) {
+    return {
+      stage: "client_review",
+      label: "Client Review",
+      canGeneratePackage: true,
+      canUpdateProduction: false,
+      lockReason: "Production updates unlock after the client approves the proof.",
+    };
+  }
+  return {
+    stage: "needs_proof",
+    label: "Needs Vendor Proof",
+    canGeneratePackage: true,
+    canUpdateProduction: false,
+    lockReason: null,
+  };
+}
+
+async function getVendorAccountForVariant(
+  variant: MediaVariantItem | undefined,
+  customerId: string,
+  customerVendorsById: Map<string, CustomerVendorItem>,
+  primaryVendor: VendorAccountItem,
+  actorName: string
+) {
+  if (variant?.productionRouting === "external" && variant.externalVendorId) {
+    const customerVendor = customerVendorsById.get(variant.externalVendorId);
+    if (customerVendor?.isActive) return ensureCustomerVendorAccount(customerVendor, actorName);
+  }
+  return primaryVendor;
+}
+
+async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAccountIds?: Set<string>, actorName = "System") {
+  const bundle = await loadProjectRecordBundle(project.id);
+  if (!bundle.project) return [];
+  const [inventory, variants, customerVendors, settings, events, market, venue] = await Promise.all([
+    listInventoryForVenue(project.venueId),
+    listVariantsForVenue(project.venueId),
+    listCustomerVendors(project.customerId).catch(() => [] as CustomerVendorItem[]),
+    findAppSettings(),
+    rawListProjectAuditEvents(project.id).catch(() => [] as Array<Record<string, unknown>>),
+    findMarketById(project.marketId).catch(() => null),
+    findVenueById(project.venueId).catch(() => null),
+  ]);
+  const shippingDestination = resolveShippingDestination(market, venue);
+  const hydratedSettings = hydrateAppSettings(settings, actorName);
+  const primaryVendor = await ensurePrimaryVendorAccount(hydratedSettings, actorName);
+  const customerVendorsById = new Map(customerVendors.map((vendor) => [vendor.id, vendor] as const));
+  const variantsByKey = new Map(variants.map((variant) => [variant.mediaVariantKey, variant] as const));
+  const inventoryById = new Map(inventory.map((item) => [item.id, item] as const));
+  const assignmentsByInventoryId = new Map(bundle.assignments.map((assignment) => [assignment.inventoryId, assignment] as const));
+  const creativesById = new Map(bundle.creatives.map((creative) => [creative.id, creative] as const));
+  const proofById = new Map(bundle.proofLines.map((proof) => [proof.id, proof] as const));
+  const statusByLineId = new Map(
+    bundle.vendorLineStatuses.map((status) => [`${status.vendorAccountId}:${status.vendorLineId}`, status] as const)
+  );
+  const signedUrlCache = new Map<string, Promise<string>>();
+  const grouped = new Map<string, VendorWorkspaceLine[]>();
+
+  async function addLine(args: {
+    id: string;
+    sourceType: "allocation_override" | "proof" | "assignment";
+    mediaVariantKey: string;
+    assignedInventoryIds: string[];
+    creativeId?: string | null;
+    proof?: ProjectProofLineItem | null;
+    productLabel?: string;
+    quantity?: number | null;
+    asset?: { filename?: string | null; thumbUrl?: string | null; fullUrl?: string | null; contentType?: string | null } | null;
+    overrideUpdatedAt?: string | null;
+  }) {
+    const variant = variantsByKey.get(args.mediaVariantKey);
+    const vendor = await getVendorAccountForVariant(variant, project.customerId, customerVendorsById, primaryVendor, actorName);
+    if (allowedVendorAccountIds && !allowedVendorAccountIds.has(vendor.id)) return;
+    const vendorOrderId = buildVendorOrderId(project.id, vendor.id);
+    const status = statusByLineId.get(`${vendor.id}:${args.id}`);
+    const creative = args.creativeId ? creativesById.get(args.creativeId) || null : null;
+    const creativeAsset = creative ? await toWorkspaceCreative(creative, args.assignedInventoryIds) : null;
+    const proofAsset = args.proof
+      ? await toProjectProofLineResponse(args.proof, variants, creativesById, signedUrlCache)
+      : null;
+    const assignedInventory = args.assignedInventoryIds
+      .map((inventoryId) => inventoryById.get(inventoryId))
+      .filter((item): item is InventoryItem => !!item);
+    const baselineStatus = vendorStatusFromProof(args.proof);
+    const productionStatus = status?.productionStatus || baselineStatus;
+    const hasCreative = Boolean(args.asset?.fullUrl || args.asset?.thumbUrl || creativeAsset?.fullUrl || creativeAsset?.thumbUrl);
+    const workflow = buildVendorLineWorkflow({
+      project,
+      proof: args.proof,
+      proofLineId: args.proof?.id || null,
+      hasCreative,
+      productionStatus,
+      baselineProductionStatus: baselineStatus,
+    });
+    const line: VendorWorkspaceLine = {
+      id: args.id,
+      projectId: project.id,
+      vendorOrderId,
+      vendorAccountId: vendor.id,
+      sourceType: args.sourceType,
+      lineNumber: args.proof?.lineNumber ?? null,
+      proofLineId: args.proof?.id || null,
+      liftOrderLineId: args.proof?.liftOrderLineId ?? null,
+      liftProofingId: args.proof?.liftProofingId ?? null,
+      mediaVariantKey: args.mediaVariantKey,
+      mediaVariantLabel: variant?.label || args.proof?.mediaVariantLabel || formatVariantLabel(args.mediaVariantKey),
+      productLabel: args.productLabel || variant?.label || args.proof?.mediaVariantLabel || formatVariantLabel(args.mediaVariantKey),
+      quantity: args.quantity ?? args.proof?.quantity ?? Math.max(1, assignedInventory.length),
+      inventory: assignedInventory.map((item) => ({
+        id: item.id,
+        inventoryId: item.inventoryId,
+        mapName: item.mapName || "",
+        unitNumber: item.unitNumber || "",
+      })),
+      creative: args.asset?.fullUrl || args.asset?.thumbUrl
+        ? {
+            id: creative?.id || args.creativeId || "",
+            filename: args.asset.filename || creative?.filename || args.proof?.clientFileName || "Artwork",
+            thumbUrl: args.asset.thumbUrl || null,
+            fullUrl: args.asset.fullUrl || null,
+            contentType: args.asset.contentType || creative?.contentType || null,
+          }
+        : creativeAsset
+        ? {
+            id: creativeAsset.id,
+            filename: creativeAsset.filename,
+            thumbUrl: creativeAsset.thumbUrl,
+            fullUrl: creativeAsset.fullUrl,
+            contentType: creativeAsset.contentType || null,
+          }
+        : null,
+          proof: proofAsset
+        ? {
+            status: proofAsset.status,
+            lineStepNumber: proofAsset.lineStepNumber,
+            liftProofStatus: proofAsset.liftProofStatus,
+            thumbUrl: proofAsset.proofThumbUrl,
+            fullUrl: proofAsset.proofFullUrl,
+            vendorSubmittedAt: proofAsset.vendorProofSubmittedAt,
+            vendorSubmittedByName: proofAsset.vendorProofSubmittedByName,
+            vendorAccountId: proofAsset.vendorProofSubmittedByVendorAccountId,
+            vendorFilename: proofAsset.vendorProofFilename,
+            vendorNote: proofAsset.vendorProofNote,
+            sizeBytes: proofAsset.vendorProofSizeBytes,
+          }
+        : null,
+      productionStatus,
+      baselineProductionStatus: baselineStatus,
+      workflow,
+      vendorReference: status?.vendorReference || "",
+      note: status?.note || "",
+      shippingCarrier: status?.shippingCarrier || "",
+      trackingNumber: status?.trackingNumber || "",
+      shippedAt: status?.shippedAt || "",
+      updatedAt: status?.updatedAt || args.overrideUpdatedAt || args.proof?.updatedAt || project.updatedAt,
+      updatedByName: status?.updatedByName || "",
+    };
+    const lines = grouped.get(vendor.id) || [];
+    lines.push(line);
+    grouped.set(vendor.id, lines);
+  }
+
+  const activeOverrides = bundle.allocationOverrideRows.filter((row) => !row.hidden);
+  if (activeOverrides.length) {
+    const hydratedOverrides = await hydrateAllocationOverrideRows(activeOverrides, {
+      proofById,
+      creativeById: creativesById,
+      variants,
+      signedUrlCache,
+    });
+    for (const row of hydratedOverrides) {
+      const proof = row.sourceProofLineId ? proofById.get(row.sourceProofLineId) || null : null;
+      await addLine({
+        id: `override_${row.id}`,
+        sourceType: "allocation_override",
+        mediaVariantKey: row.mediaVariantKey,
+        assignedInventoryIds: row.assignedInventoryIds || [],
+        creativeId: row.sourceCreativeId || proof?.clientCreativeId || null,
+        proof,
+        productLabel: row.productLabel,
+        quantity: row.quantity,
+        asset: row.asset,
+        overrideUpdatedAt: row.updatedAt,
+      });
+    }
+  } else if (bundle.proofLines.length) {
+    for (const proof of bundle.proofLines) {
+      await addLine({
+        id: `proof_${proof.id}`,
+        sourceType: "proof",
+        mediaVariantKey: proof.mediaVariantKey,
+        assignedInventoryIds: proof.locations || [],
+        creativeId: proof.clientCreativeId,
+        proof,
+        productLabel: proof.mediaVariantLabel || formatVariantLabel(proof.mediaVariantKey),
+        quantity: proof.quantity ?? null,
+      });
+    }
+  } else {
+    const scopedIds = new Set(bundle.scope?.includedIds || []);
+    for (const inventoryId of Array.from(scopedIds)) {
+      const item = inventoryById.get(inventoryId);
+      if (!item) continue;
+      const assignment = assignmentsByInventoryId.get(inventoryId);
+      if (!assignment?.creativeId) continue;
+      await addLine({
+        id: `assignment_${inventoryId}`,
+        sourceType: "assignment",
+        mediaVariantKey: item.mediaVariantKey,
+        assignedInventoryIds: [inventoryId],
+        creativeId: assignment.creativeId,
+        productLabel: item.variantLabel || formatVariantLabel(item.mediaVariantKey),
+        quantity: 1,
+      });
+    }
+  }
+
+  const orders = Array.from(grouped.entries()).map(([vendorAccountId, rawLines]) => {
+    const vendor = vendorAccountId === primaryVendor.id
+      ? primaryVendor
+      : customerVendors
+          .map((customerVendor) => ({
+            customerVendor,
+            vendorAccountId: customerVendor.vendorAccountId || vendorAccountIdForCustomerVendor(customerVendor.customerId, customerVendor.id),
+          }))
+          .find((item) => item.vendorAccountId === vendorAccountId)?.customerVendor;
+    const lines = rawLines.slice().sort((a, b) => vendorStatusRank(a.productionStatus) - vendorStatusRank(b.productionStatus) || String(a.lineNumber || a.id).localeCompare(String(b.lineNumber || b.id)));
+    const vendorName = vendorAccountId === primaryVendor.id ? primaryVendor.name : vendor?.name || vendorAccountId;
+    const vendorEvents = events.filter((event) => {
+      const detail = typeof event.detail === "object" && event.detail ? event.detail as Record<string, unknown> : {};
+      return detail.vendorAccountId === vendorAccountId || detail.vendorOrderId === buildVendorOrderId(project.id, vendorAccountId);
+    });
+    const rollupStatus = rollupVendorStatus(lines);
+    const workflow = rollupVendorWorkflow(project, lines, rollupStatus);
+    const latestActivityAt =
+      [project.updatedAt, ...lines.map((line) => line.updatedAt), ...vendorEvents.map((event) => String(event.createdAt || ""))]
+        .filter(Boolean)
+        .sort()
+        .at(-1) || project.updatedAt;
+
+    const order: VendorWorkspaceOrder = {
+      id: buildVendorOrderId(project.id, vendorAccountId),
+      projectId: project.id,
+      vendorAccountId,
+      vendorName,
+      project: {
+        id: project.id,
+        title: project.title,
+        projectMode: project.projectMode || "live",
+        customerId: project.customerId,
+        customerName: project.customerName,
+        sourceCustomerName: project.sourceCustomerName || null,
+        marketName: project.marketName,
+        venueName: project.venueName,
+        adspaceOrderNumber: getProjectAdspaceOrderNumber(project),
+        liftOrderId: project.liftOrderId || null,
+        poNumber: project.poNumber || null,
+        contractNumber: project.contractNumber || null,
+        artworkDueDate: project.artworkDueDate || null,
+        postDate: project.postDate || null,
+        orderSubmittedAt: project.orderSubmittedAt || null,
+      },
+      summary: {
+        lineCount: lines.length,
+        inventoryCount: lines.reduce((sum, line) => sum + line.inventory.length, 0),
+        status: rollupStatus,
+        needsAttention: lines.some((line) => line.productionStatus === "blocked" || line.workflow.stage === "needs_proof"),
+        latestActivityAt,
+        workflow,
+      },
+      integrationHealth: {
+        route: vendorAccountId === primaryVendor.id ? "primary_print_vendor" : "external_vendor",
+        liftOrderId: project.liftOrderId || null,
+        liftSync: deriveProjectLiftSyncSummary(project, bundle.proofLines),
+        packageScope: "vendor",
+        healingAvailableToVendor: false,
+      },
+      shippingDestination,
+      lines,
+      activity: vendorEvents.slice(0, 25),
+    };
+    return order;
+  });
+
+  return orders.filter((order) => order.lines.length > 0);
+}
+
+async function listVendorWorkspaceOrders(auth: AuthContext) {
+  assertVendorWorkspaceUser(auth);
+  const vendorAccountIds = auth.vendorAccountIds;
+  const projects = (await scanByEntityType("Project"))
+    .filter((item): item is ProjectItem => item.entityType === "Project")
+    .filter((project) => project.projectMode !== "internal_sandbox")
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const ordersByProject = await Promise.all(
+    projects.map((project) => buildVendorOrdersForProject(project, vendorAccountIds, auth.actorName))
+  );
+  const orders = ordersByProject.flat().sort((a, b) => b.summary.latestActivityAt.localeCompare(a.summary.latestActivityAt));
+  return {
+    vendor: await getVendorViewer(auth),
+    orders: orders.map((order) => ({
+      id: order.id,
+      vendorAccountId: order.vendorAccountId,
+      vendorName: order.vendorName,
+      project: order.project,
+      summary: order.summary,
+      integrationHealth: order.integrationHealth,
+    })),
+  };
+}
+
+async function getVendorWorkspaceOrder(vendorOrderId: string, auth: AuthContext) {
+  assertVendorWorkspaceUser(auth);
+  const { projectId, vendorAccountId } = parseVendorOrderId(vendorOrderId);
+  assertVendorAccountAccess(auth, vendorAccountId);
+  const project = await findProjectById(projectId);
+  if (!project || project.projectMode === "internal_sandbox") throw new HttpError(404, "Vendor order not found");
+  const orders = await buildVendorOrdersForProject(project, new Set([vendorAccountId]), auth.actorName);
+  const order = orders.find((item) => item.id === vendorOrderId);
+  if (!order) throw new HttpError(404, "Vendor order not found");
+  const documents = (await listProjectDocuments(projectId)).filter((document) => document.vendorOrderId === vendorOrderId);
+  return {
+    vendor: await getVendorViewer(auth),
+    order: {
+      ...order,
+      documents: await Promise.all(documents.map((document) => toProjectDocumentResponse(document))),
+    },
+  };
+}
+
+async function updateVendorWorkspaceOrder(vendorOrderId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  const current = await getVendorWorkspaceOrder(vendorOrderId, auth);
+  const statusPatch = buildVendorLineStatusPatch(payload);
+  if (!Object.keys(statusPatch).length) {
+    throw new HttpError(400, "At least one vendor status field is required");
+  }
+  current.order.lines.forEach((line) => assertVendorLineStatusPatchAllowed(line, statusPatch));
+  await Promise.all(
+    current.order.lines.map((line) => upsertVendorLineStatus(current.order.projectId, vendorOrderId, line.id, current.order.vendorAccountId, statusPatch, auth))
+  );
+  await writeAudit(`PROJECT#${current.order.projectId}`, "vendor.order.updated", auth, {
+    vendorOrderId,
+    vendorAccountId: current.order.vendorAccountId,
+    changes: statusPatch,
+  });
+  return getVendorWorkspaceOrder(vendorOrderId, auth);
+}
+
+async function updateVendorWorkspaceLines(vendorOrderId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  const current = await getVendorWorkspaceOrder(vendorOrderId, auth);
+  const lineIds = Array.isArray(payload.lineIds)
+    ? Array.from(new Set(payload.lineIds.filter((lineId): lineId is string => typeof lineId === "string" && Boolean(lineId.trim()))))
+    : [];
+  if (!lineIds.length) throw new HttpError(400, "At least one vendor line is required");
+  const allowedLineIds = new Set(current.order.lines.map((line) => line.id));
+  const forbiddenLineIds = lineIds.filter((lineId) => !allowedLineIds.has(lineId));
+  if (forbiddenLineIds.length) throw new HttpError(404, "One or more vendor lines were not found");
+  const updatePayload = typeof payload.update === "object" && payload.update ? payload.update as Record<string, unknown> : payload;
+  const statusPatch = buildVendorLineStatusPatch(updatePayload);
+  if (!Object.keys(statusPatch).length) {
+    throw new HttpError(400, "At least one vendor status field is required");
+  }
+  lineIds.forEach((lineId) => {
+    const line = current.order.lines.find((item) => item.id === lineId);
+    if (line) assertVendorLineStatusPatchAllowed(line, statusPatch);
+  });
+  await Promise.all(
+    lineIds.map((lineId) => upsertVendorLineStatus(current.order.projectId, vendorOrderId, lineId, current.order.vendorAccountId, statusPatch, auth))
+  );
+  await writeAudit(`PROJECT#${current.order.projectId}`, "vendor.lines.bulk_updated", auth, {
+    vendorOrderId,
+    vendorAccountId: current.order.vendorAccountId,
+    vendorLineIds: lineIds,
+    lineCount: lineIds.length,
+    changes: statusPatch,
+  });
+  return getVendorWorkspaceOrder(vendorOrderId, auth);
+}
+
+async function updateVendorWorkspaceLine(vendorOrderId: string, lineId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  const current = await getVendorWorkspaceOrder(vendorOrderId, auth);
+  const line = current.order.lines.find((item) => item.id === lineId);
+  if (!line) throw new HttpError(404, "Vendor line not found");
+  const statusPatch = buildVendorLineStatusPatch(payload);
+  if (!Object.keys(statusPatch).length) {
+    throw new HttpError(400, "At least one vendor status field is required");
+  }
+  assertVendorLineStatusPatchAllowed(line, statusPatch);
+  await upsertVendorLineStatus(current.order.projectId, vendorOrderId, lineId, current.order.vendorAccountId, statusPatch, auth);
+  await writeAudit(`PROJECT#${current.order.projectId}`, "vendor.line.updated", auth, {
+    vendorOrderId,
+    vendorAccountId: current.order.vendorAccountId,
+    vendorLineId: lineId,
+    changes: statusPatch,
+  });
+  return getVendorWorkspaceOrder(vendorOrderId, auth);
+}
+
+async function submitVendorWorkspaceProof(vendorOrderId: string, lineId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  const current = await getVendorWorkspaceOrder(vendorOrderId, auth);
+  const line = current.order.lines.find((item) => item.id === lineId);
+  if (!line) throw new HttpError(404, "Vendor line not found");
+  if (!line.proofLineId) {
+    throw new HttpError(400, "This vendor line is not linked to an Adspace proof line yet");
+  }
+  if (!line.workflow.canSubmitProof) {
+    throw new HttpError(400, line.workflow.lockReason || "Proof submission is not available for this vendor line");
+  }
+
+  const project = await findProjectById(current.order.projectId);
+  if (!project) throw new HttpError(404, "Vendor order project not found");
+  if (project.productionReleasedAt) throw new HttpError(400, "Proof submission is locked after production release");
+
+  const proof = await findProjectProofLineById(current.order.projectId, line.proofLineId);
+  if (!proof) throw new HttpError(404, "Linked proof line not found");
+
+  const proofObjectKey = optionalString(payload.proofObjectKey);
+  if (!proofObjectKey) throw new HttpError(400, "proofObjectKey is required");
+  if (!proofObjectKey.startsWith(`proofs/${current.order.projectId}/`)) {
+    throw new HttpError(400, "Proof file must be uploaded to this project proof package");
+  }
+  const proofThumbObjectKey = optionalString(payload.proofThumbObjectKey) || undefined;
+  if (proofThumbObjectKey && !proofThumbObjectKey.startsWith(`proofs/${current.order.projectId}/`)) {
+    throw new HttpError(400, "Proof thumbnail must be uploaded to this project proof package");
+  }
+
+  const now = isoNow();
+  const filename = optionalString(payload.filename) || "Vendor proof";
+  const note = optionalString(payload.note) || null;
+  const existingVersions =
+    proof.proofObjectKey || proof.liftProofFullUrl || proof.liftProofThumbUrl
+      ? mergeStoredProofVersion(proof.proofVersions || [], buildStoredProofVersionFromLine(proof, now))
+      : proof.proofVersions || [];
+  const nextProof: ProjectProofLineItem = {
+    ...proof,
+    status: "pending",
+    proofObjectKey,
+    proofThumbObjectKey,
+    liftProofThumbUrl: null,
+    liftProofFullUrl: null,
+    liftProofStatus: null,
+    vendorProofSubmittedAt: now,
+    vendorProofSubmittedByName: auth.actorName,
+    vendorProofSubmittedByVendorAccountId: current.order.vendorAccountId,
+    vendorProofFilename: filename,
+    vendorProofContentType: optionalString(payload.contentType) || null,
+    vendorProofSizeBytes: optionalNumber(payload.sizeBytes) ?? null,
+    vendorProofNote: note,
+    proofVersions: existingVersions,
+    updatedAt: now,
+    updatedByName: auth.actorName,
+  };
+
+  await putCore(buildProjectProofLineRecord(nextProof));
+  invalidateProjectResponseCaches();
+  await writeAudit(`PROJECT#${current.order.projectId}`, "vendor.proof.submitted", auth, {
+    vendorOrderId,
+    vendorAccountId: current.order.vendorAccountId,
+    vendorLineId: line.id,
+    lineItemId: proof.id,
+    lineNumber: proof.lineNumber,
+    filename,
+    sizeBytes: nextProof.vendorProofSizeBytes,
+    note,
+  });
+  await broadcastWorkspaceChangeBestEffort({
+    projectId: current.order.projectId,
+    workspace: "proofs",
+    eventType: "vendor.proof.submitted",
+    summary: `${auth.actorName} submitted a vendor proof for line ${proof.lineNumber}.`,
+    auth,
+    originSessionId: null,
+    occurredAt: now,
+    detail: {
+      vendorOrderId,
+      vendorLineId: line.id,
+      lineItemId: proof.id,
+      lineNumber: proof.lineNumber,
+      status: nextProof.status,
+      filename,
+    },
+  });
+
+  return getVendorWorkspaceOrder(vendorOrderId, auth);
+}
+
+function buildVendorLineStatusPatch(payload: Record<string, unknown>) {
+  const patch: Partial<ProjectVendorLineStatusItem> = {};
+  if (hasOwn(payload, "productionStatus")) {
+    const status = normalizeVendorOrderStatus(payload.productionStatus);
+    if (!status) throw new HttpError(400, "Invalid production status");
+    patch.productionStatus = status;
+  }
+  if (hasOwn(payload, "vendorReference")) patch.vendorReference = optionalString(payload.vendorReference) || null;
+  if (hasOwn(payload, "note")) patch.note = optionalString(payload.note) || null;
+  if (hasOwn(payload, "shippingCarrier")) patch.shippingCarrier = optionalString(payload.shippingCarrier) || null;
+  if (hasOwn(payload, "trackingNumber")) patch.trackingNumber = optionalString(payload.trackingNumber) || null;
+  if (hasOwn(payload, "shippedAt")) patch.shippedAt = optionalString(payload.shippedAt) || null;
+  return patch;
+}
+
+function assertVendorLineStatusPatchAllowed(line: VendorWorkspaceLine, patch: Partial<ProjectVendorLineStatusItem>) {
+  if (line.workflow.stage === "incoming") {
+    throw new HttpError(400, line.workflow.lockReason || "Vendor actions are locked until this order is submitted to print");
+  }
+  if (hasOwn(patch, "productionStatus")) {
+    const nextStatus = patch.productionStatus;
+    if (isVendorProgressStatus(nextStatus) && !line.workflow.canUpdateProduction) {
+      throw new HttpError(400, line.workflow.lockReason || "Production status updates unlock after client proof approval");
+    }
+  }
+  const hasShippingUpdate =
+    hasOwn(patch, "shippingCarrier") ||
+    hasOwn(patch, "trackingNumber") ||
+    hasOwn(patch, "shippedAt");
+  if (hasShippingUpdate && !line.workflow.canUpdateShipping) {
+    throw new HttpError(400, line.workflow.lockReason || "Shipping updates unlock after client proof approval");
+  }
+}
+
+async function upsertVendorLineStatus(
+  projectId: string,
+  vendorOrderId: string,
+  vendorLineId: string,
+  vendorAccountId: string,
+  patch: Partial<ProjectVendorLineStatusItem>,
+  auth: AuthContext
+) {
+  const existing = (await listProjectVendorLineStatuses(projectId)).find(
+    (status) => status.vendorAccountId === vendorAccountId && status.vendorLineId === vendorLineId
+  );
+  const now = isoNow();
+  const next: ProjectVendorLineStatusItem = {
+    entityType: "ProjectVendorLineStatus",
+    id: existing?.id || `${vendorAccountId}_${vendorLineId}`.replace(/[^A-Za-z0-9_-]/g, "_"),
+    projectId,
+    vendorOrderId,
+    vendorLineId,
+    vendorAccountId,
+    productionStatus: patch.productionStatus || existing?.productionStatus || "not_started",
+    vendorReference: hasOwn(patch, "vendorReference") ? patch.vendorReference || null : existing?.vendorReference || null,
+    note: hasOwn(patch, "note") ? patch.note || null : existing?.note || null,
+    shippingCarrier: hasOwn(patch, "shippingCarrier") ? patch.shippingCarrier || null : existing?.shippingCarrier || null,
+    trackingNumber: hasOwn(patch, "trackingNumber") ? patch.trackingNumber || null : existing?.trackingNumber || null,
+    shippedAt: hasOwn(patch, "shippedAt") ? patch.shippedAt || null : existing?.shippedAt || null,
+    updatedAt: now,
+    updatedByName: auth.actorName,
+  };
+  await putCore(buildProjectVendorLineStatusRecord(next));
+  invalidateProjectResponseCaches();
+  return next;
+}
+
+async function createVendorWorkspacePackage(vendorOrderId: string, auth: AuthContext) {
+  const current = await getVendorWorkspaceOrder(vendorOrderId, auth);
+  if (!current.order.summary.workflow.canGeneratePackage) {
+    throw new HttpError(400, current.order.summary.workflow.lockReason || "Vendor package generation is locked until this order is submitted to print");
+  }
+  if (!GENERATED_DOCS_BUCKET_NAME) throw new HttpError(500, "Generated documents bucket is not configured.");
+  const project = await findProjectById(current.order.projectId);
+  if (!project) throw new HttpError(404, "Vendor order project not found");
+  const creatives = await listProjectCreatives(project.id);
+  const creativesById = new Map(creatives.map((creative) => [creative.id, creative] as const));
+  const now = isoNow();
+  const adspaceOrderNumber = getProjectAdspaceOrderNumber(project);
+  const zip = new JSZip();
+  const usedFilenames = new Map<string, number>();
+  const packageFiles: Array<{ creativeId: string; filename: string; packagePath: string; sizeBytes?: number | null; contentType?: string | null }> = [];
+  const missingFiles: Array<{ creativeId: string; filename: string; reason: string }> = [];
+  const rows = current.order.lines.map((line) => ({
+    vendor_order_id: current.order.id,
+    vendor_account_id: current.order.vendorAccountId,
+    vendor_name: current.order.vendorName,
+    project_id: current.order.projectId,
+    project_title: current.order.project.title,
+    as360_order_number: current.order.project.adspaceOrderNumber,
+    lift_order_id: current.order.project.liftOrderId || "",
+    line_id: line.id,
+    source_type: line.sourceType,
+    proof_line_id: line.proofLineId || "",
+    lift_order_line_id: line.liftOrderLineId || "",
+    media_variant_key: line.mediaVariantKey,
+    media_variant_label: line.mediaVariantLabel,
+    product_label: line.productLabel,
+    quantity: line.quantity,
+    inventory_ids: line.inventory.map((item) => item.inventoryId).join("|"),
+    inventory_record_ids: line.inventory.map((item) => item.id).join("|"),
+    creative_id: line.creative?.id || "",
+    filename: line.creative?.filename || "",
+    production_status: line.productionStatus,
+    vendor_reference: line.vendorReference || "",
+    shipping_carrier: line.shippingCarrier || "",
+    tracking_number: line.trackingNumber || "",
+    ship_to_source: current.order.shippingDestination.source,
+    ship_to_label: current.order.shippingDestination.label || "",
+    ship_to_company: current.order.shippingDestination.company || "",
+    ship_to_attention: current.order.shippingDestination.attention || "",
+    ship_to_address_1: current.order.shippingDestination.addressLine1 || "",
+    ship_to_address_2: current.order.shippingDestination.addressLine2 || "",
+    ship_to_city: current.order.shippingDestination.city || "",
+    ship_to_region: current.order.shippingDestination.region || "",
+    ship_to_postal_code: current.order.shippingDestination.postalCode || "",
+    ship_to_country: current.order.shippingDestination.country || "",
+    ship_to_phone: current.order.shippingDestination.phone || "",
+    ship_to_email: current.order.shippingDestination.email || "",
+    ship_to_instructions: current.order.shippingDestination.instructions || "",
+  }));
+  const creativeIds = Array.from(new Set(rows.map((row) => row.creative_id).filter(Boolean)));
+
+  for (const creativeId of creativeIds) {
+    const creative = creativesById.get(creativeId);
+    if (!creative) {
+      missingFiles.push({ creativeId, filename: creativeId, reason: "Artwork asset is not available for packaging" });
+      continue;
+    }
+    const packageFilename = uniquePackageFilename(creative.filename, usedFilenames);
+    const packagePath = `artwork/${packageFilename}`;
+    try {
+      const content = await getS3ObjectBuffer(creative.bucketName, creative.objectKey);
+      zip.file(packagePath, content);
+      packageFiles.push({
+        creativeId: creative.id,
+        filename: creative.filename,
+        packagePath,
+        sizeBytes: creative.sizeBytes ?? content.length,
+        contentType: creative.contentType || null,
+      });
+    } catch (error) {
+      missingFiles.push({
+        creativeId: creative.id,
+        filename: creative.filename,
+        reason: error instanceof Error ? error.message : "Unable to read artwork asset",
+      });
+    }
+  }
+
+  const manifest = {
+    generatedAt: now,
+    generatedByName: auth.actorName,
+    scope: "vendor",
+    vendor: {
+      orderId: current.order.id,
+      accountId: current.order.vendorAccountId,
+      name: current.order.vendorName,
+    },
+    project: current.order.project,
+    shippingDestination: current.order.shippingDestination,
+    summary: {
+      lineCount: current.order.lines.length,
+      packagedFileCount: packageFiles.length,
+      missingFileCount: missingFiles.length,
+      inventoryCount: rows.reduce((sum, row) => sum + String(row.inventory_record_ids || "").split("|").filter(Boolean).length, 0),
+    },
+    files: packageFiles,
+    missingFiles,
+    allocationRows: rows,
+  };
+
+  zip.file("manifest/creative-allocation.csv", buildCsv(Object.keys(rows[0] || { vendor_order_id: "" }), rows));
+  zip.file("manifest/creative-allocation.json", JSON.stringify(manifest, null, 2));
+
+  const zipBuffer = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+  });
+  const id = makeId("doc");
+  const filename = `vendor-package-${adspaceOrderNumber}-${slugifyForFilename(current.order.vendorName)}.zip`;
+  const objectKey = `order-packages/${project.id}/vendors/${current.order.vendorAccountId}/${now.replace(/[:.]/g, "-")}-${filename}`;
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: GENERATED_DOCS_BUCKET_NAME,
+      Key: objectKey,
+      Body: zipBuffer,
+      ContentType: "application/zip",
+    })
+  );
+
+  const document: ProjectDocumentItem = {
+    entityType: "ProjectDocument",
+    id,
+    projectId: project.id,
+    vendorOrderId,
+    vendorAccountId: current.order.vendorAccountId,
+    category: "order_package",
+    assetKind: "orderPackage",
+    bucketName: GENERATED_DOCS_BUCKET_NAME,
+    objectKey,
+    filename,
+    contentType: "application/zip",
+    sizeBytes: zipBuffer.length,
+    source: "generated",
+    uploadedByName: auth.actorName,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await putCore(buildProjectDocumentRecord(document));
+  await writeAudit(`PROJECT#${project.id}`, "vendor.package.generated", auth, {
+    vendorOrderId,
+    vendorAccountId: current.order.vendorAccountId,
+    documentId: document.id,
+    filename,
+    lineCount: current.order.lines.length,
+    packagedFileCount: packageFiles.length,
+    missingFileCount: missingFiles.length,
+  });
+
+  return {
+    document: await toProjectDocumentResponse(document),
+    manifestSummary: manifest.summary,
+  };
+}
+
+function slugifyForFilename(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "vendor";
 }
 
 async function deleteProjectProofLine(proof: ProjectProofLineItem) {
@@ -6242,6 +7588,9 @@ function hydrateCustomerSettings(
 }
 
 async function getAdminSettings(auth: AuthContext) {
+  if (isVendorRole(auth.profile?.role)) {
+    throw new HttpError(403, "Vendor users do not have access to admin settings.");
+  }
   const existing = await findAppSettings();
   const settings = hydrateAppSettings(existing, auth.actorName);
   if (!existing) {
@@ -6270,6 +7619,7 @@ async function getAdminSettings(auth: AuthContext) {
       email: profile.email,
       role: profile.role,
       customerIds: profile.customerIds,
+      vendorAccountIds: profile.vendorAccountIds || [],
       isActive: profile.isActive,
       updatedAt: profile.updatedAt,
     })),
@@ -6292,6 +7642,28 @@ async function getAdminBranding(auth: AuthContext) {
     throw new HttpError(401, "Authenticated user profile is required for branding");
   }
   const profile = auth.profile;
+
+  if (isVendorRole(profile.role)) {
+    const vendorAccountId = profile.vendorAccountIds?.[0] || "";
+    const vendor = vendorAccountId ? await findVendorAccount(vendorAccountId) : null;
+    const vendorName = vendor?.name || "Vendor Workspace";
+    return {
+      viewer: {
+        isPlatformAdmin: false,
+        role: profile.role,
+        customerIds: [],
+        vendorAccountIds: profile.vendorAccountIds || [],
+        displayName: profile.displayName,
+        email: profile.email,
+      },
+      brand: {
+        name: vendorName,
+        logoUrl: null,
+        alt: vendorName,
+        companyName: vendorName,
+      },
+    };
+  }
 
   if (auth.isPlatformAdmin) {
     return {
@@ -6653,12 +8025,14 @@ async function getCustomerSettings(customerId: string, auth: AuthContext) {
         email: profile.email,
         role: profile.role,
         customerIds: profile.customerIds,
+        vendorAccountIds: profile.vendorAccountIds || [],
         isActive: profile.isActive,
         updatedAt: profile.updatedAt,
       })),
     vendors: vendors.map((vendor) => ({
       id: vendor.id,
       customerId: vendor.customerId,
+      vendorAccountId: vendor.vendorAccountId || vendorAccountIdForCustomerVendor(vendor.customerId, vendor.id),
       name: vendor.name,
       contactName: vendor.contactName || "",
       email: vendor.email || "",
@@ -7128,6 +8502,7 @@ async function createCustomerVendor(customerId: string, payload: Record<string, 
     entityType: "CustomerVendor",
     id: makeId("vendor"),
     customerId,
+    vendorAccountId: "",
     name,
     contactName: optionalString(payload.contactName) || undefined,
     email: optionalString(payload.email) || undefined,
@@ -7138,8 +8513,10 @@ async function createCustomerVendor(customerId: string, payload: Record<string, 
     updatedAt: isoNow(),
     updatedByName: auth.actorName,
   };
+  vendor.vendorAccountId = vendorAccountIdForCustomerVendor(customerId, vendor.id);
 
   await putCore(buildCustomerVendorRecord(vendor));
+  await ensureCustomerVendorAccount(vendor, auth.actorName);
   await writeAudit(`ADMIN_SETTINGS#CUSTOMER#${customerId}`, "customer.vendor.created", auth, {
     customerId,
     vendorId: vendor.id,
@@ -7150,6 +8527,7 @@ async function createCustomerVendor(customerId: string, payload: Record<string, 
     vendor: {
       id: vendor.id,
       customerId: vendor.customerId,
+      vendorAccountId: vendor.vendorAccountId || "",
       name: vendor.name,
       contactName: vendor.contactName || "",
       email: vendor.email || "",
@@ -7169,6 +8547,7 @@ async function updateCustomerVendor(customerId: string, vendorId: string, payloa
 
   const next: CustomerVendorItem = {
     ...existing,
+    vendorAccountId: existing.vendorAccountId || vendorAccountIdForCustomerVendor(customerId, vendorId),
     name: hasOwn(payload, "name") ? requiredString(payload, "name") : existing.name,
     contactName: hasOwn(payload, "contactName") ? optionalString(payload.contactName) || undefined : existing.contactName,
     email: hasOwn(payload, "email") ? optionalString(payload.email) || undefined : existing.email,
@@ -7180,6 +8559,7 @@ async function updateCustomerVendor(customerId: string, vendorId: string, payloa
   };
 
   await putCore(buildCustomerVendorRecord(next));
+  await ensureCustomerVendorAccount(next, auth.actorName);
   await writeAudit(`ADMIN_SETTINGS#CUSTOMER#${customerId}`, "customer.vendor.updated", auth, {
     customerId,
     vendorId,
@@ -7190,6 +8570,7 @@ async function updateCustomerVendor(customerId: string, vendorId: string, payloa
     vendor: {
       id: next.id,
       customerId: next.customerId,
+      vendorAccountId: next.vendorAccountId || "",
       name: next.name,
       contactName: next.contactName || "",
       email: next.email || "",
@@ -7243,7 +8624,8 @@ async function requireUserAuthContext(event: ApiEvent): Promise<AuthContext> {
     profile,
     actorName: profile.displayName || profile.email,
     isPlatformAdmin: profile.role === "platform_admin",
-    customerIds: new Set(profile.customerIds || []),
+    customerIds: isVendorRole(profile.role) ? new Set<string>() : new Set(profile.customerIds || []),
+    vendorAccountIds: new Set(profile.vendorAccountIds || []),
     shareLink: null,
     participant: null,
   };
@@ -7288,6 +8670,7 @@ async function requireShareContext(
     actorName: participant?.displayName || shareLink.label,
     isPlatformAdmin: false,
     customerIds: new Set<string>(),
+    vendorAccountIds: new Set<string>(),
     shareLink,
     participant,
   };
@@ -7295,7 +8678,46 @@ async function requireShareContext(
 
 function hasCustomerAccess(auth: AuthContext, customerId: string) {
   if (auth.mode === "share") return true;
+  if (isVendorRole(auth.profile?.role)) return false;
   return auth.isPlatformAdmin || auth.customerIds.has(customerId);
+}
+
+function isVendorRole(role?: UserRole | null) {
+  return role === "vendor_admin" || role === "vendor_user";
+}
+
+function assertVendorWorkspaceUser(auth: AuthContext) {
+  if (auth.mode !== "user" || !isVendorRole(auth.profile?.role)) {
+    throw new HttpError(403, "Vendor workspace access is required");
+  }
+  if (!auth.vendorAccountIds.size) {
+    throw new HttpError(403, "This vendor user is not assigned to a vendor account");
+  }
+}
+
+function assertVendorAccountAccess(auth: AuthContext, vendorAccountId: string) {
+  assertVendorWorkspaceUser(auth);
+  if (!auth.vendorAccountIds.has(vendorAccountId)) {
+    throw new HttpError(403, "You do not have access to this vendor order");
+  }
+}
+
+async function getVendorViewer(auth: AuthContext) {
+  const accounts = await Promise.all(Array.from(auth.vendorAccountIds).map((id) => findVendorAccount(id)));
+  return {
+    role: auth.profile?.role || "vendor_user",
+    displayName: auth.profile?.displayName || auth.actorName,
+    email: auth.profile?.email || "",
+    accounts: accounts
+      .filter((account): account is VendorAccountItem => !!account)
+      .map((account) => ({
+        id: account.id,
+        name: account.name,
+        accountType: account.accountType,
+        customerId: account.customerId || null,
+        isActive: account.isActive,
+      })),
+  };
 }
 
 function hasProjectAccess(auth: AuthContext, project: ProjectItem) {
@@ -7945,6 +9367,30 @@ function buildCustomerVendorRecord(vendor: CustomerVendorItem) {
   };
 }
 
+function buildVendorAccountRecord(vendor: VendorAccountItem) {
+  return {
+    pk: `VENDORACCOUNT#${vendor.id}`,
+    sk: "PROFILE",
+    gsi1pk: `VENDORACCOUNT#${vendor.id}`,
+    gsi1sk: "PROFILE",
+    gsi2pk: `VENDORACCOUNT#${vendor.accountType}`,
+    gsi2sk: `VENDOR#${vendor.name}#${vendor.id}`,
+    ...vendor,
+  };
+}
+
+function buildProjectVendorLineStatusRecord(status: ProjectVendorLineStatusItem) {
+  return {
+    pk: `PROJECT#${status.projectId}`,
+    sk: `VENDORLINE#${status.vendorAccountId}#${status.vendorLineId}`,
+    gsi1pk: `VENDORACCOUNT#${status.vendorAccountId}`,
+    gsi1sk: `PROJECT#${status.projectId}#LINE#${status.vendorLineId}`,
+    gsi2pk: `PROJECT#${status.projectId}`,
+    gsi2sk: `VENDORLINE#${status.updatedAt}#${status.vendorLineId}`,
+    ...status,
+  };
+}
+
 function buildNotificationDigestRecord(digest: NotificationDigestItem) {
   return {
     pk: `CUSTOMER#${digest.customerId}`,
@@ -8134,6 +9580,13 @@ async function toProjectProofLineResponse(
       0,
     latestProofCommentAt: proof.latestProofCommentAt || null,
     proofVersions: proof.proofVersions || [],
+    vendorProofSubmittedAt: proof.vendorProofSubmittedAt || null,
+    vendorProofSubmittedByName: proof.vendorProofSubmittedByName || null,
+    vendorProofSubmittedByVendorAccountId: proof.vendorProofSubmittedByVendorAccountId || null,
+    vendorProofFilename: proof.vendorProofFilename || null,
+    vendorProofContentType: proof.vendorProofContentType || null,
+    vendorProofSizeBytes: proof.vendorProofSizeBytes ?? null,
+    vendorProofNote: proof.vendorProofNote || null,
     updatedAt: proof.updatedAt,
     updatedByName: proof.updatedByName || null,
   };
@@ -8319,6 +9772,8 @@ async function toProjectDocumentResponse(document: ProjectDocumentItem) {
   return {
     id: document.id,
     projectId: document.projectId,
+    vendorOrderId: document.vendorOrderId || null,
+    vendorAccountId: document.vendorAccountId || null,
     category: document.category,
     assetKind: document.assetKind,
     filename: document.filename,

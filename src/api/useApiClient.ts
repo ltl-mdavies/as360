@@ -49,7 +49,7 @@ export function useApiClient() {
           });
         }
 
-        if ((response.status === 401 || response.status === 403) && token && !shareToken) {
+        if (response.status === 401 && token && !shareToken) {
           signOut();
           throw new Error("Your session is no longer authorized. Please sign in again.");
         }

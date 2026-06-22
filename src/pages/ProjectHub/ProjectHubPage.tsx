@@ -1300,6 +1300,12 @@ const editVenueOptions = useMemo(() => {
 const currentVenueOption =
   editVenueOptions.find((venue) => venue.name === venueName && venue.market === venueMarket) || editVenueOptions[0];
 
+  const allocationReportProjectId = isDemo ? "demo_001" : rollup?.projectId;
+  const handleDownloadAllocationPdf = useCallback(() => {
+    if (!allocationReportProjectId) return;
+    window.open(`/p/${allocationReportProjectId}/allocation-report?print=1`, "_blank");
+  }, [allocationReportProjectId]);
+
   if (!rollup || !stepper || !primaryBanner) {
     if (!isDemo && projectLoading) {
       return (
@@ -1488,12 +1494,6 @@ const currentVenueOption =
       }
     })();
   };
-  const allocationReportProjectId = isDemo ? "demo_001" : rollup?.projectId;
-  const handleDownloadAllocationPdf = useCallback(() => {
-    if (!allocationReportProjectId) return;
-    window.open(`/p/${allocationReportProjectId}/allocation-report?print=1`, "_blank");
-  }, [allocationReportProjectId]);
-
   const handlePrimaryBannerAction = () => {
     if (!("ctaKind" in primaryBanner)) return;
     if (primaryBanner.ctaKind === "get_started") {

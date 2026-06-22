@@ -327,7 +327,31 @@ Business value:
 - keeps integration details configurable
 - gives internal teams tools to manage a growing operational platform
 
-### 15. Mobile, Tablet, Desktop, and App-Like Use
+### 15. Vendor Workspace
+
+Vendor Workspace gives assigned production vendors a scoped operational surface after customer/admin work has reached the vendor lane.
+
+Capabilities:
+
+- authenticated vendor roles separate from customer/admin roles
+- assigned order dashboard
+- scoped vendor order detail
+- assigned-line artwork visibility
+- route-aware references for LTL/Lift versus external Adspace-managed vendors
+- vendor proof upload for client/admin approval
+- vendor package download with assigned artwork and scoped manifests
+- selected-line bulk production/shipping updates
+- market or venue ship-to destination display
+- internal vendor notes and activity
+
+Business value:
+
+- gives production vendors the information they need without exposing customer/admin workspaces
+- prevents vendors from interfering with artwork assignment before print submission
+- keeps LTL/Lift-backed workflows integrated while supporting external vendors that are not in Lift
+- reduces duplicate manual communication around proofs, production status, and shipping
+
+### 16. Mobile, Tablet, Desktop, and App-Like Use
 
 Adspace360 is designed for real-world device use, not just large desktop monitors.
 
@@ -401,13 +425,15 @@ Mobile is not just a squeezed desktop view. Critical workflows have mobile-speci
 | Documents | Easy access to project artifacts | Fewer manual handoff files |
 | Share access | Lower collaboration friction | Controlled external participation |
 | Allocation override | Cleaner final outputs | Repair path for edge cases |
+| Vendor workspace | Clear vendor handoff | Scoped vendor execution and status updates |
 
 ## Working Assumptions
 
 These statements are inferred from the current app and should be reviewed:
 
 - The primary commercial audience is media owners/operators and customer admins managing venue-based or transit/place-based advertising.
-- The main operational integration is Lift for submitted order/proof workflows.
+- The main operational integration is Lift for submitted primary print order/proof workflows.
+- External vendor production routes can be Adspace-managed without Lift line/proof references.
 - Adspace360 is intended to support both internal team workflows and customer-facing workflows.
 - Proof approval and transit approval may involve different external stakeholders.
 - Venue inventory presets are expected to become part of the sales/package strategy, not only an internal admin convenience.

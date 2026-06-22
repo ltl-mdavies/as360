@@ -16,6 +16,8 @@ const LoginPage = lazy(() => import("../pages/Auth/LoginPage"));
 const SettingsAdminPage = lazy(() => import("../pages/Settings/SettingsAdminPage"));
 const AdminHealthDashboardPage = lazy(() => import("../pages/Settings/AdminHealthDashboardPage"));
 const ProjectDocumentsPage = lazy(() => import("../pages/Documents/ProjectDocumentsPage"));
+const VendorDashboardPage = lazy(() => import("../pages/VendorWorkspace/VendorDashboardPage"));
+const VendorOrderPage = lazy(() => import("../pages/VendorWorkspace/VendorOrderPage"));
 
 function RouteFallback() {
   return (
@@ -129,6 +131,22 @@ export function AppRoutes() {
           element={
             <RequireAuth>
               <AdminHealthDashboardPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/vendor/orders"
+          element={
+            <RequireAuth>
+              <VendorDashboardPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/vendor/orders/:vendorOrderId"
+          element={
+            <RequireAuth>
+              <VendorOrderPage />
             </RequireAuth>
           }
         />

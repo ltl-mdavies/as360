@@ -307,10 +307,12 @@ function buildProofHistory(line: ProofLineMock | undefined) {
   if (line.proofFullUrl || line.proofThumbUrl) {
     items.push({
       key: "current-proof",
-      label: proofName === "—" ? `Proof line ${line.lineNumber}` : proofName,
-      badge: "Current proof",
-      body: "Current Lift proof attached to this line.",
-      date: formatHistoryDate(line.updatedAt),
+      label: line.vendorProofFilename || (proofName === "—" ? `Proof line ${line.lineNumber}` : proofName),
+      badge: line.vendorProofSubmittedAt ? "Vendor proof" : "Current proof",
+      body: line.vendorProofSubmittedAt
+        ? `Submitted by print provider${line.vendorProofNote ? ` · ${line.vendorProofNote}` : ""}`
+        : "Current proof attached to this line.",
+      date: formatHistoryDate(line.vendorProofSubmittedAt || line.updatedAt),
       tone: "current",
     });
   }
@@ -404,6 +406,13 @@ function toLiveProofLine(line: any): ProofLineMock {
     proofCommentAttachmentCount: line.proofCommentAttachmentCount || 0,
     latestProofCommentAt: line.latestProofCommentAt || null,
     proofVersions: line.proofVersions || [],
+    vendorProofSubmittedAt: line.vendorProofSubmittedAt || null,
+    vendorProofSubmittedByName: line.vendorProofSubmittedByName || null,
+    vendorProofSubmittedByVendorAccountId: line.vendorProofSubmittedByVendorAccountId || null,
+    vendorProofFilename: line.vendorProofFilename || null,
+    vendorProofContentType: line.vendorProofContentType || null,
+    vendorProofSizeBytes: line.vendorProofSizeBytes ?? null,
+    vendorProofNote: line.vendorProofNote || null,
     updatedAt: line.updatedAt || null,
   };
 }
@@ -855,6 +864,18 @@ export default function ProofApprovalPage() {
     return `Line ${line.lineNumber}${suffix}`;
   }
 
+  function getProofReferencePills(line: ProofLineMock) {
+    return [
+      `Proof line ${line.lineNumber}`,
+      line.liftProofingId ? `Proof ID ${line.liftProofingId}` : "",
+      line.liftOrderLineId ? `Lift line ${line.liftOrderLineId}` : "",
+    ].filter(Boolean);
+  }
+
+  function getProofReferenceSubtitle(line: ProofLineMock) {
+    return line.liftProofingId ? `Proof ID ${line.liftProofingId}` : `Proof line ${line.lineNumber}`;
+  }
+
   function getLocationPreview(line: ProofLineMock, limit = 2) {
     const visible = line.locations.slice(0, limit);
     const remaining = Math.max(0, line.locations.length - visible.length);
@@ -868,9 +889,9 @@ export default function ProofApprovalPage() {
       : "No assigned locations";
 
     return [
-      { label: "Line Number", value: getProofLineLabel(line) },
-      { label: "Lift Line ID", value: line.liftOrderLineId || "—" },
-      { label: "Proof ID", value: line.liftProofingId || "—" },
+      { label: "Adspace Proof Line", value: getProofLineLabel(line) },
+      ...(line.liftOrderLineId ? [{ label: "Lift Line ID", value: line.liftOrderLineId }] : []),
+      ...(line.liftProofingId ? [{ label: "Proof ID", value: line.liftProofingId }] : []),
       { label: "Client Upload Filename", value: line.clientFileName || "Unavailable" },
       { label: "Proof Filename", value: getProofFileName(line) },
       {
@@ -1075,9 +1096,9 @@ export default function ProofApprovalPage() {
       : counts.pending > 0
       ? `${counts.pending} proof${counts.pending === 1 ? "" : "s"} are ready for review and approval.`
       : counts.waiting > 0
-      ? `${counts.waiting} proof${counts.waiting === 1 ? "" : "s"} are still waiting for Lift to publish the current proof file and are not ready to approve yet.`
+      ? `${counts.waiting} proof${counts.waiting === 1 ? "" : "s"} are still waiting for the current proof file and are not ready to approve yet.`
       : liftLinesComplete
-      ? "All proofs are approved and the order is complete in Lift."
+      ? "All proofs are approved and the order is complete."
       : proofsCompleteInProduction
       ? "All proofs are approved and the order is now in production."
       : "All proof approvals are complete.";
@@ -1085,14 +1106,14 @@ export default function ProofApprovalPage() {
     !selected
       ? "Select a proof line to review its current status."
       : selectedIsWaiting
-      ? "This line is still processing in Lift or waiting on a regenerated proof file before it can be approved."
+      ? "This line is still processing or waiting on a regenerated proof file before it can be approved."
       : isApproved
       ? selectedLiftComplete
-        ? "This proof is approved and the order is complete in Lift."
+        ? "This proof is approved and the order is complete."
         : selectedBeyondProofReview
         ? "This proof is approved and the order is now in production."
         : selectedLiftControlledApproved
-        ? "This proof is approved in Lift and remains available as a reference."
+        ? "This proof is approved and remains available as a reference."
         : canUndoSelectedApproval
         ? "This proof is approved and awaiting production release."
         : "This proof is already approved."
@@ -1101,7 +1122,7 @@ export default function ProofApprovalPage() {
     !selected
       ? "Select a proof line to review."
       : selectedIsWaiting
-      ? "Waiting for Lift to publish the proof file."
+      ? "Waiting for the proof file."
       : isApproved
       ? "Approved."
       : "Review proof, resolve feedback if any, then approve or upload a revision.";
@@ -1380,7 +1401,7 @@ export default function ProofApprovalPage() {
       }
 
       updateRevisionJob(jobId, {
-        detail: "Submitting revised artwork to Lift.",
+        detail: "Submitting revised artwork.",
       });
 
       const fileMeta = `${isPdf ? "PDF" : "FILE"} · ${(file.size / 1024 / 1024).toFixed(1)} MB · ${
@@ -1434,7 +1455,7 @@ export default function ProofApprovalPage() {
       updateRevisionJob(jobId, {
         status: "success",
         title: `Line ${lineForJob.lineNumber} revision submitted`,
-        detail: "Lift accepted the revised artwork. A regenerated proof will appear after sync.",
+        detail: "Revised artwork accepted. A regenerated proof will appear after sync.",
       });
       window.setTimeout(() => dismissRevisionJob(jobId), 5000);
     } catch (error) {
@@ -1752,7 +1773,7 @@ export default function ProofApprovalPage() {
             <div className="proof-completeBody">
               {proofsCompleteInProduction
                 ? liftLinesComplete
-                  ? "The order is complete in Lift."
+                  ? "The order is complete."
                   : "The order is now in production."
                 : "The proof packet remains available for reference."}
             </div>
@@ -1957,7 +1978,7 @@ export default function ProofApprovalPage() {
                   </div>
                 ) : (
                   <div className="proof-uploadUnavailable">
-                    Original client upload unavailable for this linked Lift order.
+                    Original client upload unavailable for this proof line.
                   </div>
                 )}
 
@@ -1971,7 +1992,7 @@ export default function ProofApprovalPage() {
                   {l.proofThumbUrl ? (
                     <img src={l.proofThumbUrl} alt="" />
                   ) : (
-                    <div className="proof-waiting">Lift has not published the current proof file yet…</div>
+                    <div className="proof-waiting">The current proof file has not been published yet...</div>
                   )}
                 </button>
                 <div className="proof-mobileProofFooter">
@@ -2042,7 +2063,7 @@ export default function ProofApprovalPage() {
                     />
                   ) : lineIsWaiting ? (
                     <div className="proof-dockHint">
-                      Approval unlocks after Lift publishes the proof file.
+                      Approval unlocks after the proof file is published.
                     </div>
                   ) : null}
 
@@ -2079,7 +2100,7 @@ export default function ProofApprovalPage() {
                             }}
                             type="button"
                           >
-                            {lineIsWaiting ? "Waiting for Lift Proof" : "Approve for Print"}
+                            {lineIsWaiting ? "Waiting for Proof" : "Approve for Print"}
                           </button>
 
                           <button
@@ -2290,7 +2311,7 @@ export default function ProofApprovalPage() {
                     </div>
                   ) : (
                     <div className="proof-uploadUnavailable proof-tabletUploadNote">
-                      Original client upload unavailable for this linked Lift order.
+                      Original client upload unavailable for this proof line.
                     </div>
                   )}
 
@@ -2304,7 +2325,7 @@ export default function ProofApprovalPage() {
                     {selected.proofThumbUrl ? (
                       <img src={selected.proofThumbUrl} alt="" />
                     ) : (
-                      <div className="proof-waiting">Lift has not published the current proof file yet…</div>
+                      <div className="proof-waiting">The current proof file has not been published yet...</div>
                     )}
                   </button>
                   <div className="proof-mobileProofFooter proof-tabletProofFooter">
@@ -2313,6 +2334,13 @@ export default function ProofApprovalPage() {
                       <div className="proof-mobileFileName" title={getProofFileName(selected)}>{getProofFileName(selected)}</div>
                     </div>
                   </div>
+                  {selected.vendorProofSubmittedAt ? (
+                    <div className="proof-vendorSubmitted">
+                      <strong>Vendor proof submitted {formatHistoryDate(selected.vendorProofSubmittedAt)}</strong>
+                      <span>Print provider{selected.vendorProofFilename ? ` · ${selected.vendorProofFilename}` : ""}</span>
+                      {selected.vendorProofNote ? <p>{selected.vendorProofNote}</p> : null}
+                    </div>
+                  ) : null}
 
                   {showRevisionUploader && !isApproved ? (
                     <div
@@ -2375,7 +2403,7 @@ export default function ProofApprovalPage() {
                       />
                     ) : selectedIsWaiting ? (
                       <div className="proof-dockHint">
-                        Approval unlocks after Lift publishes the proof file.
+                        Approval unlocks after the proof file is published.
                       </div>
                     ) : null}
 
@@ -2407,7 +2435,7 @@ export default function ProofApprovalPage() {
                               onClick={approveSelected}
                               type="button"
                             >
-                              {selectedIsWaiting ? "Waiting for Lift Proof" : "Approve for Print"}
+                              {selectedIsWaiting ? "Waiting for Proof" : "Approve for Print"}
                             </button>
 
                             <button
@@ -2520,7 +2548,7 @@ export default function ProofApprovalPage() {
 						</div>
             ) : null}
 
-                <div className="proof-ins-systemRow" aria-label="Lift line details">
+                <div className="proof-ins-systemRow" aria-label="Proof line details">
                   <div className="proof-ins-systemMeta">
                     <span className={hasProofQuantityMismatch(selected) ? "is-warning" : ""}>
                       <b>Qty</b>{proofQuantity(selected) ?? "—"}
@@ -2575,7 +2603,7 @@ export default function ProofApprovalPage() {
                     <div className="proof-viewHeader">
                       <div className="proof-view-label">Proof for Review</div>
                       {!selectedHasClientAsset ? (
-                        <div className="proof-viewNote">Original client upload unavailable for this linked Lift order.</div>
+                        <div className="proof-viewNote">Original client upload unavailable for this proof line.</div>
                       ) : null}
                     </div>
                   <button
@@ -2585,7 +2613,7 @@ export default function ProofApprovalPage() {
                     aria-label={`View proof file ${getProofFileName(selected)}`}
                     onClick={() => selected.proofFullUrl && window.open(selected.proofFullUrl, "_blank")}
                   >
-                      {selected.proofThumbUrl ? <img src={selected.proofThumbUrl} alt="" /> : <div className="proof-waiting">Lift has not published the current proof file yet…</div>}
+                      {selected.proofThumbUrl ? <img src={selected.proofThumbUrl} alt="" /> : <div className="proof-waiting">The current proof file has not been published yet...</div>}
                   </button>
                         <div className="proof-fileFooter">
                           <div className="proof-filemeta" title={getProofFileName(selected)}>
@@ -2593,6 +2621,13 @@ export default function ProofApprovalPage() {
                             <strong>{getProofFileName(selected)}</strong>
                           </div>
                         </div>
+                        {selected.vendorProofSubmittedAt ? (
+                          <div className="proof-vendorSubmitted">
+                            <strong>Vendor proof submitted {formatHistoryDate(selected.vendorProofSubmittedAt)}</strong>
+                            <span>Print provider{selected.vendorProofFilename ? ` · ${selected.vendorProofFilename}` : ""}</span>
+                            {selected.vendorProofNote ? <p>{selected.vendorProofNote}</p> : null}
+                          </div>
+                        ) : null}
                       </div>
               </div>
 
@@ -2662,7 +2697,7 @@ export default function ProofApprovalPage() {
                     />
                   ) : selectedIsWaiting ? (
                     <div className="proof-dockHint">
-                      Approval unlocks after Lift publishes the proof file.
+                      Approval unlocks after the proof file is published.
                     </div>
                   ) : null}
                 </div>
@@ -2697,7 +2732,7 @@ export default function ProofApprovalPage() {
                           onClick={approveSelected}
                           type="button"
                         >
-                          {selectedIsWaiting ? "Waiting for Lift Proof" : "Approve for Print"}
+                          {selectedIsWaiting ? "Waiting for Proof" : "Approve for Print"}
                         </button>
 
                         <button
@@ -2784,8 +2819,9 @@ export default function ProofApprovalPage() {
                   <div className="proof-feedbackEyebrow">Proof Feedback</div>
                   <div className="proof-feedbackTitle">{getProofLineLabel(selected)}</div>
                   <div className="proof-feedbackMeta">
-                    <span>Proof ID {selected.liftProofingId || "—"}</span>
-                    <span>Lift line {selected.liftOrderLineId || "—"}</span>
+                    {getProofReferencePills(selected).map((pill) => (
+                      <span key={pill}>{pill}</span>
+                    ))}
                     {siblingCount > 0 ? <span>{siblingCount} sibling proof{siblingCount === 1 ? "" : "s"} on this line</span> : null}
                   </div>
                 </div>
@@ -2811,7 +2847,7 @@ export default function ProofApprovalPage() {
                           fallbackSrc: currentVersion?.proofThumbUrl || undefined,
                           openUrl: proofUrl,
                           title: currentVersion?.proofFilename || getProofFileName(selected),
-                          subtitle: `Proof ID ${selected.liftProofingId || "—"}`,
+                          subtitle: getProofReferenceSubtitle(selected),
                         });
                       }}
                     >
@@ -2894,7 +2930,7 @@ export default function ProofApprovalPage() {
                     ))}
                   </div>
                 ) : (
-                  <div className="proof-feedbackEmpty">No current proof feedback has been sent from Lift.</div>
+                  <div className="proof-feedbackEmpty">No current proof feedback has been recorded.</div>
                 )}
               </div>
 
@@ -2983,8 +3019,9 @@ export default function ProofApprovalPage() {
               />
               <div className="proof-historyHeroMeta">
                 <span className={`chip tone-${statusLabel(selected).tone}`}>{statusLabel(selected).label}</span>
-                <span>Proof ID {selected.liftProofingId || "—"}</span>
-                <span>Lift line {selected.liftOrderLineId || "—"}</span>
+                {getProofReferencePills(selected).map((pill) => (
+                  <span key={pill}>{pill}</span>
+                ))}
               </div>
             </div>
 

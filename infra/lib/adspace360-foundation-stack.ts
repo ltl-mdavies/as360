@@ -474,43 +474,18 @@ export class Adspace360FoundationStack extends Stack {
       targets: [new targets.LambdaFunction(notificationDigestFn)],
     });
 
-    const projectRoutes: Array<{ path: string; method: apigwv2.HttpMethod }> = [
-      { path: "/api/projects", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects", method: apigwv2.HttpMethod.POST },
-      { path: "/api/projects/{projectId}", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/workspace", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/lift-order-url", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/activity", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/documents", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/documents", method: apigwv2.HttpMethod.POST },
-      { path: "/api/projects/{projectId}/errors", method: apigwv2.HttpMethod.POST },
-      { path: "/api/projects/{projectId}/share-links", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/share-links", method: apigwv2.HttpMethod.POST },
-      { path: "/api/share-links/{shareLinkId}", method: apigwv2.HttpMethod.PATCH },
-      { path: "/api/projects/{projectId}/creatives", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/creatives", method: apigwv2.HttpMethod.POST },
-      { path: "/api/projects/{projectId}/creatives/{creativeId}", method: apigwv2.HttpMethod.PATCH },
-      { path: "/api/projects/{projectId}/creatives/{creativeId}", method: apigwv2.HttpMethod.DELETE },
-      { path: "/api/projects/{projectId}/submit", method: apigwv2.HttpMethod.POST },
-      { path: "/api/projects/{projectId}/release-production", method: apigwv2.HttpMethod.POST },
-      { path: "/api/projects/{projectId}", method: apigwv2.HttpMethod.PATCH },
-      { path: "/api/projects/{projectId}/assignments/{inventoryId}", method: apigwv2.HttpMethod.PATCH },
-      { path: "/api/projects/{projectId}/proofs", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/proofs/{lineItemId}", method: apigwv2.HttpMethod.PATCH },
-      { path: "/api/projects/{projectId}/transit", method: apigwv2.HttpMethod.GET },
-      { path: "/api/projects/{projectId}/transit", method: apigwv2.HttpMethod.PUT },
-      { path: "/api/admin/settings", method: apigwv2.HttpMethod.GET },
-      { path: "/api/admin/settings", method: apigwv2.HttpMethod.PATCH },
-    ];
+    api.addRoutes({
+      path: "/api/{proxy+}",
+      methods: [apigwv2.HttpMethod.ANY],
+      integration: new integrations.HttpLambdaIntegration("ProjectApiProxyIntegration", projectApiFn),
+      authorizer: cognitoAuthorizer,
+    });
 
-    for (const route of projectRoutes) {
-      api.addRoutes({
-        path: route.path,
-        methods: [route.method],
-        integration: new integrations.HttpLambdaIntegration(`Project${route.method}${route.path}`.replace(/[^A-Za-z0-9]/g, ""), projectApiFn),
-        authorizer: cognitoAuthorizer,
-      });
-    }
+    api.addRoutes({
+      path: "/api/{proxy+}",
+      methods: [apigwv2.HttpMethod.OPTIONS],
+      integration: new integrations.HttpLambdaIntegration("ProjectApiCorsPreflightIntegration", projectApiFn),
+    });
 
     const publicProjectRoutes: Array<{ path: string; method: apigwv2.HttpMethod }> = [
       { path: "/api/share-links/resolve", method: apigwv2.HttpMethod.GET },

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../../app/AppShell";
 import { useApiClient } from "../../api/useApiClient";
-import { fetchCustomerSettings, type ApiCustomerVendor, type ApiVenueInventoryPreset } from "../../api/projects";
+import { fetchCustomerSettings, type ApiCustomerVendor, type ApiShippingDestination, type ApiVenueInventoryPreset } from "../../api/projects";
 import Panel from "../../components/common/Panel";
 import PageHeader from "../../components/common/PageHeader";
 import InventoryScopeModal from "../../components/projects/InventoryScopeModal";
@@ -36,6 +36,8 @@ type VenueRecord = {
   isActive: boolean;
   documentSourceMode?: "adspace" | "external" | "hybrid";
   documentLibraryUrl: string;
+  shippingDestinationOverrideEnabled?: boolean;
+  shippingDestination?: ShippingDestinationInput;
   updatedAt: string;
   roomCount?: number;
   inventoryCount?: number;
@@ -48,9 +50,12 @@ type MarketRecord = {
   customerName: string;
   name: string;
   isActive: boolean;
+  shippingDestination?: ShippingDestinationInput;
   updatedAt: string;
   venueCount?: number;
 };
+
+type ShippingDestinationInput = Omit<ApiShippingDestination, "configured" | "source" | "sourceLabel">;
 
 type RoomRecord = {
   id: string;
@@ -172,6 +177,101 @@ const DEFAULT_MARKETS: MarketRecord[] = [
   { id: "market_intersection_phl", customerName: "Intersection", name: "Philadelphia", isActive: true, updatedAt: "2026-03-28" },
 ];
 
+const emptyShippingDestination: ShippingDestinationInput = {
+  label: "",
+  company: "",
+  attention: "",
+  addressLine1: "",
+  addressLine2: "",
+  city: "",
+  region: "",
+  postalCode: "",
+  country: "US",
+  phone: "",
+  email: "",
+  instructions: "",
+};
+
+function normalizeShippingDestination(value?: ShippingDestinationInput | null): ShippingDestinationInput {
+  return {
+    ...emptyShippingDestination,
+    ...(value || {}),
+  };
+}
+
+function shippingDestinationHasValue(value?: ShippingDestinationInput | null) {
+  if (!value) return false;
+  return Object.entries(value).some(([key, fieldValue]) => key !== "country" && Boolean(String(fieldValue || "").trim()));
+}
+
+function shippingDestinationSummary(value?: ShippingDestinationInput | null) {
+  if (!shippingDestinationHasValue(value)) return "Not configured";
+  const destination = normalizeShippingDestination(value);
+  const cityLine = [destination.city, destination.region, destination.postalCode].filter(Boolean).join(", ");
+  return [destination.label || destination.company || destination.addressLine1, cityLine].filter(Boolean).join(" · ");
+}
+
+function ShippingDestinationFields({
+  destination,
+  onChange,
+}: {
+  destination: ShippingDestinationInput;
+  onChange: (patch: Partial<ShippingDestinationInput>) => void;
+}) {
+  return (
+    <div className="venue-preview-shippingGrid">
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Label</span>
+        <input className="field-input venue-preview-input" value={destination.label || ""} onChange={(e) => onChange({ label: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Company</span>
+        <input className="field-input venue-preview-input" value={destination.company || ""} onChange={(e) => onChange({ company: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Attention</span>
+        <input className="field-input venue-preview-input" value={destination.attention || ""} onChange={(e) => onChange({ attention: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Address 1</span>
+        <input className="field-input venue-preview-input" value={destination.addressLine1 || ""} onChange={(e) => onChange({ addressLine1: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Address 2</span>
+        <input className="field-input venue-preview-input" value={destination.addressLine2 || ""} onChange={(e) => onChange({ addressLine2: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">City</span>
+        <input className="field-input venue-preview-input" value={destination.city || ""} onChange={(e) => onChange({ city: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">State / Region</span>
+        <input className="field-input venue-preview-input" value={destination.region || ""} onChange={(e) => onChange({ region: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Postal Code</span>
+        <input className="field-input venue-preview-input" value={destination.postalCode || ""} onChange={(e) => onChange({ postalCode: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Country</span>
+        <input className="field-input venue-preview-input" value={destination.country || ""} onChange={(e) => onChange({ country: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Phone</span>
+        <input className="field-input venue-preview-input" value={destination.phone || ""} onChange={(e) => onChange({ phone: e.target.value })} />
+      </label>
+      <label className="venue-preview-field">
+        <span className="venue-preview-fieldLabel">Email</span>
+        <input className="field-input venue-preview-input" value={destination.email || ""} onChange={(e) => onChange({ email: e.target.value })} />
+      </label>
+      <label className="venue-preview-field venue-preview-fieldSpan2">
+        <span className="venue-preview-fieldLabel">Instructions</span>
+        <textarea className="field-input venue-preview-input" value={destination.instructions || ""} onChange={(e) => onChange({ instructions: e.target.value })} />
+      </label>
+    </div>
+  );
+}
+
 const ROOM_MAP_ASSET_LOOKUP: Record<string, { assetName: string; imageUrl: string }> = {
   "Amtrak Main Level": {
     assetName: "Penn-Station-Main-Level.svg",
@@ -287,6 +387,8 @@ export default function VenueImportPreviewPage() {
   const [newVenueName, setNewVenueName] = useState("");
   const [newVenueMarketId, setNewVenueMarketId] = useState("");
   const [newManagedMarketName, setNewManagedMarketName] = useState("");
+  const [marketShippingEditorId, setMarketShippingEditorId] = useState<string | null>(null);
+  const [marketShippingDraft, setMarketShippingDraft] = useState<ShippingDestinationInput>(emptyShippingDestination);
   const [newRoomName, setNewRoomName] = useState("");
   const [marketSearch, setMarketSearch] = useState("");
   const [placementSearch, setPlacementSearch] = useState("");
@@ -353,6 +455,8 @@ export default function VenueImportPreviewPage() {
       isActive: Boolean(venue.isActive),
       documentSourceMode: venue.documentSourceMode || (venue.documentLibraryUrl ? "hybrid" : "adspace"),
       documentLibraryUrl: venue.documentLibraryUrl || "",
+      shippingDestinationOverrideEnabled: Boolean(venue.shippingDestinationOverrideEnabled),
+      shippingDestination: normalizeShippingDestination(venue.shippingDestination),
       updatedAt: (venue.updatedAt || "").slice(0, 10),
       roomCount: venue.roomCount ?? 0,
       inventoryCount: venue.inventoryCount ?? 0,
@@ -376,6 +480,7 @@ export default function VenueImportPreviewPage() {
         customerName: venue.customerName,
         name: venue.marketName,
         isActive: true,
+        shippingDestination: undefined,
         updatedAt: venue.updatedAt,
         venueCount: 1,
       });
@@ -383,6 +488,19 @@ export default function VenueImportPreviewPage() {
     return Array.from(byMarketId.values()).sort(
       (a, b) => a.customerName.localeCompare(b.customerName) || a.name.localeCompare(b.name)
     );
+  }
+
+  function mapMarketRecordFromApi(market: any): MarketRecord {
+    return {
+      id: market.id,
+      customerId: market.customerId,
+      customerName: market.customerName,
+      name: market.name,
+      isActive: Boolean(market.isActive),
+      shippingDestination: normalizeShippingDestination(market.shippingDestination),
+      updatedAt: (market.updatedAt || "").slice(0, 10),
+      venueCount: market.venueCount ?? 0,
+    };
   }
 
   function mapRoomRecordFromApi(map: any): RoomRecord {
@@ -445,8 +563,15 @@ export default function VenueImportPreviewPage() {
       ]);
 
       const nextVenues = (venueResponse.venues || []).map(mapVenueRecordFromApi);
+      const nextCustomers = customerResponse.customers || [];
+      const marketResponses = await Promise.all(
+        nextCustomers.map((customer) =>
+          request<{ markets: any[] }>(`/api/customers/${customer.id}/markets`).catch(() => ({ markets: [] }))
+        )
+      );
+      const nextMarkets = marketResponses.flatMap((response) => (response.markets || []).map(mapMarketRecordFromApi));
       setCustomers(customerResponse.customers || []);
-      setMarkets(deriveMarketRecordsFromVenues(nextVenues));
+      setMarkets(nextMarkets.length ? nextMarkets : deriveMarketRecordsFromVenues(nextVenues));
       setVenues(nextVenues);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Unable to load venue data");
@@ -572,6 +697,7 @@ export default function VenueImportPreviewPage() {
     () => new Map(markets.map((market) => [market.id, market])),
     [markets]
   );
+  const activeVenueMarket = activeVenue?.marketId ? marketsById.get(activeVenue.marketId) : undefined;
 
   const customerOptions = useMemo(
     () =>
@@ -1489,7 +1615,20 @@ export default function VenueImportPreviewPage() {
   }
 
   function updateActiveVenue(
-    patch: Partial<Pick<VenueRecord, "name" | "customerName" | "marketId" | "marketName" | "documentSourceMode" | "documentLibraryUrl" | "isActive">>
+    patch: Partial<
+      Pick<
+        VenueRecord,
+        | "name"
+        | "customerName"
+        | "marketId"
+        | "marketName"
+        | "documentSourceMode"
+        | "documentLibraryUrl"
+        | "shippingDestinationOverrideEnabled"
+        | "shippingDestination"
+        | "isActive"
+      >
+    >
   ) {
     if (!activeVenue) return;
     setVenues((current) =>
@@ -1507,7 +1646,12 @@ export default function VenueImportPreviewPage() {
 
   async function persistVenuePatch(
     venueId: string,
-    patch: Partial<Pick<VenueRecord, "name" | "marketId" | "documentSourceMode" | "documentLibraryUrl" | "isActive">>
+    patch: Partial<
+      Pick<
+        VenueRecord,
+        "name" | "marketId" | "documentSourceMode" | "documentLibraryUrl" | "shippingDestinationOverrideEnabled" | "shippingDestination" | "isActive"
+      >
+    >
   ) {
     try {
       await request<{ venue: any }>(`/api/venues/${venueId}`, {
@@ -1693,6 +1837,35 @@ export default function VenueImportPreviewPage() {
       setApiError(error instanceof Error ? error.message : "Unable to update market status");
       await loadVenueDashboardData();
     }
+  }
+
+  function openMarketShippingEditor(market: MarketRecord) {
+    setMarketShippingEditorId(market.id);
+    setMarketShippingDraft(normalizeShippingDestination(market.shippingDestination));
+  }
+
+  async function saveMarketShippingDestination(market: MarketRecord, destination = marketShippingDraft) {
+    try {
+      await request<{ market: any }>(`/api/markets/${market.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ shippingDestination: destination }),
+      });
+      setMarketShippingEditorId(null);
+      setMarketShippingDraft(emptyShippingDestination);
+      await loadVenueDashboardData();
+      if (selectedVenueId) await loadVenueDetailData(selectedVenueId);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to update market shipping destination");
+      await loadVenueDashboardData();
+    }
+  }
+
+  async function saveActiveVenueShippingDestination() {
+    if (!activeVenue) return;
+    await persistVenuePatch(activeVenue.id, {
+      shippingDestinationOverrideEnabled: Boolean(activeVenue.shippingDestinationOverrideEnabled),
+      shippingDestination: normalizeShippingDestination(activeVenue.shippingDestination),
+    });
   }
 
   async function createRoom() {
@@ -2573,6 +2746,7 @@ export default function VenueImportPreviewPage() {
                         <th>Market</th>
                         {!isCustomerContext ? <th>Customer</th> : null}
                         <th>Venues</th>
+                        <th>Default Ship-To</th>
                         <th>Status</th>
                         <th>Updated</th>
                       </tr>
@@ -2581,28 +2755,67 @@ export default function VenueImportPreviewPage() {
                       {filteredMarkets.map((market) => {
                         const venueCount = venues.filter((venue) => venue.marketId === market.id).length;
                         return (
-                          <tr key={market.id}>
-                            <td className="venue-preview-cellStrong">{market.name}</td>
-                            {!isCustomerContext ? <td className="venue-preview-cellMeta">{market.customerName}</td> : null}
-                            <td className="venue-preview-cellStrong">{venueCount}</td>
-                            <td>
-                              <div className="venue-preview-statusControlCell">
-                                <button
-                                  type="button"
-                                  className={`venue-preview-statusToggle ${market.isActive ? "is-active" : "is-inactive"}`}
-                                  aria-pressed={market.isActive}
-                                  onClick={() => updateMarketStatus(market.id, !market.isActive)}
-                                >
-                                  <span className="venue-preview-statusToggleDot" aria-hidden="true" />
-                                  <span>{market.isActive ? "Active" : "Inactive"}</span>
-                                </button>
-                                {getMarketStatusNote(market) ? (
-                                  <div className="venue-preview-cellMeta">{getMarketStatusNote(market)}</div>
-                                ) : null}
-                              </div>
-                            </td>
-                            <td className="venue-preview-cellMeta">{market.updatedAt}</td>
-                          </tr>
+                          <Fragment key={market.id}>
+                            <tr>
+                              <td className="venue-preview-cellStrong">{market.name}</td>
+                              {!isCustomerContext ? <td className="venue-preview-cellMeta">{market.customerName}</td> : null}
+                              <td className="venue-preview-cellStrong">{venueCount}</td>
+                              <td>
+                                <div className="venue-preview-shipSummary">
+                                  <span>{shippingDestinationSummary(market.shippingDestination)}</span>
+                                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => openMarketShippingEditor(market)}>
+                                    {shippingDestinationHasValue(market.shippingDestination) ? "Edit" : "Configure"}
+                                  </button>
+                                </div>
+                              </td>
+                              <td>
+                                <div className="venue-preview-statusControlCell">
+                                  <button
+                                    type="button"
+                                    className={`venue-preview-statusToggle ${market.isActive ? "is-active" : "is-inactive"}`}
+                                    aria-pressed={market.isActive}
+                                    onClick={() => updateMarketStatus(market.id, !market.isActive)}
+                                  >
+                                    <span className="venue-preview-statusToggleDot" aria-hidden="true" />
+                                    <span>{market.isActive ? "Active" : "Inactive"}</span>
+                                  </button>
+                                  {getMarketStatusNote(market) ? (
+                                    <div className="venue-preview-cellMeta">{getMarketStatusNote(market)}</div>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className="venue-preview-cellMeta">{market.updatedAt}</td>
+                            </tr>
+                            {marketShippingEditorId === market.id ? (
+                              <tr>
+                                <td colSpan={isCustomerContext ? 5 : 6}>
+                                  <div className="venue-preview-inlineEditor">
+                                    <div className="venue-preview-inlineEditorHead">
+                                      <div>
+                                        <div className="venue-preview-title">Default Ship-To for {market.name}</div>
+                                        <div className="venue-preview-sub">Used by vendor orders unless a venue override is enabled.</div>
+                                      </div>
+                                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => setMarketShippingEditorId(null)}>
+                                        Cancel
+                                      </button>
+                                    </div>
+                                    <ShippingDestinationFields
+                                      destination={marketShippingDraft}
+                                      onChange={(patch) => setMarketShippingDraft((current) => ({ ...current, ...patch }))}
+                                    />
+                                    <div className="venue-preview-inlineEditorActions">
+                                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => void saveMarketShippingDestination(market, emptyShippingDestination)}>
+                                        Clear
+                                      </button>
+                                      <button className="btn btn-primary" type="button" onClick={() => void saveMarketShippingDestination(market)}>
+                                        Save Ship-To
+                                      </button>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : null}
+                          </Fragment>
                         );
                       })}
                     </tbody>
@@ -2803,7 +3016,60 @@ export default function VenueImportPreviewPage() {
                         placeholder="https://drive.google.com/..."
                       />
                     </label>
-                    <div className="venue-preview-field venue-preview-fieldSpan2" />
+                    <div className="venue-preview-field venue-preview-fieldSpan2 venue-preview-shippingSection">
+                      <div className="venue-preview-inlineEditorHead">
+                        <div>
+                          <div className="venue-preview-title">Shipping Destination</div>
+                          <div className="venue-preview-sub">
+                            Market default: {shippingDestinationSummary(activeVenueMarket?.shippingDestination)}
+                          </div>
+                        </div>
+                        <label className="venue-preview-toggleInline">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(activeVenue?.shippingDestinationOverrideEnabled)}
+                            onChange={(e) => {
+                              updateActiveVenue({ shippingDestinationOverrideEnabled: e.target.checked });
+                            }}
+                          />
+                          Venue override
+                        </label>
+                      </div>
+                      {activeVenue?.shippingDestinationOverrideEnabled ? (
+                        <>
+                          <ShippingDestinationFields
+                            destination={normalizeShippingDestination(activeVenue.shippingDestination)}
+                            onChange={(patch) =>
+                              updateActiveVenue({
+                                shippingDestination: {
+                                  ...normalizeShippingDestination(activeVenue.shippingDestination),
+                                  ...patch,
+                                },
+                              })
+                            }
+                          />
+                          <div className="venue-preview-inlineEditorActions">
+                            <button
+                              className="btn btn-ghost btn-soft"
+                              type="button"
+                              onClick={() => updateActiveVenue({ shippingDestination: emptyShippingDestination })}
+                            >
+                              Clear
+                            </button>
+                            <button className="btn btn-primary" type="button" onClick={() => void saveActiveVenueShippingDestination()}>
+                              Save Ship-To
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="venue-preview-inheritedShipTo">
+                          This venue uses the market default destination unless an override is enabled.
+                          <button className="btn btn-primary" type="button" onClick={() => void saveActiveVenueShippingDestination()}>
+                            Save Market Default Use
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </Panel>
 

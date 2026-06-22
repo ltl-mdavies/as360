@@ -1,5 +1,7 @@
 import {
+  ConfirmForgotPasswordCommand,
   CognitoIdentityProviderClient,
+  ForgotPasswordCommand,
   InitiateAuthCommand,
   RespondToAuthChallengeCommand,
   type AuthenticationResultType,
@@ -27,7 +29,7 @@ type NewPasswordChallenge = {
 };
 
 type SignInResult =
-  | { status: "authenticated" }
+  | { status: "authenticated"; session: AuthSession }
   | { status: "new_password_required" };
 
 type AuthContextValue = {
@@ -37,7 +39,9 @@ type AuthContextValue = {
   isLoading: boolean;
   challenge: NewPasswordChallenge | null;
   signIn: (email: string, password: string) => Promise<SignInResult>;
-  completeNewPassword: (newPassword: string) => Promise<void>;
+  completeNewPassword: (newPassword: string) => Promise<AuthSession>;
+  forgotPassword: (email: string) => Promise<void>;
+  confirmForgotPassword: (email: string, code: string, newPassword: string) => Promise<void>;
   signOut: () => void;
   getAccessToken: () => string | null;
 };
@@ -112,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         persistSession(nextSession);
         setChallenge(null);
         setSession(nextSession);
-        return { status: "authenticated" };
+        return { status: "authenticated", session: nextSession };
       },
       async completeNewPassword(newPassword: string) {
         if (!challenge) throw new Error("No password challenge is active");
@@ -133,6 +137,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         persistSession(nextSession);
         setSession(nextSession);
         setChallenge(null);
+        return nextSession;
+      },
+      async forgotPassword(email: string) {
+        await cognitoClient.send(
+          new ForgotPasswordCommand({
+            ClientId: authConfig.userPoolClientId,
+            Username: email,
+          })
+        );
+      },
+      async confirmForgotPassword(email: string, code: string, newPassword: string) {
+        await cognitoClient.send(
+          new ConfirmForgotPasswordCommand({
+            ClientId: authConfig.userPoolClientId,
+            Username: email,
+            ConfirmationCode: code,
+            Password: newPassword,
+          })
+        );
       },
       signOut() {
         clearStoredSession();

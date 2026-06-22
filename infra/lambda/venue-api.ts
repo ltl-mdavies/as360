@@ -56,6 +56,7 @@ type MarketItem = {
   customerName: string;
   name: string;
   isActive: boolean;
+  shippingDestination?: ShippingDestination;
   createdAt: string;
   updatedAt: string;
 };
@@ -71,8 +72,25 @@ type VenueItem = {
   isActive: boolean;
   documentSourceMode?: "adspace" | "external" | "hybrid";
   documentLibraryUrl: string;
+  shippingDestinationOverrideEnabled?: boolean;
+  shippingDestination?: ShippingDestination;
   createdAt: string;
   updatedAt: string;
+};
+
+type ShippingDestination = {
+  label?: string;
+  company?: string;
+  attention?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  country?: string;
+  phone?: string;
+  email?: string;
+  instructions?: string;
 };
 
 type RoomMapItem = {
@@ -646,6 +664,8 @@ async function listVenues(customerId: string | undefined, auth: AuthContext, lit
       isActive: venue.isActive,
       documentSourceMode: normalizeDocumentSourceMode(venue.documentSourceMode, venue.documentLibraryUrl),
       documentLibraryUrl: venue.documentLibraryUrl,
+      shippingDestinationOverrideEnabled: venue.shippingDestinationOverrideEnabled || false,
+      shippingDestination: venue.shippingDestination,
       createdAt: venue.createdAt,
       updatedAt: venue.updatedAt,
       roomCount: 0,
@@ -775,6 +795,7 @@ async function createMarket(payload: Record<string, unknown>, auth: AuthContext)
     customerName: customer.name,
     name: marketName,
     isActive: optionalBoolean(payload.isActive) ?? true,
+    shippingDestination: normalizeShippingDestination(payload.shippingDestination),
     createdAt: now,
     updatedAt: now,
   };
@@ -801,6 +822,9 @@ async function updateMarket(marketId: string, payload: Record<string, unknown>, 
     ...existing,
     name: optionalString(payload.name) || existing.name,
     isActive: optionalBoolean(payload.isActive) ?? existing.isActive,
+    shippingDestination: hasOwn(payload, "shippingDestination")
+      ? normalizeShippingDestination(payload.shippingDestination)
+      : existing.shippingDestination,
     updatedAt: isoNow(),
   };
 
@@ -849,6 +873,8 @@ async function createVenue(payload: Record<string, unknown>, auth: AuthContext) 
     isActive: optionalBoolean(payload.isActive) ?? true,
     documentSourceMode: normalizeDocumentSourceMode(optionalString(payload.documentSourceMode), optionalString(payload.documentLibraryUrl)),
     documentLibraryUrl: optionalString(payload.documentLibraryUrl) || "",
+    shippingDestinationOverrideEnabled: optionalBoolean(payload.shippingDestinationOverrideEnabled) ?? false,
+    shippingDestination: normalizeShippingDestination(payload.shippingDestination),
     createdAt: now,
     updatedAt: now,
   };
@@ -892,6 +918,12 @@ async function updateVenue(venueId: string, payload: Record<string, unknown>, au
       hasOwn(payload, "documentLibraryUrl") ? optionalString(payload.documentLibraryUrl) : existing.documentLibraryUrl
     ),
     documentLibraryUrl: hasOwn(payload, "documentLibraryUrl") ? optionalString(payload.documentLibraryUrl) || "" : existing.documentLibraryUrl,
+    shippingDestinationOverrideEnabled: hasOwn(payload, "shippingDestinationOverrideEnabled")
+      ? optionalBoolean(payload.shippingDestinationOverrideEnabled) ?? false
+      : existing.shippingDestinationOverrideEnabled,
+    shippingDestination: hasOwn(payload, "shippingDestination")
+      ? normalizeShippingDestination(payload.shippingDestination)
+      : existing.shippingDestination,
     isActive: optionalBoolean(payload.isActive) ?? existing.isActive,
     updatedAt: isoNow(),
   };
@@ -912,6 +944,29 @@ function normalizeDocumentSourceMode(value: unknown, documentLibraryUrl?: string
     return normalized;
   }
   return optionalString(documentLibraryUrl) ? "hybrid" : "adspace";
+}
+
+function normalizeShippingDestination(value: unknown): ShippingDestination | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const payload = value as Record<string, unknown>;
+  const destination: ShippingDestination = {
+    label: optionalString(payload.label),
+    company: optionalString(payload.company),
+    attention: optionalString(payload.attention),
+    addressLine1: optionalString(payload.addressLine1),
+    addressLine2: optionalString(payload.addressLine2),
+    city: optionalString(payload.city),
+    region: optionalString(payload.region),
+    postalCode: optionalString(payload.postalCode),
+    country: optionalString(payload.country),
+    phone: optionalString(payload.phone),
+    email: optionalString(payload.email),
+    instructions: optionalString(payload.instructions),
+  };
+  const hasDestinationValue = Object.entries(destination).some(
+    ([key, fieldValue]) => key !== "country" && Boolean(fieldValue)
+  );
+  return hasDestinationValue ? destination : undefined;
 }
 
 async function createVenueInventoryPreset(venueId: string, payload: Record<string, unknown>, auth: AuthContext) {

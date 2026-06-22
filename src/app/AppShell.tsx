@@ -140,6 +140,7 @@ export default function AppShell({
 
   const params = new URLSearchParams(location.search);
   const shareToken = params.get("share") || "";
+  const isVendorContext = location.pathname.startsWith("/vendor/");
   const isCustomerContext =
     params.get("mode") === "customer" || location.pathname.startsWith("/customer/");
   const cachedBranding = useMemo(
@@ -254,22 +255,26 @@ export default function AppShell({
   const match = location.pathname.match(/^\/p\/([^/]+)/);
   const currentProjectId = match ? match[1] : null;
 
-  const navItems = [
-    { label: "Projects", path: "/customer/projects", kind: "primary" as const },
-    ...(currentProjectId
-      ? [
-          {
-            label: "Current Project Hub",
-            path: `/p/${currentProjectId}?mode=customer`,
-            kind: "primary" as const,
-            meta: projectTitle ?? `Project ${currentProjectId}`,
-          },
-        ]
-      : []),
-    { label: "Venue Management", path: "/admin/venues", kind: "secondary" as const },
-    { label: "Admin Setup", path: "/admin/settings", kind: "secondary" as const },
-    { label: "Health Dashboard", path: "/admin/health", kind: "secondary" as const },
-  ];
+  const navItems = isVendorContext
+    ? [
+        { label: "Vendor Orders", path: "/vendor/orders", kind: "primary" as const },
+      ]
+    : [
+        { label: "Projects", path: "/customer/projects", kind: "primary" as const },
+        ...(currentProjectId
+          ? [
+              {
+                label: "Current Project Hub",
+                path: `/p/${currentProjectId}?mode=customer`,
+                kind: "primary" as const,
+                meta: projectTitle ?? `Project ${currentProjectId}`,
+              },
+            ]
+          : []),
+        { label: "Venue Management", path: "/admin/venues", kind: "secondary" as const },
+        { label: "Admin Setup", path: "/admin/settings", kind: "secondary" as const },
+        { label: "Health Dashboard", path: "/admin/health", kind: "secondary" as const },
+      ];
 
   const userPrimaryLabel = viewerDisplayName || user?.displayName || (shareToken ? "Shared Access" : "Adspace360");
   const userMetaLabel = viewerCompanyName || brandName || "Adspace360";
@@ -317,7 +322,7 @@ export default function AppShell({
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar-left">
-        {(isCustomerContext || showNavTrigger) && (
+        {(isCustomerContext || isVendorContext || showNavTrigger) && (
 		  <button
 			className="iconbtn"
 			aria-label="Menu"
