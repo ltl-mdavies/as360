@@ -1825,10 +1825,12 @@ export type ApiVendorOrderLine = {
   } | null;
   proof?: {
     status: "waiting" | "pending" | "approved";
+    revised?: boolean;
     lineStepNumber?: number | null;
     liftProofStatus?: string | null;
     thumbUrl?: string | null;
     fullUrl?: string | null;
+    printTeamFeedback?: string | null;
     vendorSubmittedAt?: string | null;
     vendorSubmittedByName?: string | null;
     vendorAccountId?: string | null;

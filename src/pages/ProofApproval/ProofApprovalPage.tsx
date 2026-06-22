@@ -728,6 +728,7 @@ export default function ProofApprovalPage() {
 
   const [q, setQ] = useState("");
   const [mediaVariant, setMediaVariant] = useState("all");
+  const [routeFilter, setRouteFilter] = useState<"all" | "lift" | "adspace">("all");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [showRevisionUploader, setShowRevisionUploader] = useState(false);
   const [isRevisionDragActive, setIsRevisionDragActive] = useState(false);
@@ -870,15 +871,25 @@ export default function ProofApprovalPage() {
   }
 
   function getProofReferencePills(line: ProofLineMock) {
+    const isAdspaceManaged = line.integrationMode === "adspace" || line.productionRoute === "external_vendor";
     return [
       `Proof line ${line.lineNumber}`,
-      line.liftProofingId ? `Proof ID ${line.liftProofingId}` : "",
-      line.liftOrderLineId ? `Lift line ${line.liftOrderLineId}` : "",
+      line.liftProofingId && !isAdspaceManaged ? `Proof ID ${line.liftProofingId}` : "",
+      line.liftOrderLineId && !isAdspaceManaged ? `Lift line ${line.liftOrderLineId}` : "",
     ].filter(Boolean);
   }
 
   function getProofReferenceSubtitle(line: ProofLineMock) {
-    return line.liftProofingId ? `Proof ID ${line.liftProofingId}` : `Proof line ${line.lineNumber}`;
+    const isAdspaceManaged = line.integrationMode === "adspace" || line.productionRoute === "external_vendor";
+    return line.liftProofingId && !isAdspaceManaged ? `Proof ID ${line.liftProofingId}` : `Proof line ${line.lineNumber}`;
+  }
+
+  function proofRouteKey(line: ProofLineMock) {
+    return line.integrationMode === "adspace" || line.productionRoute === "external_vendor" ? "adspace" : "lift";
+  }
+
+  function proofRouteLabel(line: ProofLineMock) {
+    return line.routeLabel || (proofRouteKey(line) === "adspace" ? "Adspace-managed vendor" : "Lift-backed primary print");
   }
 
   function getLocationPreview(line: ProofLineMock, limit = 2) {
@@ -895,9 +906,9 @@ export default function ProofApprovalPage() {
 
     return [
       { label: "Adspace Proof Line", value: getProofLineLabel(line) },
-      { label: "Production Route", value: line.routeLabel || (line.integrationMode === "adspace" ? "Adspace-managed vendor" : "Lift-backed primary print") },
-      ...(line.liftOrderLineId ? [{ label: "Lift Line ID", value: line.liftOrderLineId }] : []),
-      ...(line.liftProofingId ? [{ label: "Proof ID", value: line.liftProofingId }] : []),
+      { label: "Production Route", value: proofRouteLabel(line) },
+      ...(proofRouteKey(line) === "lift" && line.liftOrderLineId ? [{ label: "Lift Line ID", value: line.liftOrderLineId }] : []),
+      ...(proofRouteKey(line) === "lift" && line.liftProofingId ? [{ label: "Proof ID", value: line.liftProofingId }] : []),
       { label: "Client Upload Filename", value: line.clientFileName || "Unavailable" },
       { label: "Proof Filename", value: getProofFileName(line) },
       {
@@ -926,6 +937,7 @@ export default function ProofApprovalPage() {
         return true;
       })
       .filter((l) => (mediaVariant === "all" ? true : mediaKey(l) === mediaVariant))
+      .filter((l) => (canEditProofs && routeFilter !== "all" ? proofRouteKey(l) === routeFilter : true))
       .filter((l) => {
         if (!query) return true;
         const proofName = getProofFileName(l);
@@ -935,6 +947,7 @@ export default function ProofApprovalPage() {
           l.mediaName,
           l.mediaVariantLabel || "",
           l.unitNumber || "",
+          canEditProofs ? proofRouteLabel(l) : "",
           String(l.lineNumber),
           l.liftProofingId ? String(l.liftProofingId) : "",
           proofSiblingMeta.get(l.lineItemId)?.total ? getProofLineLabel(l) : "",
@@ -945,7 +958,7 @@ export default function ProofApprovalPage() {
 
         return hay.includes(query);
       });
-  }, [lines, filter, q, mediaVariant, proofSiblingMeta]);
+  }, [lines, filter, q, mediaVariant, canEditProofs, routeFilter, proofSiblingMeta]);
 
   const selectedHasProof = !!(selected?.proofThumbUrl || selected?.proofFullUrl);
   const selectedHasClientAsset = hasClientUploadAsset(selected);
@@ -1000,7 +1013,7 @@ export default function ProofApprovalPage() {
     () => filtered.filter((line) => line.status !== "approved").length,
     [filtered]
   );
-  const hasActiveMobileFilters = filter !== "all" || q.trim() !== "" || mediaVariant !== "all";
+  const hasActiveMobileFilters = filter !== "all" || q.trim() !== "" || mediaVariant !== "all" || (canEditProofs && routeFilter !== "all");
   const mobileFilterSummary =
     filter === "pending"
       ? `${counts.pending} pending`
@@ -1046,11 +1059,19 @@ export default function ProofApprovalPage() {
     window.requestAnimationFrame(() => scrollMobileCardsStart());
   }, [scrollMobileCardsStart]);
 
+  const handleMobileRouteChange = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
+    previousMobileScrollYRef.current = window.scrollY;
+    setRouteFilter(event.currentTarget.value as "all" | "lift" | "adspace");
+    setMobileToolsExpanded(false);
+    window.requestAnimationFrame(() => scrollMobileCardsStart());
+  }, [scrollMobileCardsStart]);
+
   const clearMobileFilters = useCallback(() => {
     const restoreY = previousMobileScrollYRef.current;
     setFilter("all");
     setQ("");
     setMediaVariant("all");
+    setRouteFilter("all");
     setMobileToolsExpanded(false);
     window.requestAnimationFrame(() => {
       window.scrollTo({ top: restoreY || 0, behavior: "smooth" });
@@ -1877,6 +1898,13 @@ export default function ProofApprovalPage() {
                     </option>
                   ))}
                 </select>
+                {canEditProofs ? (
+                  <select className="select proof-media" value={routeFilter} onChange={handleMobileRouteChange}>
+                    <option value="all">All Routes</option>
+                    <option value="lift">Lift-backed</option>
+                    <option value="adspace">Adspace-managed</option>
+                  </select>
+                ) : null}
               </div>
 
               <div className="proof-mobileQueueBar" aria-label="Proof queue shortcuts">
@@ -2180,6 +2208,13 @@ export default function ProofApprovalPage() {
                 </option>
               ))}
             </select>
+            {canEditProofs ? (
+              <select className="select proof-media" value={routeFilter} onChange={(e) => setRouteFilter(e.target.value as "all" | "lift" | "adspace")}>
+                <option value="all">All Routes</option>
+                <option value="lift">Lift-backed</option>
+                <option value="adspace">Adspace-managed</option>
+              </select>
+            ) : null}
           </div>
 
           <div className="proof-list">
@@ -2210,6 +2245,9 @@ export default function ProofApprovalPage() {
                     <div className="proof-row-top">
                       <span className="proof-lineIdentity">
                         <span className="proof-lineBadge">{getProofLineLabel(l)}</span>
+                        {canEditProofs ? (
+                          <span className={`proof-routeBadge proof-route-${proofRouteKey(l)}`}>{proofRouteKey(l) === "adspace" ? "Adspace-managed" : "Lift-backed"}</span>
+                        ) : null}
                         {feedbackSummary.hasFeedback ? (
                           <span className="proof-commentBadge" title={formatFeedbackMeta(l)}>
                             {feedbackSummary.commentCount || feedbackSummary.attachmentCount} feedback
@@ -2480,6 +2518,9 @@ export default function ProofApprovalPage() {
 						  <div className="proof-ins-titleWrap">
 							<div className="proof-ins-lineKicker">
                   {getProofLineLabel(selected)}
+                  {canEditProofs ? (
+                    <span className={`proof-routeBadge proof-route-${proofRouteKey(selected)}`}>{proofRouteKey(selected) === "adspace" ? "Adspace-managed" : "Lift-backed"}</span>
+                  ) : null}
                 </div>
 							<div className="proof-ins-title">
 							  {selected.mediaVariantLabel || `${selected.mediaName} · ${formatSize(selected.w, selected.h)}`}

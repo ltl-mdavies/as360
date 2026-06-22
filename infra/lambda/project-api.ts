@@ -5915,10 +5915,12 @@ type VendorWorkspaceLine = {
   } | null;
   proof: {
     status: ProofLineStatus;
+    revised?: boolean;
     lineStepNumber?: number | null;
     liftProofStatus?: string | null;
     thumbUrl?: string | null;
     fullUrl?: string | null;
+    printTeamFeedback?: string | null;
     vendorSubmittedAt?: string | null;
     vendorSubmittedByName?: string | null;
     vendorAccountId?: string | null;
@@ -6413,10 +6415,12 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
           proof: proofAsset
         ? {
             status: proofAsset.status,
+            revised: proofAsset.revised,
             lineStepNumber: proofAsset.lineStepNumber,
             liftProofStatus: proofAsset.liftProofStatus,
             thumbUrl: proofAsset.proofThumbUrl,
             fullUrl: proofAsset.proofFullUrl,
+            printTeamFeedback: proofAsset.printTeamFeedback,
             vendorSubmittedAt: proofAsset.vendorProofSubmittedAt,
             vendorSubmittedByName: proofAsset.vendorProofSubmittedByName,
             vendorAccountId: proofAsset.vendorProofSubmittedByVendorAccountId,
@@ -6737,9 +6741,12 @@ async function submitVendorWorkspaceProof(vendorOrderId: string, lineId: string,
   await writeAudit(`PROJECT#${current.order.projectId}`, "vendor.proof.submitted", auth, {
     vendorOrderId,
     vendorAccountId: current.order.vendorAccountId,
+    vendorName: current.order.vendorName,
+    route: current.order.integrationHealth.route,
     vendorLineId: line.id,
     lineItemId: proof.id,
     lineNumber: proof.lineNumber,
+    liftOrderLineId: proof.liftOrderLineId ?? null,
     filename,
     sizeBytes: nextProof.vendorProofSizeBytes,
     note,
@@ -6757,6 +6764,7 @@ async function submitVendorWorkspaceProof(vendorOrderId: string, lineId: string,
       vendorLineId: line.id,
       lineItemId: proof.id,
       lineNumber: proof.lineNumber,
+      route: current.order.integrationHealth.route,
       status: nextProof.status,
       filename,
     },

@@ -169,9 +169,22 @@ Touched frontend areas:
 - `ProofLineMock`
 - Proof Approval technical details
 
-## Remaining Deeper Slice
+## Completed Proof Ops Slice
 
-Admin/internal proof group display can now use persisted route fields instead of inferring from missing Lift IDs.
+Implemented after proof route persistence:
+
+- Vendor Dashboard triage buckets now align to vendor action queues: incoming, needs proof, client review, ready for production, in production, shipped/complete, and blocked.
+- Vendor Dashboard includes route filtering for Lift-backed versus Adspace-managed work.
+- Proof Approval shows editor-only route filtering and route badges, while keeping end-client proof labels vendor-neutral.
+- Vendor Order proof states distinguish vendor proof submitted, revision requested, client approved, and production-ready states.
+- Vendor proof activity now records route/reference metadata and renders a clearer vendor-visible activity description.
+- Missing ship-to setup is presented as an operations setup issue instead of casual fallback text.
+
+Still pending manual tests:
+
+- Upload a real vendor proof as mdavies@ltlco.com and confirm it appears as pending in Proof Approval.
+- Confirm external vendor route display with a routed external vendor account.
+- Confirm package ZIP scoping after mixed Lift-backed and Adspace-managed route submission.
 
 ## Suggested Next Prompt
 

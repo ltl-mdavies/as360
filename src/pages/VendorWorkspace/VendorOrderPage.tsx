@@ -62,7 +62,14 @@ type BulkLineDraft = {
   note: string;
 };
 
-type VendorProofStage = "artwork_pending" | "needs_proof" | "client_review" | "client_approved";
+type VendorProofStage =
+  | "artwork_pending"
+  | "needs_proof"
+  | "vendor_submitted"
+  | "client_review"
+  | "revision_requested"
+  | "client_approved"
+  | "production_ready";
 
 function formatDate(value?: string | null, includeTime = false) {
   if (!value) return "—";
@@ -84,6 +91,10 @@ function isPrimaryPrintOrder(order: ApiVendorOrderDetail) {
   return order.integrationHealth.route === "primary_print_vendor";
 }
 
+function routeLabel(order: ApiVendorOrderDetail) {
+  return isPrimaryPrintOrder(order) ? "Lift-backed primary print" : "Adspace-managed vendor";
+}
+
 function vendorLineReference(line: ApiVendorOrderLine, primaryPrintRoute: boolean) {
   if (primaryPrintRoute) return line.liftOrderLineId || "—";
   return line.lineNumber ? `Line ${line.lineNumber}` : line.id.replace(/^(proof|override|assignment)_/, "");
@@ -92,12 +103,23 @@ function vendorLineReference(line: ApiVendorOrderLine, primaryPrintRoute: boolea
 const proofStageLabels: Record<VendorProofStage, string> = {
   artwork_pending: "Artwork Pending",
   needs_proof: "Needs Vendor Proof",
+  vendor_submitted: "Vendor Proof Submitted",
   client_review: "Client Review",
+  revision_requested: "Revision Requested",
   client_approved: "Client Approved",
+  production_ready: "Production Ready",
 };
 
 function proofStage(line: ApiVendorOrderLine): VendorProofStage {
+  if (
+    line.workflow.stage === "production_ready" ||
+    line.workflow.stage === "in_production" ||
+    line.workflow.stage === "shipped" ||
+    line.workflow.stage === "complete"
+  ) return "production_ready";
   if (line.proof?.status === "approved") return "client_approved";
+  if (line.proof?.revised || (line.proof?.status === "waiting" && line.proof?.vendorSubmittedAt)) return "revision_requested";
+  if (line.proof?.vendorSubmittedAt) return "vendor_submitted";
   if (line.proof?.fullUrl || line.proof?.thumbUrl || line.proof?.liftProofStatus || line.proof?.status === "pending") return "client_review";
   if (line.creative?.fullUrl || line.creative?.thumbUrl) return "needs_proof";
   return "artwork_pending";
@@ -175,6 +197,12 @@ function describeActivity(event: ApiProjectAuditEvent) {
       .map(([key, value]) => `${key.replace(/([A-Z])/g, " $1").toLowerCase()}: ${formatDetailValue(key, value)}`)
       .join("; ");
     return `${lineCount} selected ${lineCount === 1 ? "line" : "lines"} updated${changedFields ? `: ${changedFields}` : ""}`;
+  }
+  if (event.eventType === "vendor.proof.submitted") {
+    const route = detail.route === "primary_print_vendor" ? "Lift-backed" : "Adspace-managed";
+    const lineRef = detail.lineNumber ? `line ${detail.lineNumber}` : "assigned line";
+    const filename = detail.filename ? ` · ${detail.filename}` : "";
+    return `${route} proof submitted for ${lineRef}${filename}`;
   }
   if (event.eventType === "vendor.package.generated") {
     const lineCount = Number(detail.lineCount || 0);
@@ -310,8 +338,11 @@ export default function VendorOrderPage() {
     const stages = order?.lines.map(proofStage) || [];
     return {
       needsProof: stages.filter((stage) => stage === "needs_proof").length,
+      vendorSubmitted: stages.filter((stage) => stage === "vendor_submitted").length,
       clientReview: stages.filter((stage) => stage === "client_review").length,
+      revisionRequested: stages.filter((stage) => stage === "revision_requested").length,
       approved: stages.filter((stage) => stage === "client_approved").length,
+      productionReady: stages.filter((stage) => stage === "production_ready").length,
       artworkPending: stages.filter((stage) => stage === "artwork_pending").length,
     };
   }, [order]);
@@ -581,7 +612,7 @@ export default function VendorOrderPage() {
             </Panel>
 
             <Panel title="Ship-To Destination" className="vendor-panel">
-              <div className="vendor-ship-to">
+              <div className={`vendor-ship-to ${order.shippingDestination.configured ? "" : "is-missing"}`}>
                 <MapPin size={22} aria-hidden="true" />
                 <div>
                   <strong>{order.shippingDestination.configured ? order.shippingDestination.label || order.shippingDestination.company || "Configured destination" : "Shipping destination not configured"}</strong>
@@ -599,7 +630,7 @@ export default function VendorOrderPage() {
                       {order.shippingDestination.instructions ? <p>{order.shippingDestination.instructions}</p> : null}
                     </>
                   ) : (
-                    <p>Use vendor reference or internal notes until a market default or venue override is configured.</p>
+                    <p>Ask Adspace operations to configure a market default or venue override before shipping this order.</p>
                   )}
                 </div>
               </div>
@@ -609,7 +640,7 @@ export default function VendorOrderPage() {
               <div className="vendor-health">
                 <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
                 <div>
-                  <strong>{order.integrationHealth.route === "primary_print_vendor" ? "Primary print vendor route" : "External vendor route"}</strong>
+                  <strong>{routeLabel(order)}</strong>
                   <p>
                     {isPrimaryPrintOrder(order)
                       ? order.integrationHealth.liftSync?.label || "No Lift sync state available yet."
@@ -628,8 +659,18 @@ export default function VendorOrderPage() {
               <div className="vendor-proof-summary">
                 <span>
                   <FileClock size={18} aria-hidden="true" />
+                  <small>Artwork Pending</small>
+                  <strong>{proofSummary.artworkPending}</strong>
+                </span>
+                <span>
+                  <FileClock size={18} aria-hidden="true" />
                   <small>Needs Proof</small>
                   <strong>{proofSummary.needsProof}</strong>
+                </span>
+                <span>
+                  <FileClock size={18} aria-hidden="true" />
+                  <small>Submitted</small>
+                  <strong>{proofSummary.vendorSubmitted}</strong>
                 </span>
                 <span>
                   <FileClock size={18} aria-hidden="true" />
@@ -637,14 +678,19 @@ export default function VendorOrderPage() {
                   <strong>{proofSummary.clientReview}</strong>
                 </span>
                 <span>
+                  <FileClock size={18} aria-hidden="true" />
+                  <small>Revision</small>
+                  <strong>{proofSummary.revisionRequested}</strong>
+                </span>
+                <span>
                   <FileCheck size={18} aria-hidden="true" />
                   <small>Approved</small>
                   <strong>{proofSummary.approved}</strong>
                 </span>
                 <span>
-                  <FileClock size={18} aria-hidden="true" />
-                  <small>Artwork Pending</small>
-                  <strong>{proofSummary.artworkPending}</strong>
+                  <FileCheck size={18} aria-hidden="true" />
+                  <small>Production Ready</small>
+                  <strong>{proofSummary.productionReady}</strong>
                 </span>
               </div>
             </Panel>
@@ -923,6 +969,9 @@ export default function VendorOrderPage() {
                             </p>
                           ) : null}
                           {line.proof?.vendorNote ? <p>{line.proof.vendorNote}</p> : null}
+                          {line.proof?.printTeamFeedback && stage === "revision_requested" ? (
+                            <p className="vendor-proof-feedback">Revision note: {line.proof.printTeamFeedback}</p>
+                          ) : null}
                           {line.proof?.fullUrl ? (
                             <a className="btn btn-ghost btn-soft" href={line.proof.fullUrl} target="_blank" rel="noreferrer">
                               <ExternalLink size={15} aria-hidden="true" />

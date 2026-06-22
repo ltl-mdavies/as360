@@ -142,6 +142,37 @@
   align-items: start;
 }
 
+.vendor-card-badges {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.vendor-route-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--vendor-border);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.vendor-route-chip.is-lift {
+  color: #0369a1;
+  background: rgba(14, 165, 233, 0.1);
+}
+
+.vendor-route-chip.is-adspace {
+  color: #6d28d9;
+  background: rgba(124, 58, 237, 0.1);
+}
+
 .vendor-card-top strong,
 .vendor-line-head h3 {
   display: block;
@@ -278,9 +309,17 @@
   margin: 8px 0 0;
 }
 
+.vendor-ship-to.is-missing {
+  color: #92400e;
+}
+
+.vendor-ship-to.is-missing svg {
+  color: #d97706;
+}
+
 .vendor-proof-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -414,6 +453,11 @@
   font-size: 0.82rem;
 }
 
+.vendor-proof-cell .vendor-proof-feedback {
+  color: #9a3412;
+  font-weight: 800;
+}
+
 .vendor-proof-submit {
   display: grid;
   gap: 8px;
@@ -464,8 +508,11 @@
 
 .vendor-proof-status-artwork_pending { color: #b45309; background: rgba(245, 158, 11, 0.12); }
 .vendor-proof-status-needs_proof { color: #0369a1; background: rgba(14, 165, 233, 0.12); }
+.vendor-proof-status-vendor_submitted { color: #6d28d9; background: rgba(124, 58, 237, 0.12); }
 .vendor-proof-status-client_review { color: #7c3aed; background: rgba(124, 58, 237, 0.12); }
+.vendor-proof-status-revision_requested { color: #b42318; background: rgba(244, 63, 94, 0.12); }
 .vendor-proof-status-client_approved { color: #047857; background: rgba(16, 185, 129, 0.12); }
+.vendor-proof-status-production_ready { color: #047857; background: rgba(16, 185, 129, 0.12); }
 
 .vendor-line-form {
   display: grid;
@@ -645,6 +692,10 @@
 
   .vendor-proof-workflow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vendor-proof-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .vendor-proof-cell-wide {

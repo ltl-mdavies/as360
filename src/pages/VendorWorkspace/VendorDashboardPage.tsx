@@ -8,7 +8,8 @@ import { fetchVendorOrders, type ApiVendorOrderSummary, type ApiVendorWorkflowSt
 import { useApiClient } from "../../api/useApiClient";
 import "../../styles/vendorWorkspace.css";
 
-type StatusFilter = "all" | ApiVendorWorkflowStage | "attention" | "production";
+type StatusFilter = "all" | ApiVendorWorkflowStage | "attention" | "shipped_complete";
+type RouteFilter = "all" | "primary_print_vendor" | "external_vendor";
 
 const workflowLabels: Record<ApiVendorWorkflowStage, string> = {
   incoming: "Incoming",
@@ -36,6 +37,22 @@ function isPrimaryRoute(order: ApiVendorOrderSummary) {
   return order.integrationHealth.route === "primary_print_vendor";
 }
 
+function routeLabel(order: ApiVendorOrderSummary) {
+  return isPrimaryRoute(order) ? "Lift-backed" : "Adspace-managed";
+}
+
+function orderReferenceLabel(order: ApiVendorOrderSummary) {
+  if (isPrimaryRoute(order)) return "Lift Order";
+  if (order.project.contractNumber) return "Contract";
+  if (order.project.poNumber) return "PO";
+  return "AS360 Ref";
+}
+
+function orderReferenceValue(order: ApiVendorOrderSummary) {
+  if (isPrimaryRoute(order)) return order.project.liftOrderId || "—";
+  return order.project.contractNumber || order.project.poNumber || order.project.adspaceOrderNumber || "—";
+}
+
 function matchesSearch(order: ApiVendorOrderSummary, query: string) {
   if (!query) return true;
   const haystack = [
@@ -49,8 +66,17 @@ function matchesSearch(order: ApiVendorOrderSummary, query: string) {
     order.project.poNumber || "",
     order.project.contractNumber || "",
     order.vendorName,
+    routeLabel(order),
   ].map(normalize).join(" | ");
   return haystack.includes(query);
+}
+
+function matchesStatus(order: ApiVendorOrderSummary, status: StatusFilter) {
+  const stage = order.summary.workflow.stage;
+  if (status === "all") return true;
+  if (status === "attention") return order.summary.needsAttention;
+  if (status === "shipped_complete") return stage === "shipped" || stage === "complete";
+  return stage === status;
 }
 
 function workflowClass(stage: ApiVendorWorkflowStage) {
@@ -66,6 +92,7 @@ export default function VendorDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
+  const [route, setRoute] = useState<RouteFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -97,12 +124,10 @@ export default function VendorDashboardPage() {
     () =>
       orders.filter((order) => {
         if (!matchesSearch(order, normalizedQuery)) return false;
-        if (status === "all") return true;
-        if (status === "attention") return order.summary.needsAttention;
-        if (status === "production") return order.summary.workflow.stage === "production_ready" || order.summary.workflow.stage === "in_production";
-        return order.summary.workflow.stage === status;
+        if (route !== "all" && order.integrationHealth.route !== route) return false;
+        return matchesStatus(order, status);
       }),
-    [normalizedQuery, orders, status]
+    [normalizedQuery, orders, route, status]
   );
 
   const counts = useMemo(
@@ -112,9 +137,10 @@ export default function VendorDashboardPage() {
       incoming: orders.filter((order) => order.summary.workflow.stage === "incoming").length,
       needsProof: orders.filter((order) => order.summary.workflow.stage === "needs_proof").length,
       clientReview: orders.filter((order) => order.summary.workflow.stage === "client_review").length,
-      production: orders.filter((order) => order.summary.workflow.stage === "production_ready" || order.summary.workflow.stage === "in_production").length,
-      shipped: orders.filter((order) => order.summary.workflow.stage === "shipped").length,
-      complete: orders.filter((order) => order.summary.workflow.stage === "complete").length,
+      ready: orders.filter((order) => order.summary.workflow.stage === "production_ready").length,
+      inProduction: orders.filter((order) => order.summary.workflow.stage === "in_production").length,
+      shippedComplete: orders.filter((order) => order.summary.workflow.stage === "shipped" || order.summary.workflow.stage === "complete").length,
+      blocked: orders.filter((order) => order.summary.workflow.stage === "blocked").length,
     }),
     [orders]
   );
@@ -146,17 +172,17 @@ export default function VendorDashboardPage() {
         <button className={`vendor-kpi ${status === "client_review" ? "is-active" : ""}`} type="button" onClick={() => setStatus("client_review")}>
           <span>Client Review</span><strong>{counts.clientReview}</strong>
         </button>
-        <button className={`vendor-kpi ${status === "attention" ? "is-active" : ""}`} type="button" onClick={() => setStatus("attention")}>
-          <span>Needs Attention</span><strong>{counts.attention}</strong>
+        <button className={`vendor-kpi ${status === "production_ready" ? "is-active" : ""}`} type="button" onClick={() => setStatus("production_ready")}>
+          <span>Ready for Production</span><strong>{counts.ready}</strong>
         </button>
-        <button className={`vendor-kpi ${status === "production" ? "is-active" : ""}`} type="button" onClick={() => setStatus("production")}>
-          <span>Production</span><strong>{counts.production}</strong>
+        <button className={`vendor-kpi ${status === "in_production" ? "is-active" : ""}`} type="button" onClick={() => setStatus("in_production")}>
+          <span>In Production</span><strong>{counts.inProduction}</strong>
         </button>
-        <button className={`vendor-kpi ${status === "shipped" ? "is-active" : ""}`} type="button" onClick={() => setStatus("shipped")}>
-          <span>Shipped</span><strong>{counts.shipped}</strong>
+        <button className={`vendor-kpi ${status === "shipped_complete" ? "is-active" : ""}`} type="button" onClick={() => setStatus("shipped_complete")}>
+          <span>Shipped / Complete</span><strong>{counts.shippedComplete}</strong>
         </button>
-        <button className={`vendor-kpi ${status === "complete" ? "is-active" : ""}`} type="button" onClick={() => setStatus("complete")}>
-          <span>Complete</span><strong>{counts.complete}</strong>
+        <button className={`vendor-kpi ${status === "blocked" ? "is-active" : ""}`} type="button" onClick={() => setStatus("blocked")}>
+          <span>Blocked</span><strong>{counts.blocked}</strong>
         </button>
       </div>
 
@@ -178,13 +204,19 @@ export default function VendorDashboardPage() {
               <option value="incoming">Incoming</option>
               <option value="needs_proof">Needs Proof</option>
               <option value="client_review">Client Review</option>
-              <option value="production">Production</option>
               <option value="production_ready">Ready for Production</option>
               <option value="attention">Needs Attention</option>
               <option value="in_production">In Production</option>
               <option value="blocked">Blocked</option>
-              <option value="shipped">Shipped</option>
-              <option value="complete">Complete</option>
+              <option value="shipped_complete">Shipped / Complete</option>
+            </select>
+          </label>
+          <label className="vendor-filter">
+            <SlidersHorizontal size={16} aria-hidden="true" />
+            <select value={route} onChange={(event) => setRoute(event.target.value as RouteFilter)}>
+              <option value="all">All Routes</option>
+              <option value="primary_print_vendor">Lift-backed</option>
+              <option value="external_vendor">Adspace-managed</option>
             </select>
           </label>
         </div>
@@ -210,13 +242,16 @@ export default function VendorDashboardPage() {
                     <strong>{order.project.title}</strong>
                     <small>{order.project.customerName} · {order.project.venueName}</small>
                   </span>
-                  <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
+                  <span className="vendor-card-badges">
+                    <span className={`vendor-route-chip ${isPrimaryRoute(order) ? "is-lift" : "is-adspace"}`}>{routeLabel(order)}</span>
+                    <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
+                  </span>
                 </span>
                 <span className="vendor-card-grid">
                   <span><small>Adspace Order</small>{order.project.adspaceOrderNumber}</span>
                   <span>
-                    <small>{isPrimaryRoute(order) ? "Lift Order" : "Contract"}</small>
-                    {isPrimaryRoute(order) ? order.project.liftOrderId || "—" : order.project.contractNumber || "—"}
+                    <small>{orderReferenceLabel(order)}</small>
+                    {orderReferenceValue(order)}
                   </span>
                   <span><small>Lines</small>{order.summary.lineCount}</span>
                   <span><small>Locations</small>{order.summary.inventoryCount}</span>

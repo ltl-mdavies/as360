@@ -112,6 +112,12 @@ Client-facing/default proof review language should be vendor-neutral:
 
 Production/internal views can expose route and vendor detail where appropriate.
 
+Internal/admin proof views now use persisted route metadata for route-aware grouping and filtering:
+
+- Lift-backed primary print lines can be filtered separately from Adspace-managed vendor lines.
+- Internal route badges are shown only to proof editors/operators.
+- Customer/end-client proof references remain organized around Adspace proof lines and do not expose vendor names.
+
 ## Packages
 
 Vendor package generation is scoped to assigned lines.
@@ -124,9 +130,22 @@ Vendor packages include:
 
 Package generation is locked until the order is submitted to print.
 
+## Current Proof Ops Behavior
+
+Vendor dashboards are organized around vendor work queues:
+
+- Incoming
+- Needs Proof
+- Client Review
+- Ready for Production
+- In Production
+- Shipped / Complete
+- Blocked
+
+Vendor Order proof states distinguish artwork pending, needs proof, vendor proof submitted, client review, revision requested, client approved, and production ready. Vendor proof submission writes route-aware activity metadata for internal review and scoped vendor activity.
+
 ## Current Deferred Items
 
-- Admin/internal grouping of proof lines by Lift-backed versus Adspace-managed vendor routes.
 - Installer vendor workspace and post-print handoff.
 - Vendor notification preferences and forwarding.
 - Vendor-to-client/end-client message center.
@@ -143,3 +162,5 @@ Package generation is locked until the order is submitted to print.
 - Vendor package ZIP only includes assigned artwork and scoped manifest rows.
 - Vendor proof upload creates a pending proof visible to client/admin review without exposing vendor identity to end client.
 - Production/shipping updates persist to vendor line status and activity without mutating customer assignment/proof state.
+- Admin/internal Proof Approval can filter Lift-backed versus Adspace-managed proof lines.
+- Vendor dashboard buckets match incoming/proof/review/production/shipping work queues.
