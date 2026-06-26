@@ -2627,6 +2627,8 @@ html[data-theme="dark"] .share-denied{
 html[data-theme="dark"] .review-head,
 html[data-theme="dark"] .review-tabs,
 html[data-theme="dark"] .review-footer,
+html[data-theme="dark"] .review-termsModalHead,
+html[data-theme="dark"] .review-termsModalFoot,
 html[data-theme="dark"] .share-configHead,
 html[data-theme="dark"] .share-create{
   background:
@@ -2646,7 +2648,7 @@ html[data-theme="dark"] .review-headStat,
 html[data-theme="dark"] .review-tab,
 html[data-theme="dark"] .review-variant,
 html[data-theme="dark"] .review-summaryCard,
-html[data-theme="dark"] .review-terms,
+html[data-theme="dark"] .review-termsModal,
 html[data-theme="dark"] .share-linkCard{
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 95%, white 2%), color-mix(in srgb, var(--surface-panel) 95%, transparent));
@@ -2658,7 +2660,7 @@ html[data-theme="dark"] .review-headStatValue,
 html[data-theme="dark"] .review-title,
 html[data-theme="dark"] .review-variant-title,
 html[data-theme="dark"] .review-summaryTitle,
-html[data-theme="dark"] .review-terms-title,
+html[data-theme="dark"] .review-termsModalTitle,
 html[data-theme="dark"] .review-creativeName,
 html[data-theme="dark"] .review-tableCell.right{
   color: var(--signal-white);
@@ -2683,8 +2685,7 @@ html[data-theme="dark"] .share-linkStats{
 }
 
 html[data-theme="dark"] .review-contextNote,
-html[data-theme="dark"] .review-terms-scroll,
-html[data-theme="dark"] .review-terms-check,
+html[data-theme="dark"] .review-termsModalBody,
 html[data-theme="dark"] .share-linkTitle,
 html[data-theme="dark"] .share-linkStats strong,
 html[data-theme="dark"] .share-activityRow span:first-child{
@@ -2693,12 +2694,22 @@ html[data-theme="dark"] .share-activityRow span:first-child{
 
 html[data-theme="dark"] .review-creativeRow,
 html[data-theme="dark"] .review-tableRow,
-html[data-theme="dark"] .review-terms-box,
+html[data-theme="dark"] .review-submitGate,
 html[data-theme="dark"] .review-emptyRow,
 html[data-theme="dark"] .share-activity{
   background: var(--surface-field);
   border-color: var(--stroke);
   color: var(--text);
+}
+
+html[data-theme="dark"] .review-submitGate.is-required{
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--stroke));
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface-field));
+}
+
+html[data-theme="dark"] .review-submitGate.is-ready{
+  border-color: color-mix(in srgb, var(--brand-green) 34%, var(--stroke));
+  background: color-mix(in srgb, var(--brand-green) 10%, var(--surface-field));
 }
 
 html[data-theme="dark"] .review-locChip,

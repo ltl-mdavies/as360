@@ -1,5 +1,6 @@
 import { formatMediaDimensions, mockMediaVariants, type CreativeAsset } from "../../logic/mockAssignment";
 import { buildDocumentThumbUrl, buildMockFullPreviewUrl, buildMockThumbUrl } from "../../logic/imageUrls";
+import { generateCreativeColor } from "../../logic/creativeColors";
 import { demoStore } from "../../domain/store/demoStore";
 import type { Dispatch, SetStateAction } from "react";
 import {
@@ -81,6 +82,18 @@ export function makeUploadId(prefix = "up") {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 }
 
+function variantDetailsForKey(key: string) {
+  const known = mockMediaVariants.find((v: any) => v.key === key);
+  if (known) return known;
+  const [mediaName, w, h] = key.split("||");
+  return {
+    key,
+    mediaName: mediaName || "Media",
+    w: Number(w || 0),
+    h: Number(h || 0),
+  };
+}
+
 export function prepareUploadFiles(list: FileList | File[]): PreparedUploadFile[] {
   const arr = Array.from(list || []);
   return arr.map((file) => {
@@ -129,7 +142,7 @@ export async function addUploadedArtworkToProject(args: {
   apiClient?: ApiClientLike;
   customerId?: string;
 }) {
-  const variant = mockMediaVariants.find((v: any) => v.key === args.variantKey);
+  const variant = variantDetailsForKey(args.variantKey);
   const uploadedIds: string[] = [];
   const replaceLocalCreative = (creativeId: string, nextCreative: CreativeAsset) => {
     args.setLegacyCreatives?.((prev) => prev.map((item) => (item.id === creativeId ? nextCreative : item)));
@@ -149,12 +162,13 @@ export async function addUploadedArtworkToProject(args: {
         variant?.mediaName || "Media"
       } ${formatMediaDimensions(variant?.w || "", variant?.h || "")}`;
       const tempId = makeUploadId("creative_tmp");
+      const creativeColor = generateCreativeColor(`${tempId}|${filename}`);
       const initialThumb =
         !isPdf && file.type.startsWith("image/")
           ? URL.createObjectURL(file)
           : buildDocumentThumbUrl({
               label: isPdf ? "PDF" : "FILE",
-              accent: variant?.color || "#3F6ED8",
+              accent: creativeColor,
             });
 
       args.setLegacyCreatives?.((prev) => [
@@ -163,7 +177,7 @@ export async function addUploadedArtworkToProject(args: {
           filename,
           fileMeta,
           mediaVariantKey: args.variantKey,
-          color: variant?.color || "rgba(148,163,184,.9)",
+          color: creativeColor,
           assignedInventoryIds: [],
           thumbUrl: initialThumb,
           fullUrl: !isPdf && file.type.startsWith("image/") ? initialThumb : initialThumb,
@@ -256,7 +270,7 @@ export async function addUploadedArtworkToProject(args: {
           filename,
           fileMeta,
           mediaVariantKey: args.variantKey,
-          color: variant?.color || "rgba(148,163,184,.9)",
+          color: creativeColor,
           contentType: file.type || "application/octet-stream",
           thumbContentType: thumbnailFile?.type || undefined,
           sizeBytes: file.size,
@@ -285,6 +299,7 @@ export async function addUploadedArtworkToProject(args: {
 
   args.files.forEach(({ file, filename, isPdf, objectUrl }) => {
     const id = makeUploadId("cr");
+    const creativeColor = generateCreativeColor(`${id}|${filename}`);
     uploadedIds.push(id);
 
     const fileMeta = `${isPdf ? "PDF" : "FILE"} · ${(file.size / 1024 / 1024).toFixed(1)} MB · ${
@@ -296,9 +311,9 @@ export async function addUploadedArtworkToProject(args: {
       filename,
       fileMeta,
       mediaVariantKey: args.variantKey,
-      color: variant?.color || "rgba(148,163,184,.9)",
+      color: creativeColor,
       thumbUrl: objectUrl || buildMockThumbUrl(id, 240, 180),
-      fullUrl: objectUrl || (isPdf ? buildDocumentThumbUrl({ label: "PDF", accent: variant?.color || "#3F6ED8" }) : buildMockFullPreviewUrl(id, fileMeta, 1800)),
+      fullUrl: objectUrl || (isPdf ? buildDocumentThumbUrl({ label: "PDF", accent: creativeColor }) : buildMockFullPreviewUrl(id, fileMeta, 1800)),
       uploadState: "ready" as const,
       isOptimistic: false,
     };

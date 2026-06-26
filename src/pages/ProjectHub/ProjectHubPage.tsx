@@ -47,6 +47,7 @@ import {
   getEndClientStepperModel,
   isProofApprovalEnabled,
   isLiftOrderCompleted,
+  isLiftOrderLinkBlocked,
   isLiftProductionReference,
   getTransitBanner,
   type StepKey,
@@ -731,6 +732,7 @@ export default function ProjectHubPage() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [liftOrderUrlLoading, setLiftOrderUrlLoading] = useState(false);
   const [creativePackageGenerating, setCreativePackageGenerating] = useState(false);
+  const [workspaceReloadKey, setWorkspaceReloadKey] = useState(0);
 
   const loadProjectActivity = useCallback(async () => {
     if (!projectId || isDemo || shareAccess.isShareMode || shareAccess.isResolving || !isCustomerMode) return;
@@ -824,7 +826,7 @@ export default function ProjectHubPage() {
     return () => {
       cancelled = true;
     };
-  }, [api, isDemo, projectId, shareAccess.isResolving, shareAccess.isShareMode]);
+  }, [api, isDemo, projectId, shareAccess.isResolving, shareAccess.isShareMode, workspaceReloadKey]);
 
   useEffect(() => {
     if (shareAccess.isShareMode) void loadProjectActivity();
@@ -1124,6 +1126,20 @@ const artworkNeedsCount = Math.max(0, artworkVariantKeys.size - artworkCoveredKe
  */
 const primaryBanner = useMemo(() => {
   if (!stepper) return null;
+
+  if (rollup && isLiftOrderLinkBlocked(rollup)) {
+    return {
+      tone: "warning" as const,
+      title: rollup.liftSync?.label || "Lift order needs review",
+      body:
+        rollup.liftSync?.healthMessage ||
+        "The linked Lift order needs operator review before proofing or production continues.",
+      ctaKind: "open_proofs" as const,
+      ctaLabel: "Open Proof Reference",
+      ctaSecondaryKind: "download_allocation_pdf" as const,
+      ctaSecondaryLabel: "Download Allocation PDF",
+    };
+  }
 
   if (rollup && isLiftProductionReference(rollup)) {
     return {
@@ -2658,6 +2674,7 @@ const currentVenueOption =
 	    shareAccess.requireEdit("assignment", "order.submit", "submitted the project order", submit)
 	  }
 	  onSubmitted={(result) => {
+		invalidateProjectWorkspaceCache(rollup.projectId, shareAccess.isShareMode);
 		setBackendProject((prev: any) =>
 		  prev
 		    ? {
@@ -2669,6 +2686,8 @@ const currentVenueOption =
 		      }
 		    : prev
 		);
+		setWorkspaceReloadKey((current) => current + 1);
+		void loadProjectActivity();
 	  }}
 	  onDownloadPdf={handleDownloadAllocationPdf}
 	/>

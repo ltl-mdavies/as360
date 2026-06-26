@@ -1208,6 +1208,7 @@ html[data-theme="dark"] .venue-preview-inheritedShipTo{
 
 .venue-preview-mapInventoryList.venue-preview-placementInspectorCard{
   min-height: 90px;
+  gap: 8px;
 }
 
 .venue-preview-mapInventoryList.venue-preview-placementInspectorCard .venue-preview-rowTitle{
@@ -1217,6 +1218,50 @@ html[data-theme="dark"] .venue-preview-inheritedShipTo{
 .venue-preview-mapInventoryList.venue-preview-placementInspectorCard .venue-preview-rowSub{
   font-size: 12px;
   line-height: 1.45;
+}
+
+.venue-preview-pinSpecs{
+  min-width: 0;
+  display:flex;
+  flex-direction:column;
+  gap: 7px;
+}
+
+.venue-preview-pinSpecPrimary{
+  font-size: 14px;
+  font-weight: 900;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.venue-preview-pinSpecMuted{
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.venue-preview-pinSpecGrid{
+  display:grid;
+  grid-template-columns: minmax(58px, auto) minmax(0, 1fr);
+  gap: 5px 8px;
+  padding-top: 5px;
+  border-top: 1px solid var(--stroke2);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.venue-preview-pinSpecGrid span{
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.venue-preview-pinSpecGrid strong{
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .venue-preview-mapLoading,
@@ -1685,52 +1730,112 @@ html[data-theme="dark"] .venue-preview-inheritedShipTo{
 }
 
 .venue-preview-inventoryTable th:nth-child(7),
+.venue-preview-inventoryTable td:nth-child(7),
+.venue-preview-inventoryTable td:nth-child(7){
+  min-width: 158px;
+}
+
 .venue-preview-inventoryTable th:nth-child(8),
 .venue-preview-inventoryTable th:nth-child(9),
 .venue-preview-inventoryTable th:nth-child(10),
-.venue-preview-inventoryTable td:nth-child(7),
+.venue-preview-inventoryTable th:nth-child(11),
 .venue-preview-inventoryTable td:nth-child(8),
 .venue-preview-inventoryTable td:nth-child(9),
-.venue-preview-inventoryTable td:nth-child(10){
+.venue-preview-inventoryTable td:nth-child(10),
+.venue-preview-inventoryTable td:nth-child(11){
   min-width: 102px;
 }
 
-.venue-preview-inventoryTable td:nth-child(7) .venue-preview-input,
 .venue-preview-inventoryTable td:nth-child(8) .venue-preview-input,
 .venue-preview-inventoryTable td:nth-child(9) .venue-preview-input,
-.venue-preview-inventoryTable td:nth-child(10) .venue-preview-input{
+.venue-preview-inventoryTable td:nth-child(10) .venue-preview-input,
+.venue-preview-inventoryTable td:nth-child(11) .venue-preview-input{
   min-width: 96px;
   padding-inline: 10px;
   text-align: center;
 }
 
-.venue-preview-inventoryTable th:nth-child(11),
-.venue-preview-inventoryTable td:nth-child(11){
-  min-width: 212px;
-}
-
 .venue-preview-inventoryTable th:nth-child(12),
 .venue-preview-inventoryTable td:nth-child(12){
-  min-width: 132px;
+  min-width: 190px;
 }
 
 .venue-preview-inventoryTable th:nth-child(13),
 .venue-preview-inventoryTable td:nth-child(13){
-  min-width: 146px;
+  min-width: 188px;
 }
 
 .venue-preview-inventoryTable th:nth-child(14),
 .venue-preview-inventoryTable td:nth-child(14){
-  min-width: 108px;
+  min-width: 132px;
 }
 
 .venue-preview-inventoryTable th:nth-child(15),
 .venue-preview-inventoryTable td:nth-child(15){
+  min-width: 146px;
+}
+
+.venue-preview-inventoryTable th:nth-child(16),
+.venue-preview-inventoryTable td:nth-child(16){
+  min-width: 108px;
+}
+
+.venue-preview-inventoryTable th:nth-child(17),
+.venue-preview-inventoryTable td:nth-child(17){
   min-width: 88px;
+}
+
+.venue-preview-vendorCell{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap: 6px;
+}
+
+.venue-preview-vendorChip{
+  display:inline-flex;
+  align-items:center;
+  min-height: 24px;
+  max-width: 146px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(34,197,94,.2);
+  background: rgba(34,197,94,.08);
+  color: rgb(21,128,61);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.venue-preview-vendorChip.is-external{
+  border-color: rgba(63,110,216,.22);
+  background: rgba(63,110,216,.08);
+  color: rgb(55,81,162);
+}
+
+.venue-preview-vendorChip.is-warning{
+  border-color: rgba(245,158,11,.28);
+  background: rgba(245,158,11,.1);
+  color: rgb(146,64,14);
+}
+
+.venue-preview-vendorButton{
+  min-height: 28px;
+  padding-inline: 10px;
 }
 
 .venue-preview-notesInput{
   min-width: 190px;
+  min-height: 40px;
+  resize: vertical;
+  line-height: 1.35;
+}
+
+.venue-preview-locationInput{
+  min-width: 176px;
   min-height: 40px;
   resize: vertical;
   line-height: 1.35;
@@ -1784,6 +1889,10 @@ html[data-theme="dark"] .venue-preview-inheritedShipTo{
   width: min(1500px, 100%);
 }
 
+.venue-preview-modal-vendor{
+  width: min(760px, 100%);
+}
+
 .venue-preview-modalHead{
   padding: 20px 24px 16px;
   border-bottom: 1px solid var(--stroke2);
@@ -1805,6 +1914,73 @@ html[data-theme="dark"] .venue-preview-inheritedShipTo{
   display:flex;
   flex-direction:column;
   gap: 18px;
+}
+
+.venue-preview-vendorRouteGrid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.venue-preview-vendorRouteOption,
+.venue-preview-vendorListItem{
+  border: 1px solid var(--stroke2);
+  background: rgba(255,255,255,.82);
+  border-radius: 12px;
+  padding: 13px 14px;
+  text-align:left;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 14px;
+  color: var(--ink);
+  box-shadow: 0 10px 22px rgba(15,23,42,.04);
+}
+
+.venue-preview-vendorRouteOption{
+  cursor:pointer;
+}
+
+.venue-preview-vendorRouteOption:hover{
+  border-color: rgba(63,110,216,.32);
+  background: rgba(63,110,216,.06);
+}
+
+.venue-preview-vendorSelectButton{
+  flex: 0 0 auto;
+}
+
+.venue-preview-vendorRouteTitle,
+.venue-preview-vendorRouteMeta{
+  display:block;
+}
+
+.venue-preview-vendorRouteTitle{
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.venue-preview-vendorRouteMeta{
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.venue-preview-vendorPickerHead{
+  padding-top: 2px;
+  border-top: 1px solid var(--stroke2);
+}
+
+.venue-preview-vendorSearch{
+  max-width: 280px;
+}
+
+.venue-preview-vendorList{
+  display:flex;
+  flex-direction:column;
+  gap: 8px;
 }
 
 .venue-preview-reviewFlow{

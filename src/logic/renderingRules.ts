@@ -84,6 +84,10 @@ export function isLiftOrderCompleted(rollup: ProjectRollup): boolean {
   return !!rollup.liftSync?.completed || rollup.liftSync?.phase === "completed";
 }
 
+export function isLiftOrderLinkBlocked(rollup: ProjectRollup): boolean {
+  return rollup.liftSync?.phase === "cancelled" || rollup.liftSync?.phase === "missing";
+}
+
 export function isProjectComplete(rollup: ProjectRollup): boolean {
   return isLiftOrderCompleted(rollup);
 }
@@ -120,6 +124,10 @@ export function getAngieRowPrimaryAction(rollup: ProjectRollup, opts?: { canSubm
 
   // Lift can advance an order outside Adspace. Once the job is in production,
   // local assignment/transit/release prompts become stale; proofs become the reference surface.
+  if (isLiftOrderLinkBlocked(rollup)) {
+    return { kind: "open_project", label: "Resolve Lift Link" };
+  }
+
   if (isProjectComplete(rollup)) {
     return { kind: "open_project", label: "Open Hub" };
   }
@@ -177,6 +185,10 @@ export function getAngieProofsSummary(rollup: ProjectRollup): ProofsSummaryModel
   const { total, approved, pending, revised } = rollup.proofs;
   const waiting = rollup.proofs.waitingForProof || 0;
 
+  if (isLiftOrderLinkBlocked(rollup)) {
+    return { label: rollup.liftSync?.label || "Lift link issue", tone: "danger" };
+  }
+
   if (total === 0) return { label: "Not started", tone: "neutral" };
 
   const label = `${approved}/${total} Approved`;
@@ -196,6 +208,15 @@ export function getEndClientPrimaryActionCard(
   opts?: { endClientCanSubmit?: boolean }
 ): PrimaryActionCardModel {
   const endClientCanSubmit = opts?.endClientCanSubmit ?? false;
+
+  if (isLiftOrderLinkBlocked(rollup)) {
+    return {
+      variant: "status",
+      title: "Order review needed",
+      body: "The production team is reviewing this order before the next step.",
+      tone: "warning",
+    };
+  }
 
   if (isLiftProductionReference(rollup)) {
     return {
@@ -314,6 +335,11 @@ export function getEndClientStepperModel(rollup: ProjectRollup): StepperModel {
 
   if (isLiftOrderCompleted(rollup)) {
     setStates(steps, "complete");
+    return { steps };
+  }
+
+  if (isLiftOrderLinkBlocked(rollup)) {
+    setStates(steps, "proofs");
     return { steps };
   }
 

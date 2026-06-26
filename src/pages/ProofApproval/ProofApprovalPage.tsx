@@ -38,6 +38,15 @@ import { useWorkspacePresence, type WorkspaceChangeEvent } from "../../realtime/
 type FilterKey = "all" | "pending" | "approved" | "revised";
 type BackgroundJobStatus = "processing" | "success" | "error";
 type FeedbackSortOrder = "newest" | "oldest";
+type ProofActionKind = "approve" | "undo";
+type StagedRevisionFile = {
+  file: File;
+  filename: string;
+  sizeBytes: number;
+  previewKind: "image" | "pdf" | "file";
+  previewUrl?: string | null;
+  previewReady?: boolean;
+};
 const LIFT_PROOF_REVIEW_STEP = 7.02;
 const LIFT_COMPLETED_STEP = 18;
 
@@ -146,6 +155,11 @@ function proofSyncStatusText(sync?: ApiProjectProofsResponse["sync"] | null) {
   return "Lift proof sync has not run yet.";
 }
 
+function isStaleProofLineError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /proof line changed since you loaded/i.test(message);
+}
+
 function truncateMiddle(s: string, max = 34) {
   if (!s) return "";
   if (s.length <= max) return s;
@@ -164,6 +178,16 @@ function getProofFileName(line: ProofLineMock) {
   } catch {
     return "—";
   }
+}
+
+function cleanDisplayFilename(value?: string | null) {
+  const filename = (value || "").split("?")[0].split("/").pop() || "";
+  return filename.replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, "");
+}
+
+function getProofDisplayFilename(line: ProofLineMock) {
+  const filename = cleanDisplayFilename(line.vendorProofFilename || getProofFileName(line));
+  return filename || "—";
 }
 
 function hasClientUploadAsset(line: ProofLineMock | undefined | null) {
@@ -191,6 +215,60 @@ function formatHistoryDate(value?: string | null) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function proofReceivedLabel(line: ProofLineMock) {
+  return `Proof file received ${formatHistoryDate(line.vendorProofSubmittedAt || line.updatedAt)}`;
+}
+
+function ProofReceivedMeta({ line }: { line: ProofLineMock }) {
+  const proofName = getProofDisplayFilename(line);
+  return (
+    <div className="proof-receivedMeta">
+      <strong>{proofReceivedLabel(line)}</strong>
+      <span title={proofName}>{proofName}</span>
+    </div>
+  );
+}
+
+function ClientUploadMeta({ line }: { line: ProofLineMock }) {
+  return (
+    <div className="proof-receivedMeta proof-clientUploadMeta">
+      <strong>Client uploaded file</strong>
+      <span title={line.clientFileName}>{line.clientFileName}</span>
+    </div>
+  );
+}
+
+function formatFileSize(bytes?: number | null) {
+  if (!bytes) return "";
+  const mb = bytes / 1024 / 1024;
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+}
+
+function getStagedRevisionPreviewKind(file: File, filename: string): StagedRevisionFile["previewKind"] {
+  if (file.type.startsWith("image/")) return "image";
+  if (/\.pdf$/i.test(filename) || file.type === "application/pdf") return "pdf";
+  return "file";
+}
+
+function StagedRevisionSummary({ staged }: { staged: StagedRevisionFile }) {
+  const fallbackLabel = staged.previewKind === "pdf" ? "PDF" : "FILE";
+  return (
+    <div className="proof-stagedRevisionSummary">
+      <div className={`proof-stagedRevisionThumb ${staged.previewUrl ? "has-preview" : ""}`}>
+        {staged.previewUrl ? (
+          <img src={staged.previewUrl} alt="" />
+        ) : (
+          <span>{staged.previewReady ? fallbackLabel : "..."}</span>
+        )}
+      </div>
+      <div className="proof-stagedRevisionMeta">
+        <strong>{staged.filename}</strong>
+        <span>{formatFileSize(staged.sizeBytes) || "Ready to submit"}</span>
+      </div>
+    </div>
+  );
 }
 
 function getProofFeedback(line: ProofLineMock | undefined) {
@@ -285,17 +363,15 @@ function FeedbackGate({
           Review feedback
         </button>
       </div>
-      {!acknowledged ? (
-        <label className={`proof-dockAck ${mobile ? "proof-mobileAck" : ""}`}>
-          <input
-            type="checkbox"
-            checked={acknowledged}
-            disabled={disabled}
-            onChange={(event) => onAcknowledge(event.currentTarget.checked)}
-          />
-          <span>I reviewed all print feedback and attachments.</span>
-        </label>
-      ) : null}
+      <label className={`proof-dockAck ${mobile ? "proof-mobileAck" : ""}`}>
+        <input
+          type="checkbox"
+          checked={acknowledged}
+          disabled={disabled}
+          onChange={(event) => onAcknowledge(event.currentTarget.checked)}
+        />
+        <span>I reviewed all print feedback and attachments.</span>
+      </label>
     </div>
   );
 }
@@ -308,10 +384,8 @@ function buildProofHistory(line: ProofLineMock | undefined) {
     items.push({
       key: "current-proof",
       label: line.vendorProofFilename || (proofName === "—" ? `Proof line ${line.lineNumber}` : proofName),
-      badge: line.vendorProofSubmittedAt ? "Vendor proof" : "Current proof",
-      body: line.vendorProofSubmittedAt
-        ? `Submitted by print provider${line.vendorProofNote ? ` · ${line.vendorProofNote}` : ""}`
-        : "Current proof attached to this line.",
+      badge: "Current proof",
+      body: line.vendorProofNote ? `Proof note: ${line.vendorProofNote}` : "Current proof attached to this line.",
       date: formatHistoryDate(line.vendorProofSubmittedAt || line.updatedAt),
       tone: "current",
     });
@@ -350,6 +424,9 @@ function getCurrentProofVersion(line: ProofLineMock | undefined) {
     proofThumbUrl: line.proofThumbUrl || null,
     proofFullUrl: line.proofFullUrl || null,
     status: line.status,
+    proofApprovedBy: line.proofApprovedBy || null,
+    proofApprovedDate: line.proofApprovedDate || null,
+    technicalReports: line.technicalReports || [],
     createdAt: null,
     replacedAt: null,
     current: true,
@@ -359,7 +436,10 @@ function getCurrentProofVersion(line: ProofLineMock | undefined) {
 
 function getHistoricalProofVersions(line: ProofLineMock | undefined) {
   if (!line) return [];
-  return (line.proofVersions || []).filter((version) => !version.current || version.attachmentId !== line.liftProofingId);
+  return (line.proofVersions || []).filter((version) => {
+    const isHistorical = !version.current || version.attachmentId !== line.liftProofingId;
+    return isHistorical && (version.comments || []).length > 0;
+  });
 }
 
 async function withRetry<T>(task: () => Promise<T>, attempts = 2, delayMs = 250): Promise<T> {
@@ -378,6 +458,23 @@ async function withRetry<T>(task: () => Promise<T>, attempts = 2, delayMs = 250)
 }
 
 function toLiveProofLine(line: any): ProofLineMock {
+  const vendorProofNote = line.vendorProofNote || null;
+  const proofComments = Array.isArray(line.proofComments) ? line.proofComments : [];
+  const synthesizedVendorComment =
+    vendorProofNote && proofComments.length === 0
+      ? [
+          {
+            id: `vendor-proof-note:${line.lineItemId || line.id || "line"}`,
+            body: vendorProofNote,
+            createdAt: line.vendorProofSubmittedAt || line.updatedAt || null,
+            attachments: [],
+          },
+        ]
+      : proofComments;
+  const proofCommentAttachmentCount =
+    line.proofCommentAttachmentCount ||
+    synthesizedVendorComment.reduce((sum: number, comment: any) => sum + (comment.attachments?.length || 0), 0);
+
   return {
     lineItemId: line.lineItemId,
     lineNumber: line.lineNumber,
@@ -392,6 +489,7 @@ function toLiveProofLine(line: any): ProofLineMock {
     routeLabel: line.routeLabel ?? null,
     integrationMode: line.integrationMode,
     mediaVariantLabel: line.mediaVariantLabel,
+    liftProductName: line.liftProductName ?? null,
     mediaName: line.mediaName,
     w: line.w,
     h: line.h,
@@ -405,11 +503,14 @@ function toLiveProofLine(line: any): ProofLineMock {
     clientFullUrl: line.clientFullUrl || line.clientThumbUrl || null,
     proofThumbUrl: line.proofThumbUrl || line.proofFullUrl || null,
     proofFullUrl: line.proofFullUrl || line.proofThumbUrl || null,
-    printTeamFeedback: line.printTeamFeedback || null,
-    proofComments: line.proofComments || [],
-    proofCommentCount: line.proofCommentCount || 0,
-    proofCommentAttachmentCount: line.proofCommentAttachmentCount || 0,
-    latestProofCommentAt: line.latestProofCommentAt || null,
+    proofApprovedBy: line.proofApprovedBy ?? null,
+    proofApprovedDate: line.proofApprovedDate ?? null,
+    technicalReports: line.technicalReports || [],
+    printTeamFeedback: line.printTeamFeedback || vendorProofNote || null,
+    proofComments: synthesizedVendorComment,
+    proofCommentCount: Math.max(line.proofCommentCount || 0, synthesizedVendorComment.length),
+    proofCommentAttachmentCount,
+    latestProofCommentAt: line.latestProofCommentAt || synthesizedVendorComment[synthesizedVendorComment.length - 1]?.createdAt || null,
     proofVersions: line.proofVersions || [],
     vendorProofSubmittedAt: line.vendorProofSubmittedAt || null,
     vendorProofSubmittedByName: line.vendorProofSubmittedByName || null,
@@ -417,7 +518,7 @@ function toLiveProofLine(line: any): ProofLineMock {
     vendorProofFilename: line.vendorProofFilename || null,
     vendorProofContentType: line.vendorProofContentType || null,
     vendorProofSizeBytes: line.vendorProofSizeBytes ?? null,
-    vendorProofNote: line.vendorProofNote || null,
+    vendorProofNote,
     updatedAt: line.updatedAt || null,
   };
 }
@@ -441,6 +542,7 @@ export default function ProofApprovalPage() {
   const useProofCommandHeader = !useClassicProofHeader;
   const shareAccess = useShareAccess(projectId);
   const canEditProofs = shareAccess.canEdit("proofs");
+  const showInternalRouteMeta = canEditProofs && searchParams.get("mode") !== "customer";
 
   // Non-demo rollup (unchanged)
   const rollup = isDemo || projectId !== "proj_001" ? null : getRollupById(projectId || "");
@@ -458,6 +560,7 @@ export default function ProofApprovalPage() {
     venueName: string;
     extId?: string | null;
     liftOrderId?: string | null;
+    production?: { policy: "direct" | "hold_for_release" };
     productionReleasedAt?: string | null;
   } | null>(null);
   const [liveLines, setLiveLines] = useState<ProofLineMock[]>([]);
@@ -514,6 +617,7 @@ export default function ProofApprovalPage() {
             venueName: cachedWorkspace.project.venueName,
             extId: cachedWorkspace.project.extId || null,
             liftOrderId: cachedWorkspace.project.liftOrderId || null,
+            production: cachedWorkspace.project.production,
             productionReleasedAt: cachedWorkspace.project.productionReleasedAt || null,
           });
         }
@@ -541,6 +645,7 @@ export default function ProofApprovalPage() {
             venueName: workspaceResult.value.project.venueName,
             extId: workspaceResult.value.project.extId || null,
             liftOrderId: workspaceResult.value.project.liftOrderId || null,
+            production: workspaceResult.value.project.production,
             productionReleasedAt: workspaceResult.value.project.productionReleasedAt || null,
           });
         } else if (!cachedWorkspace) {
@@ -593,10 +698,11 @@ export default function ProofApprovalPage() {
   }, [api, applyProofResponse, isDemo, projectId, reloadToken, shareAccess.isResolving, shareAccess.isShareMode]);
 
   const syncProofsSilently = useCallback(async () => {
-    if (!projectId || isDemo) return;
+    if (!projectId || isDemo) return null;
     invalidateProjectProofsCache(projectId, shareAccess.isShareMode);
     invalidateProjectWorkspaceCache(projectId, shareAccess.isShareMode);
     try {
+      let refreshedLines: ProofLineMock[] | null = null;
       const [workspaceResult, proofsResult] = await Promise.allSettled([
         fetchProjectWorkspace(api, projectId, shareAccess.isShareMode),
         fetchProjectProofs(api, projectId, shareAccess.isShareMode, true),
@@ -607,16 +713,27 @@ export default function ProofApprovalPage() {
           venueName: workspaceResult.value.project.venueName,
           extId: workspaceResult.value.project.extId || null,
           liftOrderId: workspaceResult.value.project.liftOrderId || null,
+          production: workspaceResult.value.project.production,
           productionReleasedAt: workspaceResult.value.project.productionReleasedAt || null,
         });
       }
       if (proofsResult.status === "fulfilled") {
-        applyProofResponse(proofsResult.value);
+        refreshedLines = proofsResult.value.proofs
+          .slice()
+          .sort((a, b) => a.lineNumber - b.lineNumber)
+          .map((line) => toLiveProofLine(line));
+        setLiveLines(refreshedLines);
+        setProofSyncInfo(proofsResult.value.sync ?? null);
+        if (proofsResult.value.sync?.attempted && !proofsResult.value.sync.ok) {
+          setSyncWarning(proofsResult.value.sync.message || "Lift proof sync could not refresh yet.");
+        }
       }
+      return refreshedLines;
     } catch (error) {
       console.warn("Silent proof sync failed", error);
+      return null;
     }
-  }, [api, applyProofResponse, isDemo, projectId, shareAccess.isShareMode]);
+  }, [api, isDemo, projectId, shareAccess.isShareMode]);
 
   const enqueueCollaborationToast = useCollaborationToastQueue("Proof queue updated by another user.");
 
@@ -747,6 +864,10 @@ export default function ProofApprovalPage() {
   const [technicalInfoOpen, setTechnicalInfoOpen] = useState(false);
   const [lineNotes, setLineNotes] = useState<Record<string, string>>({});
   const [revisionJobs, setRevisionJobs] = useState<RevisionBackgroundJob[]>([]);
+  const [stagedRevisionByLine, setStagedRevisionByLine] = useState<Record<string, StagedRevisionFile>>({});
+  const [pendingProofAction, setPendingProofAction] = useState<string | null>(null);
+  const lineNotesRef = useRef<Record<string, string>>({});
+  const stagedRevisionRef = useRef<Record<string, StagedRevisionFile>>({});
   const mobileRevisionInputRef = useRef<HTMLInputElement | null>(null);
   const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
   const mobileToolsRef = useRef<HTMLDivElement | null>(null);
@@ -763,23 +884,36 @@ export default function ProofApprovalPage() {
   );
   const selectedFeedbackSummary = useMemo(() => getFeedbackSummary(selected), [selected]);
   const selectedLineNote = selected ? lineNotes[selected.lineItemId] || "" : "";
+  const selectedStagedRevision = selected ? stagedRevisionByLine[selected.lineItemId] || null : null;
   const hasPrintFeedback = selectedFeedbackSummary.hasFeedback;
   const feedbackAcknowledged = selected ? feedbackAcknowledgedByLine[feedbackAckKey(selected)] === true : false;
   const proofHistory = useMemo(() => buildProofHistory(selected), [selected]);
+
+  useEffect(() => {
+    stagedRevisionRef.current = stagedRevisionByLine;
+  }, [stagedRevisionByLine]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(stagedRevisionRef.current).forEach((staged) => {
+        if (staged.previewUrl) URL.revokeObjectURL(staged.previewUrl);
+      });
+    };
+  }, []);
   
   // Approval behavior flags (demo-safe defaults)
   const isApproved = selected?.status === "approved";
   const productionApprovalMode: "immediate" | "project_release" =
-    isDemo ? ctx.productionApprovalMode : "project_release";
+    isDemo
+      ? ctx.productionApprovalMode
+      : liveProject?.production?.policy === "direct"
+        ? "immediate"
+        : "project_release";
   const productionReleased = isDemo ? ctx.productionReleased : !!liveProject?.productionReleasedAt;
   const liftLinesBeyondProofReview =
     !isDemo && lines.length > 0 && lines.every((line) => isPostProofReferenceLine(line));
   const liftLinesComplete =
     !isDemo && lines.length > 0 && lines.every((line) => isLiftCompletedLine(line));
-  const selectedBeyondProofReview =
-    !isDemo && isPostProofReferenceLine(selected);
-  const selectedLiftComplete =
-    !isDemo && isLiftCompletedLine(selected);
   const selectedLiftControlledApproved =
     !isDemo && isLiftControlledApprovedLine(selected);
   const canUndoSelectedApproval =
@@ -889,7 +1023,7 @@ export default function ProofApprovalPage() {
   }
 
   function proofRouteLabel(line: ProofLineMock) {
-    return line.routeLabel || (proofRouteKey(line) === "adspace" ? "Adspace-managed vendor" : "Lift-backed primary print");
+    return proofRouteKey(line) === "adspace" ? "External" : "Lift Sync";
   }
 
   function getLocationPreview(line: ProofLineMock, limit = 2) {
@@ -906,11 +1040,18 @@ export default function ProofApprovalPage() {
 
     return [
       { label: "Adspace Proof Line", value: getProofLineLabel(line) },
-      { label: "Production Route", value: proofRouteLabel(line) },
+      ...(showInternalRouteMeta ? [{ label: "Production Route", value: proofRouteLabel(line) }] : []),
       ...(proofRouteKey(line) === "lift" && line.liftOrderLineId ? [{ label: "Lift Line ID", value: line.liftOrderLineId }] : []),
       ...(proofRouteKey(line) === "lift" && line.liftProofingId ? [{ label: "Proof ID", value: line.liftProofingId }] : []),
+      ...(proofRouteKey(line) === "lift" && line.liftProductName ? [{ label: "Lift Product", value: line.liftProductName }] : []),
       { label: "Client Upload Filename", value: line.clientFileName || "Unavailable" },
       { label: "Proof Filename", value: getProofFileName(line) },
+      ...(line.proofApprovedBy ? [{ label: "Approved By", value: line.proofApprovedBy }] : []),
+      ...(line.proofApprovedDate ? [{ label: "Approved Date", value: formatHistoryDate(line.proofApprovedDate) }] : []),
+      ...((line.technicalReports || []).map((report, index) => ({
+        label: report.definitionLabel || `Technical Report ${index + 1}`,
+        value: report.reportUrl || (report.reportId != null ? `Report ${report.reportId}` : "Available"),
+      }))),
       {
         label: "Qty",
         value: quantity == null ? "—" : `${quantity}${hasProofQuantityMismatch(line) ? ` · ${line.locations.length} assigned` : ""}`,
@@ -937,7 +1078,7 @@ export default function ProofApprovalPage() {
         return true;
       })
       .filter((l) => (mediaVariant === "all" ? true : mediaKey(l) === mediaVariant))
-      .filter((l) => (canEditProofs && routeFilter !== "all" ? proofRouteKey(l) === routeFilter : true))
+      .filter((l) => (showInternalRouteMeta && routeFilter !== "all" ? proofRouteKey(l) === routeFilter : true))
       .filter((l) => {
         if (!query) return true;
         const proofName = getProofFileName(l);
@@ -947,7 +1088,7 @@ export default function ProofApprovalPage() {
           l.mediaName,
           l.mediaVariantLabel || "",
           l.unitNumber || "",
-          canEditProofs ? proofRouteLabel(l) : "",
+          showInternalRouteMeta ? proofRouteLabel(l) : "",
           String(l.lineNumber),
           l.liftProofingId ? String(l.liftProofingId) : "",
           proofSiblingMeta.get(l.lineItemId)?.total ? getProofLineLabel(l) : "",
@@ -958,7 +1099,7 @@ export default function ProofApprovalPage() {
 
         return hay.includes(query);
       });
-  }, [lines, filter, q, mediaVariant, canEditProofs, routeFilter, proofSiblingMeta]);
+  }, [lines, filter, q, mediaVariant, showInternalRouteMeta, routeFilter, proofSiblingMeta]);
 
   const selectedHasProof = !!(selected?.proofThumbUrl || selected?.proofFullUrl);
   const selectedHasClientAsset = hasClientUploadAsset(selected);
@@ -967,6 +1108,17 @@ export default function ProofApprovalPage() {
   const isSelectedRevisionProcessing =
     !!selected &&
     revisionJobs.some((job) => job.lineItemId === selected.lineItemId && job.status === "processing");
+  const isSelectedApprovalProcessing = !!selected && isProofActionProcessing("approve", selected.lineItemId);
+  const isSelectedUndoProcessing = !!selected && isProofActionProcessing("undo", selected.lineItemId);
+
+  function proofActionId(kind: ProofActionKind, lineItemId: string) {
+    return `${kind}:${lineItemId}`;
+  }
+
+  function isProofActionProcessing(kind: ProofActionKind, lineItemId: string) {
+    return pendingProofAction === proofActionId(kind, lineItemId);
+  }
+
   function isLineWaiting(line: ProofLineMock) {
     return line.status === "waiting" || !(line.proofThumbUrl || line.proofFullUrl);
   }
@@ -995,6 +1147,7 @@ export default function ProofApprovalPage() {
       line.status !== "approved" &&
       canEditProofs &&
       !isLineRevisionProcessing(line) &&
+      !isProofActionProcessing("approve", line.lineItemId) &&
       (!getFeedbackSummary(line).hasFeedback || isLineFeedbackAcknowledged(line))
     );
   }
@@ -1013,7 +1166,7 @@ export default function ProofApprovalPage() {
     () => filtered.filter((line) => line.status !== "approved").length,
     [filtered]
   );
-  const hasActiveMobileFilters = filter !== "all" || q.trim() !== "" || mediaVariant !== "all" || (canEditProofs && routeFilter !== "all");
+  const hasActiveMobileFilters = filter !== "all" || q.trim() !== "" || mediaVariant !== "all" || (showInternalRouteMeta && routeFilter !== "all");
   const mobileFilterSummary =
     filter === "pending"
       ? `${counts.pending} pending`
@@ -1135,15 +1288,7 @@ export default function ProofApprovalPage() {
       : selectedIsWaiting
       ? "This line is still processing or waiting on a regenerated proof file before it can be approved."
       : isApproved
-      ? selectedLiftComplete
-        ? "This proof is approved and the order is complete."
-        : selectedBeyondProofReview
-        ? "This proof is approved and the order is now in production."
-        : selectedLiftControlledApproved
-        ? "This proof is approved and remains available as a reference."
-        : canUndoSelectedApproval
-        ? "This proof is approved and awaiting production release."
-        : "This proof is already approved."
+      ? "This proof is approved for print."
       : "Review the proof image, confirm any print feedback is resolved, then approve for print or upload a revision.";
   const selectedCompactNextStep =
     !selected
@@ -1172,6 +1317,9 @@ export default function ProofApprovalPage() {
       clientFullUrl?: string | null;
       proofThumbUrl?: string | null;
       proofFullUrl?: string | null;
+      proofApprovedBy?: string | null;
+      proofApprovedDate?: string | null;
+      technicalReports?: ProofLineMock["technicalReports"];
       printTeamFeedback?: string | null;
       proofComments?: ProofLineMock["proofComments"];
       proofCommentCount?: number;
@@ -1199,12 +1347,21 @@ export default function ProofApprovalPage() {
                 Object.prototype.hasOwnProperty.call(next, "proofFullUrl")
                   ? next.proofFullUrl ?? null
                   : l.proofFullUrl ?? null,
+              proofApprovedBy:
+                Object.prototype.hasOwnProperty.call(next, "proofApprovedBy")
+                  ? next.proofApprovedBy ?? null
+                  : l.proofApprovedBy ?? null,
+              proofApprovedDate:
+                Object.prototype.hasOwnProperty.call(next, "proofApprovedDate")
+                  ? next.proofApprovedDate ?? null
+                  : l.proofApprovedDate ?? null,
+              technicalReports: next.technicalReports ?? l.technicalReports ?? [],
               printTeamFeedback: next.printTeamFeedback ?? l.printTeamFeedback ?? null,
-              proofComments: next.proofComments ?? l.proofComments ?? [],
-              proofCommentCount: next.proofCommentCount ?? l.proofCommentCount ?? 0,
-              proofCommentAttachmentCount: next.proofCommentAttachmentCount ?? l.proofCommentAttachmentCount ?? 0,
-              latestProofCommentAt: next.latestProofCommentAt ?? l.latestProofCommentAt ?? null,
-              proofVersions: next.proofVersions ?? l.proofVersions ?? [],
+            proofComments: next.proofComments ?? l.proofComments ?? [],
+            proofCommentCount: next.proofCommentCount ?? l.proofCommentCount ?? 0,
+            proofCommentAttachmentCount: next.proofCommentAttachmentCount ?? l.proofCommentAttachmentCount ?? 0,
+            latestProofCommentAt: next.latestProofCommentAt ?? l.latestProofCommentAt ?? null,
+            proofVersions: next.proofVersions ?? l.proofVersions ?? [],
               updatedAt: Object.prototype.hasOwnProperty.call(next, "updatedAt") ? next.updatedAt ?? null : l.updatedAt ?? null,
             }
           : l
@@ -1233,6 +1390,113 @@ export default function ProofApprovalPage() {
     });
   }
 
+  function getLineNoteValue(lineItemId: string) {
+    return lineNotesRef.current[lineItemId] ?? lineNotes[lineItemId] ?? "";
+  }
+
+  function setLineNoteDraft(lineItemId: string, value: string, commit = false) {
+    lineNotesRef.current[lineItemId] = value;
+    if (commit) {
+      setLineNotes((prev) => ({
+        ...prev,
+        [lineItemId]: value,
+      }));
+    }
+  }
+
+  function clearLineNote(lineItemId: string) {
+    delete lineNotesRef.current[lineItemId];
+    setLineNotes((prev) => {
+      const next = { ...prev };
+      delete next[lineItemId];
+      return next;
+    });
+  }
+
+  function stageRevisedFile(file: File, line: ProofLineMock) {
+    if (!file || !line) return;
+    const filename = sanitizeFilename(file.name);
+    const previewKind = getStagedRevisionPreviewKind(file, filename);
+    const initialPreviewUrl = previewKind === "image" ? URL.createObjectURL(file) : null;
+    setSelectedId(line.lineItemId);
+    setShowRevisionUploader(true);
+    setIsRevisionDragActive(false);
+    setActionMessage(null);
+    setStagedRevisionByLine((prev) => {
+      const previousPreviewUrl = prev[line.lineItemId]?.previewUrl;
+      if (previousPreviewUrl) URL.revokeObjectURL(previousPreviewUrl);
+      return {
+        ...prev,
+        [line.lineItemId]: {
+          file,
+          filename,
+          sizeBytes: file.size,
+          previewKind,
+          previewUrl: initialPreviewUrl,
+          previewReady: previewKind !== "pdf",
+        },
+      };
+    });
+
+    if (previewKind === "pdf") {
+      void generatePdfThumbnail(file, filename)
+        .then((thumbnailFile) => {
+          const previewUrl = URL.createObjectURL(thumbnailFile);
+          setStagedRevisionByLine((prev) => {
+            const current = prev[line.lineItemId];
+            if (!current || current.file !== file || current.filename !== filename) {
+              URL.revokeObjectURL(previewUrl);
+              return prev;
+            }
+            if (current.previewUrl) URL.revokeObjectURL(current.previewUrl);
+            return {
+              ...prev,
+              [line.lineItemId]: {
+                ...current,
+                previewUrl,
+                previewReady: true,
+              },
+            };
+          });
+        })
+        .catch((error) => {
+          console.warn("Failed to generate staged revised PDF thumbnail", error);
+          setStagedRevisionByLine((prev) => {
+            const current = prev[line.lineItemId];
+            if (!current || current.file !== file || current.filename !== filename) return prev;
+            return {
+              ...prev,
+              [line.lineItemId]: {
+                ...current,
+                previewReady: true,
+              },
+            };
+          });
+        });
+    }
+  }
+
+  function clearStagedRevision(lineItemId: string) {
+    setStagedRevisionByLine((prev) => {
+      const next = { ...prev };
+      if (next[lineItemId]?.previewUrl) URL.revokeObjectURL(next[lineItemId].previewUrl);
+      delete next[lineItemId];
+      return next;
+    });
+  }
+
+  function cancelRevisionUpload(lineItemId?: string) {
+    if (lineItemId) clearStagedRevision(lineItemId);
+    setShowRevisionUploader(false);
+    setIsRevisionDragActive(false);
+  }
+
+  function submitStagedRevision(line: ProofLineMock) {
+    const staged = stagedRevisionByLine[line.lineItemId];
+    if (!staged || isLineRevisionProcessing(line)) return;
+    void processRevisedFile(staged.file, line);
+  }
+
   function openFeedbackDrawer(line: ProofLineMock) {
     setSelectedId(line.lineItemId);
     setFeedbackDrawerOpen(true);
@@ -1240,40 +1504,52 @@ export default function ProofApprovalPage() {
 
   function approveProofLine(line: ProofLineMock) {
     if (!line.proofFullUrl) return;
-    const lineNote = (lineNotes[line.lineItemId] || "").trim();
+    if (isProofActionProcessing("approve", line.lineItemId)) return;
+    const lineNote = getLineNoteValue(line.lineItemId).trim();
 
     shareAccess.requireEdit("proofs", "proof.approve", `approved proof line ${line.lineNumber}`, async () => {
-      if (isDemo && projectId) {
-        applyProofPatch(line.lineItemId, { status: "approved", revised: line.revised });
-        demoStore.actions.approveProofLine(projectId, line.lineItemId, "Demo User");
-      } else if (projectId) {
-        const response = await updateProjectProofLine(api, projectId, line.lineItemId, {
-          status: "approved",
-          proofDecisionComment: lineNote || null,
-          expectedUpdatedAt: line.updatedAt || null,
-          clientSessionId: presence.sessionId,
-        }, shareAccess.isShareMode);
-        applyProofPatch(line.lineItemId, {
-          status: response.proof.status,
-          revised: response.proof.revised,
-          proofThumbUrl: response.proof.proofThumbUrl || response.proof.proofFullUrl || null,
-          proofFullUrl: response.proof.proofFullUrl || response.proof.proofThumbUrl || null,
-          printTeamFeedback: response.proof.printTeamFeedback || null,
-          proofComments: response.proof.proofComments || [],
-          proofCommentCount: response.proof.proofCommentCount || 0,
-          proofCommentAttachmentCount: response.proof.proofCommentAttachmentCount || 0,
-          latestProofCommentAt: response.proof.latestProofCommentAt || null,
-          proofVersions: response.proof.proofVersions || [],
-        });
-      }
+      const actionId = proofActionId("approve", line.lineItemId);
+      setPendingProofAction(actionId);
+      setActionMessage(`Approving line ${line.lineNumber}...`);
+      try {
+        if (isDemo && projectId) {
+          applyProofPatch(line.lineItemId, { status: "approved", revised: line.revised });
+          demoStore.actions.approveProofLine(projectId, line.lineItemId, "Demo User");
+        } else if (projectId) {
+          const response = await updateProjectProofLine(api, projectId, line.lineItemId, {
+            status: "approved",
+            proofDecisionComment: lineNote || null,
+            expectedUpdatedAt: line.updatedAt || null,
+            clientSessionId: presence.sessionId,
+          }, shareAccess.isShareMode);
+          applyProofPatch(line.lineItemId, {
+            status: response.proof.status,
+            revised: response.proof.revised,
+            proofThumbUrl: response.proof.proofThumbUrl || response.proof.proofFullUrl || null,
+            proofFullUrl: response.proof.proofFullUrl || response.proof.proofThumbUrl || null,
+            printTeamFeedback: response.proof.printTeamFeedback || null,
+            proofComments: response.proof.proofComments || [],
+            proofCommentCount: response.proof.proofCommentCount || 0,
+            proofCommentAttachmentCount: response.proof.proofCommentAttachmentCount || 0,
+            latestProofCommentAt: response.proof.latestProofCommentAt || null,
+            proofVersions: response.proof.proofVersions || [],
+            proofApprovedBy: response.proof.proofApprovedBy || null,
+            proofApprovedDate: response.proof.proofApprovedDate || null,
+            technicalReports: response.proof.technicalReports || [],
+            updatedAt: response.proof.updatedAt || null,
+          });
+        }
 
-      setLineNotes((prev) => {
-        const next = { ...prev };
-        delete next[line.lineItemId];
-        return next;
-      });
-      clearFeedbackAcknowledgement(line.lineItemId);
-      setActionMessage("Proof approved. You can continue reviewing the remaining lines.");
+        clearLineNote(line.lineItemId);
+        clearFeedbackAcknowledgement(line.lineItemId);
+        setActionMessage(null);
+      } catch (error) {
+        console.error("Failed to approve proof", error);
+        const message = error instanceof Error ? error.message : "We couldn't approve this proof yet. Please try again.";
+        setActionMessage(message);
+      } finally {
+        setPendingProofAction((current) => (current === actionId ? null : current));
+      }
     });
   }
 
@@ -1289,7 +1565,11 @@ export default function ProofApprovalPage() {
       setShowRevisionUploader(true);
       return;
     }
-    setShowRevisionUploader((prev) => !prev);
+    if (showRevisionUploader) {
+      cancelRevisionUpload(line.lineItemId);
+    } else {
+      setShowRevisionUploader(true);
+    }
   }
 
   function updateRevisionJob(jobId: string, patch: Partial<RevisionBackgroundJob>) {
@@ -1298,16 +1578,6 @@ export default function ProofApprovalPage() {
 
   function dismissRevisionJob(jobId: string) {
     setRevisionJobs((prev) => prev.filter((job) => job.id !== jobId));
-  }
-
-  function selectNextProofLine(currentLineId: string) {
-    const currentIndex = filtered.findIndex((line) => line.lineItemId === currentLineId);
-    const nextLine =
-      filtered.slice(currentIndex + 1).find((line) => line.status !== "approved") ||
-      filtered.find((line) => line.lineItemId !== currentLineId && line.status !== "approved") ||
-      filtered.find((line) => line.lineItemId !== currentLineId);
-
-    if (nextLine) setSelectedId(nextLine.lineItemId);
   }
 
   async function runRevisedFileJob(
@@ -1446,15 +1716,40 @@ export default function ProofApprovalPage() {
         sizeBytes: file.size,
       }, shareAccess.isShareMode);
 
-      const response = await updateProjectProofLine(api, projectId, lineForJob.lineItemId, {
-        status: "pending",
+      const buildRevisionPayload = (expectedUpdatedAt: string | null) => ({
+        status: "pending" as const,
         revised: true,
         clientFileName: filename,
         useClientCreativeAsProof: true,
         proofDecisionComment: lineNote || null,
-        expectedUpdatedAt: lineForJob.updatedAt || null,
+        expectedUpdatedAt,
         clientSessionId: presence.sessionId,
-      }, shareAccess.isShareMode);
+      });
+
+      let response: Awaited<ReturnType<typeof updateProjectProofLine>>;
+      try {
+        response = await updateProjectProofLine(
+          api,
+          projectId,
+          lineForJob.lineItemId,
+          buildRevisionPayload(lineForJob.updatedAt || null),
+          shareAccess.isShareMode
+        );
+      } catch (error) {
+        if (!isStaleProofLineError(error)) throw error;
+        updateRevisionJob(jobId, {
+          detail: "Proof data changed during upload. Refreshing and finishing submission.",
+        });
+        const refreshedLines = await syncProofsSilently();
+        const refreshedLine = refreshedLines?.find((line) => line.lineItemId === lineForJob.lineItemId);
+        response = await updateProjectProofLine(
+          api,
+          projectId,
+          lineForJob.lineItemId,
+          buildRevisionPayload(refreshedLine?.updatedAt || null),
+          shareAccess.isShareMode
+        );
+      }
 
       applyProofPatch(lineForJob.lineItemId, {
         status: response.proof.status,
@@ -1476,6 +1771,9 @@ export default function ProofApprovalPage() {
         proofCommentAttachmentCount: response.proof.proofCommentAttachmentCount || 0,
         latestProofCommentAt: response.proof.latestProofCommentAt || null,
         proofVersions: response.proof.proofVersions || [],
+        proofApprovedBy: response.proof.proofApprovedBy || null,
+        proofApprovedDate: response.proof.proofApprovedDate || null,
+        technicalReports: response.proof.technicalReports || [],
         updatedAt: response.proof.updatedAt || null,
       });
 
@@ -1487,7 +1785,17 @@ export default function ProofApprovalPage() {
       window.setTimeout(() => dismissRevisionJob(jobId), 5000);
     } catch (error) {
       console.error("Failed to upload revised artwork", error);
-      const message = error instanceof Error ? error.message : "We couldn't upload the revised artwork yet. Please try again.";
+      const staleLine = isStaleProofLineError(error);
+      const message = staleLine
+        ? "Proof data refreshed. Submit the revised artwork again."
+        : error instanceof Error ? error.message : "We couldn't upload the revised artwork yet. Please try again.";
+      if (staleLine) {
+        const refreshedLines = await syncProofsSilently();
+        const refreshedLine = refreshedLines?.find((line) => line.lineItemId === lineForJob.lineItemId) || lineForJob;
+        setSelectedId(lineForJob.lineItemId);
+        setShowRevisionUploader(true);
+        stageRevisedFile(file, refreshedLine);
+      }
       if (!isDemo && projectId) {
         void logProjectErrorEvent(api, projectId, {
           actionType: "proof.revise",
@@ -1503,7 +1811,7 @@ export default function ProofApprovalPage() {
         }, shareAccess.isShareMode).catch(() => undefined);
       }
       if (lineNote) {
-        setLineNotes((prev) => ({ ...prev, [lineForJob.lineItemId]: lineNote }));
+        setLineNoteDraft(lineForJob.lineItemId, lineNote, true);
       }
       updateRevisionJob(jobId, {
         status: "error",
@@ -1517,7 +1825,7 @@ export default function ProofApprovalPage() {
     const lineForJob = lineOverride || selected;
     if (!file || !lineForJob || !projectId) return;
     const filename = sanitizeFilename(file.name);
-    const lineNote = (lineNotes[lineForJob.lineItemId] || "").trim();
+    const lineNote = getLineNoteValue(lineForJob.lineItemId).trim();
     const jobId = `${lineForJob.lineItemId}-${Date.now()}`;
 
     await shareAccess.requireEdit(
@@ -1538,16 +1846,12 @@ export default function ProofApprovalPage() {
           },
           ...prev.filter((job) => job.id !== jobId),
         ]);
-        setLineNotes((prev) => {
-          const next = { ...prev };
-          delete next[lineForJob.lineItemId];
-          return next;
-        });
+        clearLineNote(lineForJob.lineItemId);
+        clearStagedRevision(lineForJob.lineItemId);
         setShowRevisionUploader(false);
         setIsRevisionDragActive(false);
         clearFeedbackAcknowledgement(lineForJob.lineItemId);
         setActionMessage(null);
-        selectNextProofLine(lineForJob.lineItemId);
         void runRevisedFileJob(jobId, file, lineForJob, lineNote);
       }
     );
@@ -1556,33 +1860,48 @@ export default function ProofApprovalPage() {
   function undoApproval() {
     if (!selected) return;
     shareAccess.requireEdit("proofs", "proof.undo_approval", `removed approval for proof line ${selected.lineNumber}`, async () => {
-      if (isDemo && projectId) {
-        applyProofPatch(selected.lineItemId, { status: "pending", revised: selected.revised });
-        demoStore.actions.updateProofLine(projectId, selected.lineItemId, {
-          status: "pending",
-        } as any);
-      } else if (projectId) {
-        const response = await updateProjectProofLine(api, projectId, selected.lineItemId, {
-          status: "pending",
-          expectedUpdatedAt: selected.updatedAt || null,
-          clientSessionId: presence.sessionId,
-        }, shareAccess.isShareMode);
-        applyProofPatch(selected.lineItemId, {
-          status: response.proof.status,
-          revised: response.proof.revised,
-          proofThumbUrl: response.proof.proofThumbUrl || response.proof.proofFullUrl || null,
-          proofFullUrl: response.proof.proofFullUrl || response.proof.proofThumbUrl || null,
-          printTeamFeedback: response.proof.printTeamFeedback || null,
-          proofComments: response.proof.proofComments || [],
-          proofCommentCount: response.proof.proofCommentCount || 0,
-          proofCommentAttachmentCount: response.proof.proofCommentAttachmentCount || 0,
-          latestProofCommentAt: response.proof.latestProofCommentAt || null,
-          proofVersions: response.proof.proofVersions || [],
-          updatedAt: response.proof.updatedAt || null,
-        });
-      }
+      const lineForUndo = selected;
+      const actionId = proofActionId("undo", lineForUndo.lineItemId);
+      setPendingProofAction(actionId);
+      setActionMessage(`Updating line ${lineForUndo.lineNumber}...`);
+      try {
+        if (isDemo && projectId) {
+          applyProofPatch(lineForUndo.lineItemId, { status: "pending", revised: lineForUndo.revised });
+          demoStore.actions.updateProofLine(projectId, lineForUndo.lineItemId, {
+            status: "pending",
+          } as any);
+        } else if (projectId) {
+          const response = await updateProjectProofLine(api, projectId, lineForUndo.lineItemId, {
+            status: "pending",
+            expectedUpdatedAt: lineForUndo.updatedAt || null,
+            clientSessionId: presence.sessionId,
+          }, shareAccess.isShareMode);
+          applyProofPatch(lineForUndo.lineItemId, {
+            status: response.proof.status,
+            revised: response.proof.revised,
+            proofThumbUrl: response.proof.proofThumbUrl || response.proof.proofFullUrl || null,
+            proofFullUrl: response.proof.proofFullUrl || response.proof.proofThumbUrl || null,
+            printTeamFeedback: response.proof.printTeamFeedback || null,
+            proofComments: response.proof.proofComments || [],
+            proofCommentCount: response.proof.proofCommentCount || 0,
+            proofCommentAttachmentCount: response.proof.proofCommentAttachmentCount || 0,
+            latestProofCommentAt: response.proof.latestProofCommentAt || null,
+            proofVersions: response.proof.proofVersions || [],
+            proofApprovedBy: response.proof.proofApprovedBy || null,
+            proofApprovedDate: response.proof.proofApprovedDate || null,
+            technicalReports: response.proof.technicalReports || [],
+            updatedAt: response.proof.updatedAt || null,
+          });
+        }
 
-      setActionMessage("Approval removed. This proof now needs review again.");
+        setActionMessage("Approval removed. This proof now needs review again.");
+      } catch (error) {
+        console.error("Failed to undo proof approval", error);
+        const message = error instanceof Error ? error.message : "We couldn't update this proof yet. Please try again.";
+        setActionMessage(message);
+      } finally {
+        setPendingProofAction((current) => (current === actionId ? null : current));
+      }
     });
   }
 
@@ -1898,11 +2217,11 @@ export default function ProofApprovalPage() {
                     </option>
                   ))}
                 </select>
-                {canEditProofs ? (
+                {showInternalRouteMeta ? (
                   <select className="select proof-media" value={routeFilter} onChange={handleMobileRouteChange}>
                     <option value="all">All Routes</option>
-                    <option value="lift">Lift-backed</option>
-                    <option value="adspace">Adspace-managed</option>
+                    <option value="lift">Lift Sync</option>
+                    <option value="adspace">External</option>
                   </select>
                 ) : null}
               </div>
@@ -1959,10 +2278,12 @@ export default function ProofApprovalPage() {
             const lineIsApproved = l.status === "approved";
             const lineIsWaiting = isLineWaiting(l);
             const lineIsProcessing = isLineRevisionProcessing(l);
+            const lineIsApproving = isProofActionProcessing("approve", l.lineItemId);
             const lineCanApprove = canApproveLine(l);
             const lineCanUploadRevision = canUploadRevisionForLine(l);
             const lineNeedsFeedbackAck = lineRequiresFeedbackAcknowledgement(l);
             const isUploaderOpenForLine = showRevisionUploader && selected?.lineItemId === l.lineItemId && !lineIsApproved;
+            const lineStagedRevision = stagedRevisionByLine[l.lineItemId] || null;
             const lineUsesSimpleDecisionDock = !lineFeedbackSummary.hasFeedback && !lineIsApproved && !lineIsWaiting;
             return (
               <article
@@ -1995,21 +2316,24 @@ export default function ProofApprovalPage() {
                 ) : null}
 
                 {lineHasClientAsset ? (
-                  <div className="proof-mobileUpload">
-                    <button
-                      className="proof-mobileUploadThumb"
-                      type="button"
-                      disabled={!l.clientFullUrl}
-                      aria-label={`View client upload ${l.clientFileName}`}
-                      onClick={() => l.clientFullUrl && window.open(l.clientFullUrl, "_blank")}
-                    >
-                      <img src={l.clientThumbUrl || l.clientFullUrl || getQueueThumbUrl(l)} alt="" />
-                    </button>
-                    <div className="proof-mobileFileBlock">
-                      <div className="proof-mobileFileLabel">Client upload</div>
-                      <div className="proof-mobileFileName" title={l.clientFileName}>{l.clientFileName}</div>
+                  <>
+                    <div className="proof-mobileUpload">
+                      <button
+                        className="proof-mobileUploadThumb"
+                        type="button"
+                        disabled={!l.clientFullUrl}
+                        aria-label={`View client upload ${l.clientFileName}`}
+                        onClick={() => l.clientFullUrl && window.open(l.clientFullUrl, "_blank")}
+                      >
+                        <img src={l.clientThumbUrl || l.clientFullUrl || getQueueThumbUrl(l)} alt="" />
+                      </button>
+                      <div className="proof-mobileFileBlock">
+                        <div className="proof-mobileFileLabel">Client upload</div>
+                        <div className="proof-mobileFileName" title={l.clientFileName}>{l.clientFileName}</div>
+                      </div>
                     </div>
-                  </div>
+                    <ClientUploadMeta line={l} />
+                  </>
                 ) : (
                   <div className="proof-uploadUnavailable">
                     Original client upload unavailable for this proof line.
@@ -2029,12 +2353,7 @@ export default function ProofApprovalPage() {
                     <div className="proof-waiting">The current proof file has not been published yet...</div>
                   )}
                 </button>
-                <div className="proof-mobileProofFooter">
-                  <div className="proof-mobileFileBlock">
-                    <div className="proof-mobileFileLabel">Proof file</div>
-                    <div className="proof-mobileFileName" title={proofName}>{proofName}</div>
-                  </div>
-                </div>
+                {l.proofFullUrl || l.proofThumbUrl ? <ProofReceivedMeta line={l} /> : null}
 
                 {isUploaderOpenForLine ? (
                   <div
@@ -2045,43 +2364,68 @@ export default function ProofApprovalPage() {
                       setIsRevisionDragActive(true);
                     }}
                     onDragLeave={() => setIsRevisionDragActive(false)}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      setIsRevisionDragActive(false);
-                      const file = event.dataTransfer.files?.[0];
-                      if (file) void processRevisedFile(file, l);
-                    }}
-                  >
-                    <div className="proof-revisionDropTitle">Upload revised artwork</div>
-                    <div className="proof-revisionDropActions">
-                      <button
-                        className="btn btn-ghost btn-soft"
-                        type="button"
-                        disabled={!canEditProofs || lineIsProcessing}
+	                    onDrop={(event) => {
+	                      event.preventDefault();
+	                      setIsRevisionDragActive(false);
+	                      const file = event.dataTransfer.files?.[0];
+	                      if (file) stageRevisedFile(file, l);
+	                    }}
+	                  >
+	                    <div className="proof-revisionDropTitle">Upload revised artwork</div>
+	                    {lineStagedRevision ? (
+	                      <div className="proof-stagedRevision">
+	                        <StagedRevisionSummary staged={lineStagedRevision} />
+	                        <button
+	                          className="btn btn-ghost btn-soft"
+	                          type="button"
+	                          disabled={lineIsProcessing}
+	                          onClick={() => clearStagedRevision(l.lineItemId)}
+	                        >
+	                          Clear
+	                        </button>
+	                      </div>
+	                    ) : (
+	                      <div className="proof-revisionDropBody">
+	                        Drop or browse for the revised file. Nothing is sent until you submit.
+	                      </div>
+	                    )}
+	                    <div className="proof-revisionDropActions">
+	                      <button
+	                        className="btn btn-ghost btn-soft"
+	                        type="button"
+	                        disabled={!canEditProofs || lineIsProcessing}
                         onClick={() => mobileRevisionInputRef.current?.click()}
                       >
                         Browse Files
                       </button>
-                      <button
-                        className="btn btn-ghost btn-soft"
-                        type="button"
-                        disabled={lineIsProcessing}
-                        onClick={() => setShowRevisionUploader(false)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                    <input
-                      ref={mobileRevisionInputRef}
-                      hidden
+	                      <button
+	                        className="btn btn-ghost btn-soft"
+	                        type="button"
+	                        disabled={lineIsProcessing}
+	                        onClick={() => cancelRevisionUpload(l.lineItemId)}
+	                      >
+	                        Cancel
+	                      </button>
+	                      <button
+	                        className="btn btn-primary"
+	                        type="button"
+	                        disabled={!canEditProofs || lineIsProcessing || !lineStagedRevision}
+	                        onClick={() => submitStagedRevision(l)}
+	                      >
+	                        Submit Revised Art
+	                      </button>
+	                    </div>
+	                    <input
+	                      ref={mobileRevisionInputRef}
+	                      hidden
                       type="file"
-                      accept=".pdf,image/*"
-                      onChange={(event) => {
-                        const file = event.currentTarget.files?.[0];
-                        if (file) void processRevisedFile(file, l);
-                        event.currentTarget.value = "";
-                      }}
-                    />
+	                      accept=".pdf,image/*"
+	                      onChange={(event) => {
+	                        const file = event.currentTarget.files?.[0];
+	                        if (file) stageRevisedFile(file, l);
+	                        event.currentTarget.value = "";
+	                      }}
+	                    />
                   </div>
                 ) : null}
 
@@ -2104,20 +2448,16 @@ export default function ProofApprovalPage() {
                   {!lineNeedsFeedbackAck || lineIsApproved ? (
                     <label className="proof-dockNoteWrap proof-mobileNoteWrap">
                       <span>Line note</span>
-                      <textarea
-                        className="proof-dockNote"
-                        placeholder="Optional note sent with this decision"
-                        value={lineNotes[l.lineItemId] || ""}
-                        disabled={!canEditProofs || lineIsApproved || lineIsProcessing}
-                        onFocus={() => setSelectedId(l.lineItemId)}
-                        onChange={(event) => {
-                          setSelectedId(l.lineItemId);
-                          setLineNotes((prev) => ({
-                            ...prev,
-                            [l.lineItemId]: event.currentTarget.value,
-                          }));
-                        }}
-                      />
+	                      <textarea
+	                        className="proof-dockNote"
+	                        placeholder="Optional note sent with this decision"
+	                        key={`line-note-${l.lineItemId}-${lineNotes[l.lineItemId] || ""}`}
+	                        defaultValue={lineNotes[l.lineItemId] || ""}
+	                        disabled={!canEditProofs || lineIsApproved || lineIsProcessing}
+	                        onFocus={() => setSelectedId(l.lineItemId)}
+	                        onChange={(event) => setLineNoteDraft(l.lineItemId, event.currentTarget.value)}
+	                        onBlur={(event) => setLineNoteDraft(l.lineItemId, event.currentTarget.value, true)}
+	                      />
                     </label>
                   ) : null}
 
@@ -2126,15 +2466,20 @@ export default function ProofApprovalPage() {
                     {!lineIsApproved ? (
                       <>
                           <button
-                            className={lineCanApprove ? "btn btn-primary btn-lg" : "btn btn-ghost btn-soft btn-lg"}
-                            disabled={!lineCanApprove}
+                            className={lineCanApprove || lineIsApproving ? "btn btn-primary btn-lg" : "btn btn-ghost btn-soft btn-lg"}
+                            disabled={!lineCanApprove || lineIsApproving}
                             onClick={() => {
                               setSelectedId(l.lineItemId);
                               approveProofLine(l);
                             }}
                             type="button"
                           >
-                            {lineIsWaiting ? "Waiting for Proof" : "Approve for Print"}
+                            {lineIsApproving ? (
+                              <>
+                                <span className="proof-buttonSpinner" aria-hidden="true" />
+                                Approving...
+                              </>
+                            ) : lineIsWaiting ? "Waiting for Proof" : "Approve for Print"}
                           </button>
 
                           <button
@@ -2148,13 +2493,7 @@ export default function ProofApprovalPage() {
                         </>
                     ) : (
                         <div className="proof-approvedNote tone-success">
-                          {!isDemo && isLiftCompletedLine(l)
-                            ? "Approved - order complete"
-                            : !isDemo && isPostProofReferenceLine(l)
-                              ? "Approved - order in production"
-                              : !isDemo && isLiftApprovedLine(l)
-                                ? "Approved in Lift"
-                                : "Approved for print"}
+                          This proof is approved for print.
                         </div>
                       )}
                     </div>
@@ -2208,11 +2547,11 @@ export default function ProofApprovalPage() {
                 </option>
               ))}
             </select>
-            {canEditProofs ? (
+            {showInternalRouteMeta ? (
               <select className="select proof-media" value={routeFilter} onChange={(e) => setRouteFilter(e.target.value as "all" | "lift" | "adspace")}>
                 <option value="all">All Routes</option>
-                <option value="lift">Lift-backed</option>
-                <option value="adspace">Adspace-managed</option>
+                <option value="lift">Lift Sync</option>
+                <option value="adspace">External</option>
               </select>
             ) : null}
           </div>
@@ -2245,9 +2584,6 @@ export default function ProofApprovalPage() {
                     <div className="proof-row-top">
                       <span className="proof-lineIdentity">
                         <span className="proof-lineBadge">{getProofLineLabel(l)}</span>
-                        {canEditProofs ? (
-                          <span className={`proof-routeBadge proof-route-${proofRouteKey(l)}`}>{proofRouteKey(l) === "adspace" ? "Adspace-managed" : "Lift-backed"}</span>
-                        ) : null}
                         {feedbackSummary.hasFeedback ? (
                           <span className="proof-commentBadge" title={formatFeedbackMeta(l)}>
                             {feedbackSummary.commentCount || feedbackSummary.attachmentCount} feedback
@@ -2338,26 +2674,29 @@ export default function ProofApprovalPage() {
                   </div>
 
                   {selectedHasClientAsset ? (
-                    <div className="proof-mobileUpload proof-tabletUpload">
-                      <button
-                        className="proof-mobileUploadThumb"
-                        type="button"
-                        disabled={!selected.clientFullUrl}
-                        aria-label={`View client upload ${selected.clientFileName}`}
-                        onClick={() => selected.clientFullUrl && window.open(selected.clientFullUrl, "_blank")}
-                      >
-                        <img src={selected.clientThumbUrl || selected.clientFullUrl || getQueueThumbUrl(selected)} alt="" />
-                      </button>
-                      <div className="proof-mobileFileBlock">
-                        <div className="proof-mobileFileLabel">Client upload</div>
-                        <div className="proof-mobileFileName" title={selected.clientFileName}>{selected.clientFileName}</div>
+                    <>
+                      <div className="proof-mobileUpload proof-tabletUpload">
+                        <button
+                          className="proof-mobileUploadThumb"
+                          type="button"
+                          disabled={!selected.clientFullUrl}
+                          aria-label={`View client upload ${selected.clientFileName}`}
+                          onClick={() => selected.clientFullUrl && window.open(selected.clientFullUrl, "_blank")}
+                        >
+                          <img src={selected.clientThumbUrl || selected.clientFullUrl || getQueueThumbUrl(selected)} alt="" />
+                        </button>
+                        <div className="proof-mobileFileBlock">
+                          <div className="proof-mobileFileLabel">Client upload</div>
+                          <div className="proof-mobileFileName" title={selected.clientFileName}>{selected.clientFileName}</div>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="proof-uploadUnavailable proof-tabletUploadNote">
-                      Original client upload unavailable for this proof line.
-                    </div>
-                  )}
+                      <ClientUploadMeta line={selected} />
+                    </>
+                ) : (
+                  <div className="proof-uploadUnavailable proof-tabletUploadNote">
+                    Original client upload unavailable for this proof line.
+                  </div>
+                )}
 
                   <button
                     className="proof-mobileProof proof-mobileProofButton proof-tabletProof"
@@ -2372,19 +2711,7 @@ export default function ProofApprovalPage() {
                       <div className="proof-waiting">The current proof file has not been published yet...</div>
                     )}
                   </button>
-                  <div className="proof-mobileProofFooter proof-tabletProofFooter">
-                    <div className="proof-mobileFileBlock">
-                      <div className="proof-mobileFileLabel">Proof file</div>
-                      <div className="proof-mobileFileName" title={getProofFileName(selected)}>{getProofFileName(selected)}</div>
-                    </div>
-                  </div>
-                  {selected.vendorProofSubmittedAt ? (
-                    <div className="proof-vendorSubmitted">
-                      <strong>Vendor proof submitted {formatHistoryDate(selected.vendorProofSubmittedAt)}</strong>
-                      <span>Print provider{selected.vendorProofFilename ? ` · ${selected.vendorProofFilename}` : ""}</span>
-                      {selected.vendorProofNote ? <p>{selected.vendorProofNote}</p> : null}
-                    </div>
-                  ) : null}
+                  {selected.proofFullUrl || selected.proofThumbUrl ? <ProofReceivedMeta line={selected} /> : null}
 
                   {showRevisionUploader && !isApproved ? (
                     <div
@@ -2395,43 +2722,68 @@ export default function ProofApprovalPage() {
                         setIsRevisionDragActive(true);
                       }}
                       onDragLeave={() => setIsRevisionDragActive(false)}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        setIsRevisionDragActive(false);
-                        const file = event.dataTransfer.files?.[0];
-                        if (file) void processRevisedFile(file, selected);
-                      }}
-                    >
-                      <div className="proof-revisionDropTitle">Upload revised artwork</div>
-                      <div className="proof-revisionDropActions">
-                        <button
-                          className="btn btn-ghost btn-soft"
-                          type="button"
+	                      onDrop={(event) => {
+	                        event.preventDefault();
+	                        setIsRevisionDragActive(false);
+	                        const file = event.dataTransfer.files?.[0];
+	                        if (file) stageRevisedFile(file, selected);
+	                      }}
+	                    >
+	                      <div className="proof-revisionDropTitle">Upload revised artwork</div>
+	                      {selectedStagedRevision ? (
+	                        <div className="proof-stagedRevision">
+	                          <StagedRevisionSummary staged={selectedStagedRevision} />
+	                          <button
+	                            className="btn btn-ghost btn-soft"
+	                            type="button"
+	                            disabled={isSelectedRevisionProcessing}
+	                            onClick={() => selected && clearStagedRevision(selected.lineItemId)}
+	                          >
+	                            Clear
+	                          </button>
+	                        </div>
+	                      ) : (
+	                        <div className="proof-revisionDropBody">
+	                          Drop or browse for the revised file. Nothing is sent until you submit.
+	                        </div>
+	                      )}
+	                      <div className="proof-revisionDropActions">
+	                        <button
+	                          className="btn btn-ghost btn-soft"
+	                          type="button"
                           disabled={!canEditProofs || isSelectedRevisionProcessing}
                           onClick={() => tabletRevisionInputRef.current?.click()}
                         >
                           Browse Files
                         </button>
-                        <button
-                          className="btn btn-ghost btn-soft"
-                          type="button"
-                          disabled={isSelectedRevisionProcessing}
-                          onClick={() => setShowRevisionUploader(false)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                      <input
-                        ref={tabletRevisionInputRef}
+	                        <button
+	                          className="btn btn-ghost btn-soft"
+	                          type="button"
+	                          disabled={isSelectedRevisionProcessing}
+	                          onClick={() => selected && cancelRevisionUpload(selected.lineItemId)}
+	                        >
+	                          Cancel
+	                        </button>
+	                        <button
+	                          className="btn btn-primary"
+	                          type="button"
+	                          disabled={!canEditProofs || isSelectedRevisionProcessing || !selectedStagedRevision}
+	                          onClick={() => selected && submitStagedRevision(selected)}
+	                        >
+	                          Submit Revised Art
+	                        </button>
+	                      </div>
+	                      <input
+	                        ref={tabletRevisionInputRef}
                         hidden
                         type="file"
-                        accept=".pdf,image/*"
-                        onChange={(event) => {
-                          const file = event.currentTarget.files?.[0];
-                          if (file) void processRevisedFile(file, selected);
-                          event.currentTarget.value = "";
-                        }}
-                      />
+	                        accept=".pdf,image/*"
+	                        onChange={(event) => {
+	                          const file = event.currentTarget.files?.[0];
+	                          if (file) stageRevisedFile(file, selected);
+	                          event.currentTarget.value = "";
+	                        }}
+	                      />
                     </div>
                   ) : null}
 
@@ -2454,18 +2806,15 @@ export default function ProofApprovalPage() {
                     {showSelectedLineNote ? (
                       <label className="proof-dockNoteWrap proof-mobileNoteWrap">
                         <span>Line note</span>
-                        <textarea
-                          className="proof-dockNote"
-                          placeholder="Optional note sent with this decision"
-                          value={selectedLineNote}
-                          disabled={!canEditProofs || isApproved || isSelectedRevisionProcessing}
-                          onChange={(event) => {
-                            setLineNotes((prev) => ({
-                              ...prev,
-                              [selected.lineItemId]: event.currentTarget.value,
-                            }));
-                          }}
-                        />
+	                        <textarea
+	                          className="proof-dockNote"
+	                          placeholder="Optional note sent with this decision"
+	                          key={`tablet-line-note-${selected.lineItemId}-${selectedLineNote}`}
+	                          defaultValue={selectedLineNote}
+	                          disabled={!canEditProofs || isApproved || isSelectedRevisionProcessing}
+	                          onChange={(event) => setLineNoteDraft(selected.lineItemId, event.currentTarget.value)}
+	                          onBlur={(event) => setLineNoteDraft(selected.lineItemId, event.currentTarget.value, true)}
+	                        />
                       </label>
                     ) : null}
 
@@ -2474,12 +2823,17 @@ export default function ProofApprovalPage() {
                       {!isApproved ? (
                         <>
                             <button
-                              className={canApproveSelected ? "btn btn-primary btn-lg" : "btn btn-ghost btn-soft btn-lg"}
-                              disabled={!canApproveSelected}
+                              className={canApproveSelected || isSelectedApprovalProcessing ? "btn btn-primary btn-lg" : "btn btn-ghost btn-soft btn-lg"}
+                              disabled={!canApproveSelected || isSelectedApprovalProcessing}
                               onClick={approveSelected}
                               type="button"
                             >
-                              {selectedIsWaiting ? "Waiting for Proof" : "Approve for Print"}
+                              {isSelectedApprovalProcessing ? (
+                                <>
+                                  <span className="proof-buttonSpinner" aria-hidden="true" />
+                                  Approving...
+                                </>
+                              ) : selectedIsWaiting ? "Waiting for Proof" : "Approve for Print"}
                             </button>
 
                             <button
@@ -2493,13 +2847,7 @@ export default function ProofApprovalPage() {
                           </>
                       ) : (
                           <div className="proof-approvedNote tone-success">
-                            {selectedLiftComplete
-                              ? "Approved - order complete"
-                              : selectedBeyondProofReview
-                                ? "Approved - order in production"
-                                : selectedLiftControlledApproved
-                                  ? "Approved in Lift"
-                                  : "Approved for print"}
+                            This proof is approved for print.
                           </div>
                         )}
                       </div>
@@ -2518,8 +2866,8 @@ export default function ProofApprovalPage() {
 						  <div className="proof-ins-titleWrap">
 							<div className="proof-ins-lineKicker">
                   {getProofLineLabel(selected)}
-                  {canEditProofs ? (
-                    <span className={`proof-routeBadge proof-route-${proofRouteKey(selected)}`}>{proofRouteKey(selected) === "adspace" ? "Adspace-managed" : "Lift-backed"}</span>
+                  {showInternalRouteMeta ? (
+                    <span className={`proof-routeBadge proof-route-${proofRouteKey(selected)}`}>{proofRouteLabel(selected)}</span>
                   ) : null}
                 </div>
 							<div className="proof-ins-title">
@@ -2637,12 +2985,7 @@ export default function ProofApprovalPage() {
                     >
                       <img src={selected.clientThumbUrl || selected.clientFullUrl || getQueueThumbUrl(selected)} alt="" />
                     </button>
-                    <div className="proof-fileFooter">
-                      <div className="proof-filemeta" title={selected.clientFileName}>
-                        <span>File</span>
-                        <strong>{selected.clientFileName}</strong>
-                      </div>
-                    </div>
+                    <ClientUploadMeta line={selected} />
                   </div>
                 ) : null}
 
@@ -2662,19 +3005,7 @@ export default function ProofApprovalPage() {
                   >
                       {selected.proofThumbUrl ? <img src={selected.proofThumbUrl} alt="" /> : <div className="proof-waiting">The current proof file has not been published yet...</div>}
                   </button>
-                        <div className="proof-fileFooter">
-                          <div className="proof-filemeta" title={getProofFileName(selected)}>
-                            <span>Proof file</span>
-                            <strong>{getProofFileName(selected)}</strong>
-                          </div>
-                        </div>
-                        {selected.vendorProofSubmittedAt ? (
-                          <div className="proof-vendorSubmitted">
-                            <strong>Vendor proof submitted {formatHistoryDate(selected.vendorProofSubmittedAt)}</strong>
-                            <span>Print provider{selected.vendorProofFilename ? ` · ${selected.vendorProofFilename}` : ""}</span>
-                            {selected.vendorProofNote ? <p>{selected.vendorProofNote}</p> : null}
-                          </div>
-                        ) : null}
+                        {selected.proofFullUrl || selected.proofThumbUrl ? <ProofReceivedMeta line={selected} /> : null}
                       </div>
               </div>
 
@@ -2687,46 +3018,68 @@ export default function ProofApprovalPage() {
                     setIsRevisionDragActive(true);
                   }}
                   onDragLeave={() => setIsRevisionDragActive(false)}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setIsRevisionDragActive(false);
-                    const file = event.dataTransfer.files?.[0];
-                    if (file) void processRevisedFile(file);
-                  }}
-                >
-                  <div className="proof-revisionDropTitle">Upload revised artwork for this proof line</div>
-                  <div className="proof-revisionDropBody">
-                    Replace the current creative with a new file. Assigned locations, media variant, and proof history stay tied to this same line.
-                  </div>
-                  <div className="proof-revisionDropActions">
-                    <button
-                      className="btn btn-ghost btn-soft"
+	                  onDrop={(event) => {
+	                    event.preventDefault();
+	                    setIsRevisionDragActive(false);
+	                    const file = event.dataTransfer.files?.[0];
+	                    if (file && selected) stageRevisedFile(file, selected);
+	                  }}
+	                >
+	                  <div className="proof-revisionDropTitle">Upload revised artwork for this proof line</div>
+	                  {selectedStagedRevision ? (
+	                    <div className="proof-stagedRevision">
+	                      <StagedRevisionSummary staged={selectedStagedRevision} />
+	                      <button
+	                        className="btn btn-ghost btn-soft"
+	                        type="button"
+	                        disabled={isSelectedRevisionProcessing}
+	                        onClick={() => selected && clearStagedRevision(selected.lineItemId)}
+	                      >
+	                        Clear
+	                      </button>
+	                    </div>
+	                  ) : (
+	                    <div className="proof-revisionDropBody">
+	                      Replace the current creative with a new file. Assigned locations, media variant, and proof history stay tied to this same line. Nothing is sent until you submit.
+	                    </div>
+	                  )}
+	                  <div className="proof-revisionDropActions">
+	                    <button
+	                      className="btn btn-ghost btn-soft"
                       type="button"
                       disabled={!canEditProofs || isSelectedRevisionProcessing}
                       onClick={() => revisionInputRef.current?.click()}
                     >
                       Browse Files
                     </button>
-                    <button
-                      className="btn btn-ghost btn-soft"
-                      type="button"
-                      disabled={isSelectedRevisionProcessing}
-                      onClick={() => setShowRevisionUploader(false)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  <input
-                    ref={revisionInputRef}
+	                    <button
+	                      className="btn btn-ghost btn-soft"
+	                      type="button"
+	                      disabled={isSelectedRevisionProcessing}
+	                      onClick={() => selected && cancelRevisionUpload(selected.lineItemId)}
+	                    >
+	                      Cancel
+	                    </button>
+	                    <button
+	                      className="btn btn-primary"
+	                      type="button"
+	                      disabled={!canEditProofs || isSelectedRevisionProcessing || !selectedStagedRevision}
+	                      onClick={() => selected && submitStagedRevision(selected)}
+	                    >
+	                      Submit Revised Art
+	                    </button>
+	                  </div>
+	                  <input
+	                    ref={revisionInputRef}
                     hidden
                     type="file"
-                    accept=".pdf,image/*"
-                    onChange={(event) => {
-                      const file = event.currentTarget.files?.[0];
-                      if (file) void processRevisedFile(file);
-                      event.currentTarget.value = "";
-                    }}
-                  />
+	                    accept=".pdf,image/*"
+	                    onChange={(event) => {
+	                      const file = event.currentTarget.files?.[0];
+	                      if (file && selected) stageRevisedFile(file, selected);
+	                      event.currentTarget.value = "";
+	                    }}
+	                  />
                 </div>
               )}
               </div>
@@ -2753,19 +3106,15 @@ export default function ProofApprovalPage() {
                 {showSelectedLineNote ? (
                   <label className="proof-dockNoteWrap">
                     <span>Line note</span>
-                    <textarea
-                      className="proof-dockNote"
-                      placeholder="Optional note sent with this decision"
-                      value={selectedLineNote}
-                      disabled={!canEditProofs || isApproved || isSelectedRevisionProcessing}
-                      onChange={(event) => {
-                        if (!selected) return;
-                        setLineNotes((prev) => ({
-                          ...prev,
-                          [selected.lineItemId]: event.currentTarget.value,
-                        }));
-                      }}
-                    />
+	                    <textarea
+	                      className="proof-dockNote"
+	                      placeholder="Optional note sent with this decision"
+	                      key={`desktop-line-note-${selected.lineItemId}-${selectedLineNote}`}
+	                      defaultValue={selectedLineNote}
+	                      disabled={!canEditProofs || isApproved || isSelectedRevisionProcessing}
+	                      onChange={(event) => setLineNoteDraft(selected.lineItemId, event.currentTarget.value)}
+	                      onBlur={(event) => setLineNoteDraft(selected.lineItemId, event.currentTarget.value, true)}
+	                    />
                   </label>
                 ) : null}
 
@@ -2774,12 +3123,17 @@ export default function ProofApprovalPage() {
                     {!isApproved ? (
                       <>
                         <button
-                          className={canApproveSelected ? "btn btn-primary btn-lg" : "btn btn-ghost btn-soft btn-lg"}
-                          disabled={!canApproveSelected}
+                          className={canApproveSelected || isSelectedApprovalProcessing ? "btn btn-primary btn-lg" : "btn btn-ghost btn-soft btn-lg"}
+                          disabled={!canApproveSelected || isSelectedApprovalProcessing}
                           onClick={approveSelected}
                           type="button"
                         >
-                          {selectedIsWaiting ? "Waiting for Proof" : "Approve for Print"}
+                          {isSelectedApprovalProcessing ? (
+                            <>
+                              <span className="proof-buttonSpinner" aria-hidden="true" />
+                              Approving...
+                            </>
+                          ) : selectedIsWaiting ? "Waiting for Proof" : "Approve for Print"}
                         </button>
 
                         <button
@@ -2798,25 +3152,24 @@ export default function ProofApprovalPage() {
                             <button
                               className="btn btn-ghost btn-soft btn-lg"
                               type="button"
-                              disabled={!canEditProofs}
+                              disabled={!canEditProofs || isSelectedUndoProcessing}
                               onClick={undoApproval}
                             >
-                              Undo Approval
+                              {isSelectedUndoProcessing ? (
+                                <>
+                                  <span className="proof-buttonSpinner" aria-hidden="true" />
+                                  Updating...
+                                </>
+                              ) : "Undo Approval"}
                             </button>
 
                             <div className="proof-approvedNote tone-success">
-                              Approved - awaiting release
+                              This proof is approved for print.
                             </div>
                           </>
                         ) : (
                           <div className="proof-approvedNote tone-success">
-                            {selectedLiftComplete
-                              ? "Approved - order complete"
-                              : selectedBeyondProofReview
-                                ? "Approved - order in production"
-                                : selectedLiftControlledApproved
-                                  ? "Approved in Lift"
-                                  : "Approved for print"}
+                            This proof is approved for print.
                           </div>
                         )}
                       </>
@@ -2905,7 +3258,7 @@ export default function ProofApprovalPage() {
                         <span>Proof</span>
                       )}
                     </button>
-                    <div>
+                    <div className="proof-feedbackProofCopy">
                       <div className="proof-feedbackSectionLabel">Current proof thread</div>
                       <div className="proof-feedbackFilename" title={currentVersion?.proofFilename || getProofFileName(selected)}>
                         {currentVersion?.proofFilename || getProofFileName(selected)}
@@ -3087,6 +3440,24 @@ export default function ProofApprovalPage() {
                 </div>
               ))}
             </div>
+            {selected.technicalReports?.length ? (
+              <div className="proof-historyReports">
+                <div className="proof-historyReportsTitle">Technical reports</div>
+                {selected.technicalReports.map((report, index) => (
+                  <a
+                    className="proof-historyReportLink"
+                    href={report.reportUrl || undefined}
+                    key={`${report.reportId || report.definitionId || index}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-disabled={!report.reportUrl}
+                  >
+                    <span>{report.definitionLabel || `Report ${index + 1}`}</span>
+                    <small>{report.reportId != null ? `Report ID ${report.reportId}` : "Lift report"}</small>
+                  </a>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

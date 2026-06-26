@@ -101,6 +101,7 @@ type LiveVenueVariant = {
 type InventoryRecordOverride = {
   inventoryId?: string;
   locationId?: string;
+  locationDetail?: string;
   mapName?: string;
   mediaVariantKey?: string;
   variantLabel?: string;
@@ -111,11 +112,16 @@ type InventoryRecordOverride = {
   safeHeight?: number | null;
   safeWidth?: number | null;
   notes?: string;
+  productionRoutingOverride?: "primary" | "external";
+  externalVendorIdOverride?: string;
   isActive?: boolean;
   mapVisibilityMode?: "hidden" | "show_unavailable";
   x?: number;
   y?: number;
   deleted?: boolean;
+};
+type VendorPickerState = {
+  recordKeys: string[];
 };
 type PresetEditorState = {
   mode: "create" | "edit";
@@ -362,6 +368,8 @@ export default function VenueImportPreviewPage() {
   const [venueInventoryPresets, setVenueInventoryPresets] = useState<ApiVenueInventoryPreset[]>([]);
   const [presetEditor, setPresetEditor] = useState<PresetEditorState | null>(null);
   const [presetSaveError, setPresetSaveError] = useState("");
+  const [vendorPicker, setVendorPicker] = useState<VendorPickerState | null>(null);
+  const [vendorSearch, setVendorSearch] = useState("");
   const [apiError, setApiError] = useState("");
   const [, setIsVenueDataLoading] = useState(true);
   const [selectedVenueId, setSelectedVenueId] = useState(DEFAULT_VENUES[0]?.id ?? "");
@@ -539,6 +547,8 @@ export default function VenueImportPreviewPage() {
       finishing: record.finishing,
       locationDetail: record.locationDetail,
       notes: record.notes,
+      productionRoutingOverride: record.productionRoutingOverride,
+      externalVendorIdOverride: record.externalVendorIdOverride,
       dpi: record.dpi ?? null,
       bleedTop: record.bleedTop ?? null,
       bleedRight: record.bleedRight ?? null,
@@ -1089,6 +1099,7 @@ export default function VenueImportPreviewPage() {
           ...record,
           inventoryId: recordOverride.inventoryId ?? record.inventoryId,
           locationId: recordOverride.locationId ?? record.locationId,
+          locationDetail: recordOverride.locationDetail ?? record.locationDetail,
           mapName: recordOverride.mapName ?? roomNameById.get(recordOverride.locationId ?? record.locationId) ?? record.mapName,
           mediaVariantKey: recordOverride.mediaVariantKey ?? record.mediaVariantKey,
           variantLabel: recordOverride.variantLabel ?? persistedVariant?.label ?? record.variantLabel,
@@ -1100,6 +1111,8 @@ export default function VenueImportPreviewPage() {
           safeHeight: recordOverride.safeHeight ?? record.safeHeight,
           safeWidth: recordOverride.safeWidth ?? record.safeWidth,
           notes: recordOverride.notes ?? record.notes,
+          productionRoutingOverride: recordOverride.productionRoutingOverride ?? record.productionRoutingOverride,
+          externalVendorIdOverride: recordOverride.externalVendorIdOverride ?? record.externalVendorIdOverride,
           isActive: recordOverride.isActive ?? record.isActive,
           mapVisibilityMode: recordOverride.mapVisibilityMode ?? record.mapVisibilityMode,
           x: recordOverride.x ?? record.x ?? (hasImportedPreview ? mapPinStyle(index).x : null),
@@ -1108,6 +1121,48 @@ export default function VenueImportPreviewPage() {
       })
       .filter((record) => !recordOverrides[record.recordKey]?.deleted);
   }, [backendBaseRecords, hasImportedPreview, liveVenueVariants, manualRecords, recordOverrides, result, roomNameById, variantAppearanceOverrides]);
+
+  const customerVendorsById = useMemo(
+    () => new Map(activeCustomerVendors.map((vendor) => [vendor.id, vendor] as const)),
+    [activeCustomerVendors]
+  );
+
+  function resolveInventoryVendor(record: {
+    mediaVariantKey: string;
+    productionRoutingOverride?: "primary" | "external";
+    externalVendorIdOverride?: string;
+  }) {
+    const persistedVariant = liveVenueVariants.find((variant) => variant.mediaVariantKey === record.mediaVariantKey);
+    const variantOverride = variantAppearanceOverrides[record.mediaVariantKey];
+    const route =
+      record.productionRoutingOverride ||
+      variantOverride?.productionRouting ||
+      persistedVariant?.productionRouting ||
+      "primary";
+
+    if (route === "external") {
+      const vendorId =
+        record.productionRoutingOverride === "external"
+          ? record.externalVendorIdOverride || variantOverride?.externalVendorId || persistedVariant?.externalVendorId
+          : variantOverride?.externalVendorId || persistedVariant?.externalVendorId;
+      const vendor = vendorId ? customerVendorsById.get(vendorId) : undefined;
+      return {
+        route,
+        vendorId: vendorId || "",
+        label: vendor?.name || "External vendor",
+        source: record.productionRoutingOverride ? "Override" : "Inherited",
+        unresolved: !vendor,
+      };
+    }
+
+    return {
+      route,
+      vendorId: "",
+      label: "LTL",
+      source: record.productionRoutingOverride ? "Override" : "Default",
+      unresolved: false,
+    };
+  }
 
   const groupedMaps = useMemo(() => {
     if (!effectiveRecords.length) return [];
@@ -1168,6 +1223,7 @@ export default function VenueImportPreviewPage() {
       if (activityFilter === "inactive" && record.isActive) return false;
       if (!query) return true;
 
+      const vendor = resolveInventoryVendor(record);
       const searchable = [
         record.inventoryId,
         record.mapName,
@@ -1175,19 +1231,35 @@ export default function VenueImportPreviewPage() {
         record.mediaType,
         record.variantLabel,
         record.locationDetail || "",
+        vendor.label,
+        vendor.source,
       ]
         .join(" ")
         .toLowerCase();
 
       return searchable.includes(query);
     });
-  }, [activityFilter, effectiveRecords, mapFilter, rowSearch, variantFilter]);
+  }, [activityFilter, customerVendorsById, effectiveRecords, mapFilter, rowSearch, variantFilter, liveVenueVariants, variantAppearanceOverrides]);
   const hasInventoryRows = effectiveRecords.length > 0;
 
   const mapOptions = useMemo(
     () => activeVenueRooms.map((room) => room.name).filter((name, index, all) => all.indexOf(name) === index),
     [activeVenueRooms]
   );
+
+  const vendorPickerVendors = useMemo(() => {
+    const query = vendorSearch.trim().toLowerCase();
+    return activeCustomerVendors
+      .filter((vendor) => {
+        if (!query) return true;
+        return [vendor.name, vendor.contactName, vendor.email, vendor.phone, vendor.notes]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [activeCustomerVendors, vendorSearch]);
 
   const fieldMappings = useMemo(() => {
     if (!parsedRows.length) return [];
@@ -1430,29 +1502,19 @@ export default function VenueImportPreviewPage() {
         if (placementPinFilter === "pinned" && !record.isPinned) return false;
         if (placementPinFilter === "awaiting" && record.isPinned) return false;
         if (!query) return true;
-        return `${record.inventoryId} ${record.variantLabel} ${record.unitNumber || ""}`.toLowerCase().includes(query);
+        return `${record.inventoryId} ${record.variantLabel} ${record.unitNumber || ""} ${record.locationDetail || ""}`.toLowerCase().includes(query);
       });
   }, [pinStateOverrides, placementPinFilter, placementSearch, placementVariantFilter, selectedRoomImportRecords]);
 
-  const selectedRoomPinnedItems = useMemo(
-    () =>
-      selectedRoomVariantGroups.flatMap((group) =>
-        group.items.filter((item) => item.isPinned).map((item) => ({ ...item, variantLabel: group.label }))
-      ),
-    [selectedRoomVariantGroups]
-  );
-
-  const selectedRoomUnpinnedItems = useMemo(
-    () =>
-      selectedRoomVariantGroups.flatMap((group) =>
-        group.items.filter((item) => !item.isPinned).map((item) => ({ ...item, variantLabel: group.label }))
-      ),
-    [selectedRoomVariantGroups]
-  );
-
   const focusedInventoryItem = useMemo(
-    () => [...selectedRoomPinnedItems, ...selectedRoomUnpinnedItems].find((item) => item.id === selectedInventoryId) ?? null,
-    [selectedInventoryId, selectedRoomPinnedItems, selectedRoomUnpinnedItems]
+    () =>
+      selectedRoomImportRecords
+        .map((record) => ({
+          ...record,
+          isPinned: pinStateOverrides[record.inventoryId] ?? (record.x != null && record.y != null),
+        }))
+        .find((item) => item.inventoryId === selectedInventoryId) ?? null,
+    [pinStateOverrides, selectedInventoryId, selectedRoomImportRecords]
   );
 
   const selectedRoomPinnedRecords = useMemo(
@@ -1532,7 +1594,7 @@ export default function VenueImportPreviewPage() {
 
   function formatEditableDimensionToken(value: number | null | undefined) {
     if (value == null || Number.isNaN(value)) return "na";
-    return String(value).trim().replace(/[^0-9.]+/g, "").replace(/\./g, "_") || "na";
+    return String(value).trim().replace(/[^0-9.]+/g, "") || "na";
   }
 
   function buildDerivedVariantValues({
@@ -1557,10 +1619,13 @@ export default function VenueImportPreviewPage() {
 
     return {
       mediaType: nextMediaType,
-      variantLabel: nextMediaType,
+      variantLabel:
+        trimHeight != null && trimWidth != null
+          ? `${nextMediaType} · ${formatEditableDimensionToken(trimHeight)}"h × ${formatEditableDimensionToken(trimWidth)}"w`
+          : nextMediaType,
       mediaVariantKey: fallbackKey && mediaSlug === "custom-variant" && trimHeight == null && trimWidth == null
         ? fallbackKey
-        : `variant_${mediaSlug}_${formatEditableDimensionToken(trimHeight)}x${formatEditableDimensionToken(trimWidth)}`,
+        : `${nextMediaType}||${formatEditableDimensionToken(trimHeight)}||${formatEditableDimensionToken(trimWidth)}`,
     };
   }
 
@@ -2344,6 +2409,46 @@ export default function VenueImportPreviewPage() {
         return persistInventoryPatch(record.recordKey, nextPatch);
       })
     );
+  }
+
+  async function applyVendorRouteToRecords(
+    recordKeys: string[],
+    route: "inherit" | "primary" | "external",
+    externalVendorId?: string
+  ) {
+    if (!recordKeys.length) return;
+    const patch: Partial<InventoryRecordOverride> = route === "external"
+      ? { productionRoutingOverride: "external", externalVendorIdOverride: externalVendorId || "" }
+      : route === "primary"
+        ? { productionRoutingOverride: "primary", externalVendorIdOverride: "" }
+        : { productionRoutingOverride: undefined, externalVendorIdOverride: "" };
+    setRecordOverrides((current) => {
+      const next = { ...current };
+      recordKeys.forEach((recordKey) => {
+        const nextOverride = {
+          ...next[recordKey],
+          ...patch,
+        };
+        if (route === "inherit") {
+          delete nextOverride.productionRoutingOverride;
+          delete nextOverride.externalVendorIdOverride;
+        }
+        next[recordKey] = nextOverride;
+      });
+      return next;
+    });
+
+    const selectedRecords = effectiveRecords.filter((record) => recordKeys.includes(record.recordKey));
+    await Promise.all(
+      selectedRecords.map((record) =>
+        persistInventoryPatch(record.recordKey, {
+          productionRoutingOverride: route === "inherit" ? "" : route,
+          externalVendorIdOverride: route === "external" ? externalVendorId || "" : "",
+        })
+      )
+    );
+    setVendorPicker(null);
+    setVendorSearch("");
   }
 
   function getVenueMarketRecord(venue: VenueRecord) {
@@ -3313,7 +3418,7 @@ export default function VenueImportPreviewPage() {
                         <div className="venue-preview-placementFilterRow venue-preview-placementFilterRow-full">
                           <div className="field-search venue-preview-search venue-preview-searchCompact">
                             <span aria-hidden="true">◦</span>
-                            <input className="field-input" type="search" value={placementSearch} onChange={(e) => setPlacementSearch(e.target.value)} placeholder="Search inventory ID" />
+                            <input className="field-input" type="search" value={placementSearch} onChange={(e) => setPlacementSearch(e.target.value)} placeholder="Search inventory ID or location" />
                           </div>
                         </div>
                         <div className="venue-preview-placementFilterRow venue-preview-placementFilterRow-split">
@@ -3480,9 +3585,24 @@ export default function VenueImportPreviewPage() {
                       <div className="venue-preview-placementInspectorCard"><span className="venue-preview-kpiLabel">Awaiting</span><span className="venue-preview-kpiValue">{pinPrepSummary.unpinned}</span></div>
                       <div className="venue-preview-mapInventoryList venue-preview-placementInspectorCard">
                         <div className="venue-preview-rowTitle">Focused Inventory</div>
-                        <div className="venue-preview-rowSub">
-                          {focusedInventoryItem ? `${focusedInventoryItem.id} · ${focusedInventoryItem.variantLabel}` : "Select a pin or inventory row to inspect it."}
-                        </div>
+                        {focusedInventoryItem ? (
+                          <div className="venue-preview-pinSpecs">
+                            <div className="venue-preview-pinSpecPrimary">{focusedInventoryItem.inventoryId}</div>
+                            <div className="venue-preview-pinSpecMuted">{focusedInventoryItem.variantLabel}</div>
+                            <div className="venue-preview-pinSpecGrid">
+                              <span>Location</span>
+                              <strong>{focusedInventoryItem.locationDetail || "No location note"}</strong>
+                              <span>Map</span>
+                              <strong>{focusedInventoryItem.mapName || "Unmapped"}</strong>
+                              <span>Unit #</span>
+                              <strong>{focusedInventoryItem.unitNumber || "—"}</strong>
+                              <span>Status</span>
+                              <strong>{focusedInventoryItem.isPinned ? "Pinned" : "Awaiting pin"}</strong>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="venue-preview-rowSub">Select a pin or inventory row to inspect it.</div>
+                        )}
                       </div>
                     </div>
                     </div>
@@ -3550,6 +3670,14 @@ export default function VenueImportPreviewPage() {
                       <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ mapVisibilityMode: "hidden" })} disabled={!selectedRecordKeys.length}>
                         Hide on Map
                       </button>
+                      <button
+                        className="btn btn-ghost btn-soft"
+                        type="button"
+                        onClick={() => setVendorPicker({ recordKeys: selectedRecordKeys })}
+                        disabled={!selectedRecordKeys.length || !inventoryEditMode}
+                      >
+                        Set Vendor
+                      </button>
                       <div className="venue-preview-bulkActionsRight">
                         <button className="btn btn-ghost btn-soft" type="button" onClick={() => void createInventoryRow()}>
                           Add Inventory Row
@@ -3568,7 +3696,7 @@ export default function VenueImportPreviewPage() {
                           type="search"
                           value={rowSearch}
                           onChange={(e) => setRowSearch(e.target.value)}
-                          placeholder="Search inventory ID, unit number, map, media, or variant"
+                          placeholder="Search inventory ID, location, unit number, map, media, variant, or vendor"
                         />
                       </div>
 
@@ -3623,11 +3751,13 @@ export default function VenueImportPreviewPage() {
                                 <th>Media</th>
                                 <th>Unit #</th>
                                 <th>Variant</th>
+                                <th>Vendor</th>
                                 <th>Trim H</th>
                                 <th>Trim W</th>
                                 <th>Safe H</th>
                                 <th>Safe W</th>
                                 <th>Notes</th>
+                                <th>Location</th>
                                 <th>Status</th>
                                 <th>Map Visibility</th>
                                 <th>Actions</th>
@@ -3641,6 +3771,7 @@ export default function VenueImportPreviewPage() {
                                   (recordIssueDetailsByKey.get(record.recordKey)?.length || 0);
                                 const variantIndex = variantRows.findIndex((variant) => variant.key === record.mediaVariantKey);
                                 const appearance = getVariantAppearance(record.mediaVariantKey, record.variantLabel, Math.max(variantIndex, 0));
+                                const vendorRoute = resolveInventoryVendor(record);
                                 return (
                                   <tr key={record.recordKey}>
                                     <td>
@@ -3658,7 +3789,6 @@ export default function VenueImportPreviewPage() {
                                         onBlur={(e) => void persistInventoryPatch(record.recordKey, { inventoryId: e.target.value })}
                                         disabled={!inventoryEditMode}
                                       />
-                                      <div className="venue-preview-cellMeta">{record.locationDetail || "No location note"}</div>
                                     </td>
                                     <td>
                                       <select
@@ -3731,6 +3861,26 @@ export default function VenueImportPreviewPage() {
                                         </div>
                                       </div>
                                     </td>
+                                    <td>
+                                      <div className="venue-preview-vendorCell">
+                                        <span
+                                          className={`venue-preview-vendorChip ${
+                                            vendorRoute.route === "external" ? "is-external" : "is-primary"
+                                          } ${vendorRoute.unresolved ? "is-warning" : ""}`}
+                                        >
+                                          {vendorRoute.label}
+                                        </span>
+                                        <div className="venue-preview-cellMeta">{vendorRoute.source}</div>
+                                        <button
+                                          className="btn btn-ghost btn-soft venue-preview-vendorButton"
+                                          type="button"
+                                          onClick={() => setVendorPicker({ recordKeys: [record.recordKey] })}
+                                          disabled={!inventoryEditMode}
+                                        >
+                                          Change
+                                        </button>
+                                      </div>
+                                    </td>
                                     <td><input className="field-input venue-preview-input" value={getNumericDraftValue(record.recordKey, "trimHeight", record.trimHeight)} onChange={(e) => updateNumericDraft(record.recordKey, "trimHeight", e.target.value)} onBlur={(e) => { const nextValue = parseEditableNumber(e.target.value); const nextPatch = buildInventoryVariantPatch(record, { trimHeight: nextValue }); updateRecordOverride(record.recordKey, nextPatch); clearNumericDraft(record.recordKey, "trimHeight"); void persistInventoryPatch(record.recordKey, nextPatch); }} placeholder="H" disabled={!inventoryEditMode} inputMode="decimal" /></td>
                                     <td><input className="field-input venue-preview-input" value={getNumericDraftValue(record.recordKey, "trimWidth", record.trimWidth)} onChange={(e) => updateNumericDraft(record.recordKey, "trimWidth", e.target.value)} onBlur={(e) => { const nextValue = parseEditableNumber(e.target.value); const nextPatch = buildInventoryVariantPatch(record, { trimWidth: nextValue }); updateRecordOverride(record.recordKey, nextPatch); clearNumericDraft(record.recordKey, "trimWidth"); void persistInventoryPatch(record.recordKey, nextPatch); }} placeholder="W" disabled={!inventoryEditMode} inputMode="decimal" /></td>
                                     <td><input className="field-input venue-preview-input" value={getNumericDraftValue(record.recordKey, "safeHeight", record.safeHeight)} onChange={(e) => updateNumericDraft(record.recordKey, "safeHeight", e.target.value)} onBlur={(e) => { const nextValue = parseEditableNumber(e.target.value); updateRecordOverride(record.recordKey, { safeHeight: nextValue }); clearNumericDraft(record.recordKey, "safeHeight"); void persistInventoryPatch(record.recordKey, { safeHeight: nextValue }); }} placeholder="H" disabled={!inventoryEditMode} inputMode="decimal" /></td>
@@ -3742,6 +3892,16 @@ export default function VenueImportPreviewPage() {
                                         onChange={(e) => updateRecordOverride(record.recordKey, { notes: e.target.value })}
                                         onBlur={(e) => void persistInventoryPatch(record.recordKey, { notes: e.target.value })}
                                         placeholder="Add notes"
+                                        disabled={!inventoryEditMode}
+                                      />
+                                    </td>
+                                    <td>
+                                      <textarea
+                                        className="field-input venue-preview-input venue-preview-locationInput"
+                                        value={record.locationDetail || ""}
+                                        onChange={(e) => updateRecordOverride(record.recordKey, { locationDetail: e.target.value })}
+                                        onBlur={(e) => void persistInventoryPatch(record.recordKey, { locationDetail: e.target.value })}
+                                        placeholder="Add location"
                                         disabled={!inventoryEditMode}
                                       />
                                     </td>
@@ -4000,6 +4160,101 @@ export default function VenueImportPreviewPage() {
                     <div className="venue-preview-empty">No map uploaded for this room yet.</div>
                   )}
                 </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {vendorPicker ? (
+          <div className="venue-preview-modalScrim" onClick={() => { setVendorPicker(null); setVendorSearch(""); }}>
+            <div className="venue-preview-modal venue-preview-modal-vendor" onClick={(e) => e.stopPropagation()}>
+              <div className="venue-preview-modalHead">
+                <div>
+                  <div className="venue-preview-sectionEyebrow">Production Routing</div>
+                  <div className="venue-preview-sectionTitle">Set inventory vendor</div>
+                  <div className="venue-preview-sectionSub">
+                    Applies to {vendorPicker.recordKeys.length} selected row{vendorPicker.recordKeys.length === 1 ? "" : "s"}.
+                  </div>
+                </div>
+                <button
+                  className="btn btn-ghost btn-soft"
+                  type="button"
+                  onClick={() => {
+                    setVendorPicker(null);
+                    setVendorSearch("");
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="venue-preview-modalBody">
+                <div className="venue-preview-vendorRouteGrid">
+                  <button
+                    className="venue-preview-vendorRouteOption"
+                    type="button"
+                    onClick={() => void applyVendorRouteToRecords(vendorPicker.recordKeys, "inherit")}
+                  >
+                    <span className="venue-preview-vendorRouteTitle">Inherit default</span>
+                    <span className="venue-preview-vendorRouteMeta">Use the media variant vendor. Falls back to LTL when no variant vendor is set.</span>
+                  </button>
+                  <button
+                    className="venue-preview-vendorRouteOption"
+                    type="button"
+                    onClick={() => void applyVendorRouteToRecords(vendorPicker.recordKeys, "primary")}
+                  >
+                    <span className="venue-preview-vendorRouteTitle">Force LTL</span>
+                    <span className="venue-preview-vendorRouteMeta">Override the row to the primary Lift-backed print route.</span>
+                  </button>
+                </div>
+
+                <div className="venue-preview-head venue-preview-vendorPickerHead">
+                  <div>
+                    <div className="venue-preview-title">External Vendors</div>
+                    <div className="venue-preview-sub">Route specialty rows away from Lift to an Adspace-managed vendor.</div>
+                  </div>
+                  <div className="field-search venue-preview-search venue-preview-vendorSearch">
+                    <span aria-hidden="true">◦</span>
+                    <input
+                      className="field-input"
+                      type="search"
+                      value={vendorSearch}
+                      onChange={(e) => setVendorSearch(e.target.value)}
+                      placeholder="Search vendors"
+                    />
+                  </div>
+                </div>
+
+                {!activeCustomerVendors.length ? (
+                  <div className="venue-preview-empty">
+                    No active customer vendors are configured yet. Add vendors in customer settings before assigning external routes.
+                  </div>
+                ) : !vendorPickerVendors.length ? (
+                  <div className="venue-preview-empty">No vendors match the current search.</div>
+                ) : (
+                  <div className="venue-preview-vendorList">
+                    {vendorPickerVendors.map((vendor) => (
+                      <div
+                        key={vendor.id}
+                        className="venue-preview-vendorListItem"
+                      >
+                        <span>
+                          <span className="venue-preview-vendorRouteTitle">{vendor.name}</span>
+                          <span className="venue-preview-vendorRouteMeta">
+                            {[vendor.contactName, vendor.email, vendor.phone].filter(Boolean).join(" · ") || "External vendor"}
+                          </span>
+                        </span>
+                        <button
+                          className="btn btn-ghost btn-soft venue-preview-vendorSelectButton"
+                          type="button"
+                          onClick={() => void applyVendorRouteToRecords(vendorPicker.recordKeys, "external", vendor.id)}
+                        >
+                          Select
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>

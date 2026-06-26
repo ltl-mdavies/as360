@@ -35,7 +35,21 @@ After a sandbox submit:
 - Missing proof URLs should show as a waiting/regenerating state, not as a silent failure.
 - Any proof mismatch must appear in the Errors lane and Health Dashboard recent issues.
 
-## 4. Customer Setup Gate
+## 4. Vendor Proof Ops Gate
+
+Before treating the vendor workspace as pilot-ready:
+
+- Primary/LTL vendor can see only Lift-backed assigned lines.
+- External vendor can see only externally routed assigned lines.
+- Primary/LTL vendor line cards show Lift order/line references, proof state, current artwork, current proof, art history, and technical details.
+- External vendor line cards omit Lift-specific language and support vendor proof upload.
+- Vendor proof comments appear to the customer through the normal proof feedback acknowledgment flow.
+- Customer-facing Proof Approval does not expose named vendors.
+- Revised artwork sent back to Lift uses a direct signed asset URL and explicit MIME type.
+- Revised artwork submitted for external vendor lines updates the Adspace proof state without attempting to call Lift.
+- Production/shipping controls remain locked until proof approval or production-ready state.
+
+## 5. Customer Setup Gate
 
 Before creating the first real pilot project:
 
@@ -46,7 +60,7 @@ Before creating the first real pilot project:
 - Customer admin users are assigned only to the correct customer.
 - Internal sandbox customer remains separate from the real customer.
 
-## 5. Notification Gate
+## 6. Notification Gate
 
 Before enabling customer-facing pilot notifications:
 
@@ -56,7 +70,7 @@ Before enabling customer-facing pilot notifications:
 - Confirm sender is `noreply@adspace360.com`.
 - Confirm failed notification delivery creates a structured workflow issue.
 
-## 6. Shared Access Gate
+## 7. Shared Access Gate
 
 Before sending external links:
 
@@ -66,7 +80,7 @@ Before sending external links:
 - Sandbox projects cannot create shared links.
 - Uploads, assignments, proof decisions, and transit decisions are auditable.
 
-## 7. First Pilot Path
+## 8. First Pilot Path
 
 Run the first real pilot as one controlled path:
 
@@ -76,8 +90,15 @@ Run the first real pilot as one controlled path:
 - one order submit
 - one proof sync
 - one proof approval or revision cycle if Lift proof data is available
+- one external vendor proof upload if the project contains an externally routed line
 - one shared-access collaboration check
 - one notification test matrix
 
-Do not expand into multiple customers, outsourced vendor workflow, or broad production validation until this path is clean.
+Do not expand into multiple customers or broad production validation until this path is clean.
 
+## 9. Still Pending Before Broad Production
+
+- Validate Lift production/order status sync into primary/LTL Vendor Workspace.
+- Validate Lift shipping sync, including whether ShippingReport data is best displayed at order level, line level, or both.
+- Decide and implement explicit Adspace order cancellation/reopen controls.
+- Finish deferred polish for vendor proof-note summaries and proof feedback action dock layout.

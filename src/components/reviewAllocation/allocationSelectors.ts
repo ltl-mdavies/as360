@@ -9,6 +9,7 @@
 
 import type { CreativeAsset, InventoryItem, MapLayer } from "../../logic/mockAssignment";
 import { mediaLabelFromKey } from "../../logic/mockAssignment";
+import { resolveCreativeColor } from "../../logic/creativeColors";
 
 export type AllocationCompleteness = {
   scopeTotal: number;
@@ -96,7 +97,7 @@ export function buildVariantSections(
       creativeId: c.id,
       filename: c.filename,
       fileMeta: c.fileMeta,
-      color: c.color,
+      color: resolveCreativeColor(c),
       mediaVariantKey: c.mediaVariantKey,
       assignedIds: (c.assignedInventoryIds ?? []).slice().sort(),
       assignedCount: (c.assignedInventoryIds ?? []).length,

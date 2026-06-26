@@ -39,7 +39,11 @@ function isPrimaryRoute(order: ApiVendorOrderSummary) {
 }
 
 function routeLabel(order: ApiVendorOrderSummary) {
-  return isPrimaryRoute(order) ? "Lift-backed" : "Adspace-managed";
+  return isPrimaryRoute(order) ? "Lift Sync" : "External";
+}
+
+function displayCustomerName(order: ApiVendorOrderSummary) {
+  return order.project.sourceCustomerName || order.project.customerName;
 }
 
 function orderReferenceLabel(order: ApiVendorOrderSummary) {
@@ -58,6 +62,7 @@ function matchesSearch(order: ApiVendorOrderSummary, query: string) {
   if (!query) return true;
   const haystack = [
     order.project.title,
+    displayCustomerName(order),
     order.project.customerName,
     order.project.sourceCustomerName || "",
     order.project.marketName,
@@ -221,8 +226,8 @@ export default function VendorDashboardPage() {
             <SlidersHorizontal size={16} aria-hidden="true" />
             <select value={route} onChange={(event) => setRoute(event.target.value as RouteFilter)}>
               <option value="all">All Routes</option>
-              <option value="primary_print_vendor">Lift-backed</option>
-              <option value="external_vendor">Adspace-managed</option>
+              <option value="primary_print_vendor">Lift Sync</option>
+              <option value="external_vendor">External</option>
             </select>
           </label>
         </div>
@@ -246,9 +251,12 @@ export default function VendorDashboardPage() {
                 <span className="vendor-card-top">
                   <span>
                     <strong>{order.project.title}</strong>
-                    <small>{order.project.customerName} · {order.project.venueName}</small>
+                    <small>{displayCustomerName(order)} · {order.project.venueName}</small>
                   </span>
                   <span className="vendor-card-badges">
+                    {order.project.projectMode === "internal_sandbox" ? (
+                      <span className="vendor-sandbox-chip">Sandbox</span>
+                    ) : null}
                     <span className={`vendor-route-chip ${isPrimaryRoute(order) ? "is-lift" : "is-adspace"}`}>{routeLabel(order)}</span>
                     <span className={workflowClass(order.summary.workflow.stage)}>{order.summary.workflow.label || workflowLabels[order.summary.workflow.stage]}</span>
                   </span>

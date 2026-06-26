@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import * as fs from "node:fs";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
@@ -17,6 +18,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambdaNode from "aws-cdk-lib/aws-lambda-nodejs";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import { Construct } from "constructs";
 
@@ -32,6 +34,10 @@ type Adspace360FoundationStackProps = StackProps & {
 
 function lambdaEntry(fileName: string) {
   return path.join(__dirname, "..", "lambda", fileName);
+}
+
+function infraConfig(fileName: string) {
+  return path.join(__dirname, "..", "config", fileName);
 }
 
 function privateBucket(scope: Construct, id: string, lifecycleRules: s3.LifecycleRule[] = []) {
@@ -78,6 +84,11 @@ export class Adspace360FoundationStack extends Stack {
       {
         id: "MoveProjectWorkingFilesToIntelligentTiering",
         transitions: [{ storageClass: s3.StorageClass.INTELLIGENT_TIERING, transitionAfter: Duration.days(30) }],
+      },
+      {
+        id: "ExpireLiftOutboundAssets",
+        prefix: "lift-outbound/",
+        expiration: Duration.days(14),
       },
     ]);
 
@@ -135,6 +146,34 @@ export class Adspace360FoundationStack extends Stack {
         },
       ],
     });
+
+    const liftOutboundPublicKey = new cloudfront.PublicKey(this, "LiftOutboundAssetPublicKey", {
+      publicKeyName: `adspace360-${stageName}-lift-outbound-assets`,
+      encodedKey: fs.readFileSync(infraConfig("lift-outbound-cloudfront-public-key.pem"), "utf8"),
+      comment: "Signs direct project asset URLs sent from Adspace360 to Lift.",
+    });
+    const liftOutboundKeyGroup = new cloudfront.KeyGroup(this, "LiftOutboundAssetKeyGroup", {
+      items: [liftOutboundPublicKey],
+      comment: "Trusted keys for Lift outbound project asset URLs.",
+    });
+    const liftAssetDistribution = new cloudfront.Distribution(this, "LiftAssetDistribution", {
+      comment: `Adspace360 ${stageName} direct project asset delivery for Lift`,
+      minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(projectAssetsBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+        trustedKeyGroups: [liftOutboundKeyGroup],
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+      },
+    });
+
+    const liftOutboundPrivateKeySecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      "LiftOutboundAssetPrivateKeySecret",
+      `adspace360/${stageName}/lift-outbound-cloudfront-private-key`
+    );
 
     const coreTable = new dynamodb.Table(this, "CoreTable", {
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
@@ -420,6 +459,7 @@ export class Adspace360FoundationStack extends Stack {
       environment: {
         CORE_TABLE_NAME: coreTable.tableName,
         AUDIT_TABLE_NAME: auditTable.tableName,
+        USER_POOL_ID: userPool.userPoolId,
         PROJECT_ASSETS_BUCKET_NAME: projectAssetsBucket.bucketName,
         VENUE_ASSETS_BUCKET_NAME: venueAssetsBucket.bucketName,
         GENERATED_DOCS_BUCKET_NAME: generatedDocsBucket.bucketName,
@@ -430,16 +470,20 @@ export class Adspace360FoundationStack extends Stack {
         PRESENCE_BROADCAST_QUEUE_URL: presenceBroadcastQueue.queueUrl,
         APP_BASE_URL: appOrigin,
         SHORT_BASE_URL: `https://${shortDomainName}`,
+        LIFT_ASSET_CLOUDFRONT_DOMAIN: liftAssetDistribution.distributionDomainName,
+        LIFT_ASSET_CLOUDFRONT_KEY_PAIR_ID: liftOutboundPublicKey.publicKeyId,
+        LIFT_ASSET_CLOUDFRONT_PRIVATE_KEY_SECRET_NAME: liftOutboundPrivateKeySecret.secretName,
         NOTIFICATIONS_FROM_EMAIL: notificationsFromEmail,
       },
     });
 
     coreTable.grantReadWriteData(projectApiFn);
     auditTable.grantReadWriteData(projectApiFn);
-    projectAssetsBucket.grantRead(projectApiFn);
+    projectAssetsBucket.grantReadWrite(projectApiFn);
     venueAssetsBucket.grantRead(projectApiFn);
     generatedDocsBucket.grantReadWrite(projectApiFn);
     shortLinksTable.grantReadWriteData(projectApiFn);
+    liftOutboundPrivateKeySecret.grantRead(projectApiFn);
     presenceTable.grantReadWriteData(projectApiFn);
     presenceBroadcastQueue.grantSendMessages(projectApiFn);
     webSocketApi.grantManageConnections(projectApiFn);
@@ -447,6 +491,12 @@ export class Adspace360FoundationStack extends Stack {
       new iam.PolicyStatement({
         actions: ["ses:SendEmail", "ses:SendRawEmail"],
         resources: ["*"],
+      })
+    );
+    projectApiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser"],
+        resources: [userPool.userPoolArn],
       })
     );
 
@@ -526,6 +576,7 @@ export class Adspace360FoundationStack extends Stack {
       environment: {
         SHORT_LINKS_TABLE_NAME: shortLinksTable.tableName,
         APP_BASE_URL: appOrigin,
+        PROJECT_ASSETS_BUCKET_NAME: projectAssetsBucket.bucketName,
       },
     });
 
@@ -535,6 +586,11 @@ export class Adspace360FoundationStack extends Stack {
       path: "/{code}",
       methods: [apigwv2.HttpMethod.GET],
       integration: new integrations.HttpLambdaIntegration("ShortLinkRedirectIntegration", redirectFn),
+    });
+    redirectApi.addRoutes({
+      path: "/{code}/{filename}",
+      methods: [apigwv2.HttpMethod.GET],
+      integration: new integrations.HttpLambdaIntegration("ShortLinkRedirectFileIntegration", redirectFn),
     });
 
     const shortDomain = apiCertificate
@@ -560,6 +616,7 @@ export class Adspace360FoundationStack extends Stack {
     new cdk.CfnOutput(this, "VenueAssetsBucketName", { value: venueAssetsBucket.bucketName });
     new cdk.CfnOutput(this, "ProjectAssetsBucketName", { value: projectAssetsBucket.bucketName });
     new cdk.CfnOutput(this, "GeneratedDocsBucketName", { value: generatedDocsBucket.bucketName });
+    new cdk.CfnOutput(this, "LiftAssetDistributionDomainName", { value: liftAssetDistribution.distributionDomainName });
     new cdk.CfnOutput(this, "LogsBucketName", { value: logsBucket.bucketName });
     new cdk.CfnOutput(this, "CoreTableName", { value: coreTable.tableName });
     new cdk.CfnOutput(this, "AuditTableName", { value: auditTable.tableName });

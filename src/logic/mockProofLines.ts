@@ -17,6 +17,7 @@ export type ProofLineMock = {
   integrationMode?: "lift" | "adspace";
 
   mediaVariantLabel?: string;
+  liftProductName?: string | null;
   mediaName: string;
   w: number;
   h: number;
@@ -36,6 +37,9 @@ export type ProofLineMock = {
   // Proof (may be missing if waiting)
   proofThumbUrl?: string | null;
   proofFullUrl?: string | null;
+  proofApprovedBy?: string | null;
+  proofApprovedDate?: string | null;
+  technicalReports?: ProofTechnicalReportMock[];
 
   printTeamFeedback?: string | null;
   proofComments?: ProofCommentMock[];
@@ -51,6 +55,13 @@ export type ProofLineMock = {
   vendorProofSizeBytes?: number | null;
   vendorProofNote?: string | null;
   updatedAt?: string | null;
+};
+
+export type ProofTechnicalReportMock = {
+  reportId?: number | null;
+  definitionId?: number | null;
+  definitionLabel?: string | null;
+  reportUrl?: string | null;
 };
 
 export type ProofCommentAttachmentMock = {
@@ -73,6 +84,9 @@ export type ProofVersionMock = {
   proofThumbUrl?: string | null;
   proofFullUrl?: string | null;
   status?: string | null;
+  proofApprovedBy?: string | null;
+  proofApprovedDate?: string | null;
+  technicalReports?: ProofTechnicalReportMock[];
   createdAt?: string | null;
   replacedAt?: string | null;
   current?: boolean;

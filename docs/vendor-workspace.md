@@ -48,8 +48,11 @@ Vendor orders are derived from project data rather than entered independently.
 
 Line routing:
 
+- Inventory rows can optionally override production routing for specialty items.
+- Routing precedence is row override, then media variant default, then primary/LTL.
 - Primary vendor receives lines not routed to an active external vendor.
 - External vendors receive only lines routed to their linked vendor account.
+- Mixed-route allocation groups are split into separate vendor lines so a third-party row is not bundled into the LTL vendor order.
 - Vendors never see other vendors as participants, even when they share the same Adspace order.
 
 Vendor users can see full order header/context, but only assigned line details, assigned files, and assigned actions.
@@ -108,6 +111,36 @@ External vendor route:
 - Vendor-facing references should use AS360 order number, PO, contract number, and Adspace proof/line references.
 - External vendor health is Adspace-managed, not Lift-sync-backed.
 
+## Lift Cancellation And Relink Policy
+
+Lift order cancellation is tracked as integration health, not as an automatic Adspace order cancellation.
+
+Observed behavior during the first live sandbox submit:
+
+- Lift order `A0224879` was cancelled in Lift.
+- The AS360Orders flush report returned `rowset: null` for the cancelled Lift order instead of a normal order row with a visible cancelled status.
+
+Adspace must therefore handle both cases:
+
+- Explicit Lift status values such as `Cancelled` / `Canceled` / `Voided`.
+- A previously linked Lift order disappearing from the flush report.
+
+Current policy:
+
+- Mark the linked Lift order as `cancelled` or `missing` health.
+- Surface the project as needing internal/operator attention.
+- Do not automatically cancel the Adspace project.
+- Do not delete proof lines, assignments, documents, packages, or external vendor rows.
+- Lock primary/LTL vendor actions while the current Lift link is cancelled or missing.
+- Leave Adspace-managed external vendor lines governed by their own proof/production state unless the entire Adspace order is explicitly cancelled.
+
+Future explicit operator actions:
+
+- Relink Lift Order: use Lift Order Override to point the Adspace job at a replacement Lift order while preserving audit history.
+- Rebuild/Resubmit Lift Order: guarded internal action that creates a replacement Lift order from current Lift-backed lines only.
+- Cancel Adspace Order: explicit audited action that cancels the Adspace project and all routes.
+- Reopen/Uncancel Adspace Order: explicit audited recovery action when allowed by downstream state.
+
 ## Proof Approval Visibility
 
 End clients do not need to know which vendor produced the proof. Proof Approval should stay organized around Adspace proof line numbers and proof files.
@@ -153,13 +186,40 @@ Vendor dashboards are organized around vendor work queues:
 
 Vendor Order proof states distinguish artwork pending, needs proof, vendor proof submitted, client review, revision requested, client approved, and production ready. `Client Approved` means the proof has been accepted but production may still be waiting for an explicit release. `Ready for Production` means the vendor is authorized to start production. Vendor proof submission writes route-aware activity metadata for internal review and scoped vendor activity.
 
+## June 26 Proof Ops Milestone
+
+The first complete proofing pass has been validated across customer, primary/LTL vendor, and external vendor paths.
+
+Validated behavior:
+
+- Customer proof approval works for Lift-backed primary vendor lines.
+- Customer proof revision works for Lift-backed primary vendor lines, including revised-art delivery to Lift and regenerated proof sync back into Adspace.
+- External vendor proof upload works for Adspace-managed vendor lines.
+- External vendor proof comments are routed into the same customer proof feedback/acknowledgment pattern used for Lift proof comments.
+- Customer Proof Approval remains vendor-neutral: vendor proof metadata is presented as print-provider proof activity, not as named vendor exposure.
+- Vendor Workspace line cards show current client artwork, current proof, proof source, proof/client approval state, art history, technical details, and route-aware references.
+- Primary/LTL Vendor Workspace hides manual proof replacement and manual production/shipping controls where Lift is the source of truth.
+- External Vendor Workspace keeps manual proof upload and manual production/shipping controls available after the correct workflow gates.
+
+Known untested area after this milestone:
+
+- Production and shipping status sync from Lift into the primary/LTL Vendor Workspace has not yet been fully validated.
+
 ## Current Deferred Items
 
 - Installer vendor workspace and post-print handoff.
 - Vendor notification preferences and forwarding.
 - Vendor-to-client/end-client message center.
 - Lift healing/resubmission from Vendor Workspace.
+- LTL/primary vendor-admin Lift relink: consider a guarded `Relink Lift Order` panel for primary vendor admins only, shown when the current Lift link is cancelled/missing or flagged for review. It should validate the replacement Lift order, require a reason, preserve audit history, clear/rebuild only Lift-backed sync state, and leave external vendor lines untouched.
+- Explicit Adspace order cancellation controls: add internal/admin `Cancel Adspace Order` and `Reopen/Uncancel Adspace Order` actions with confirmation, reason capture, audit trail, route-aware effects, and clear separation from Lift-order cancellation health.
 - External vendor integration adapters beyond manual status.
+- Vendor proof comment/thread enhancements: allow post-proof vendor comments, optional comment attachments, proof removal before replacement, richer proof-thread visibility in Vendor Workspace, and customer-safe handling of vendor proof notes without exposing vendor identity.
+- Vendor Client Approval summary polish: tighten the Proof Notes / Latest Feedback presentation so it reads as one clear proof-feedback surface, avoids duplicated cards, and keeps long proof comments from making the line card feel visually uneven.
+- Client Proof Approval feedback-gate layout polish: when proof comments require acknowledgment and approval/revision controls are hidden, rebalance the action dock so the feedback gate does not become an oversized full-width control with content packed into one side.
+- Unified user management: replace the tactical vendor-user form with a client/app user table that supports customer users, vendor users, vendor account assignment, active/inactive controls, access expiration, invite/reset flows, and delete/deactivate behavior.
+- Creative assignment "assign to all" helper: add a creative-level action that can assign one creative to all currently unassigned locations in the same variant, never overwrites by default, and reserves replacement behavior for a clearly confirmed admin/client action.
+- Lift-backed direct approval hardening: when a proof line is Lift-backed and the customer is in direct approval mode, block approval if Lift proof sync is disabled or the Lift proof identifiers are missing. The UI/API should show a clear configuration message instead of allowing a local-only approval that a later Lift sync can overwrite.
 
 ## Validation Checklist
 
@@ -175,3 +235,4 @@ Vendor Order proof states distinguish artwork pending, needs proof, vendor proof
 - Production/shipping updates persist to vendor line status and activity without mutating customer assignment/proof state.
 - Admin/internal Proof Approval can filter Lift-backed versus Adspace-managed proof lines.
 - Vendor dashboard buckets match incoming/proof/review/production/shipping work queues.
+- Cancelled or missing Lift orders appear as internal attention states without auto-cancelling Adspace or disrupting external vendor lines.

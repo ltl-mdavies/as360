@@ -1080,6 +1080,70 @@ html[data-theme="dark"] .proof-note{
   line-height: 1.45;
 }
 
+.proof-stagedRevision{
+  margin-top: 12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(34,197,94,.18);
+  border-radius: 14px;
+  background: rgba(240,253,244,.78);
+}
+
+.proof-stagedRevisionSummary{
+  min-width: 0;
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+
+.proof-stagedRevisionThumb{
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  border: 1px solid rgba(34,197,94,.24);
+  border-radius: 10px;
+  background: #fff;
+  color: color-mix(in srgb, var(--muted) 84%, var(--text));
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+
+.proof-stagedRevisionThumb img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display:block;
+}
+
+.proof-stagedRevisionMeta{
+  min-width: 0;
+  display:flex;
+  flex-direction:column;
+  gap: 2px;
+}
+
+.proof-stagedRevision strong{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 840;
+}
+
+.proof-stagedRevision span{
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 11px;
+  font-weight: 760;
+}
+
 .proof-revisionDropActions{
   margin-top: 12px;
   display:flex;
@@ -1090,6 +1154,22 @@ html[data-theme="dark"] .proof-note{
 .proof-actions .btn-lg{
   height: 44px;
   border-radius: 14px;
+}
+
+.proof-buttonSpinner{
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: -2px;
+  animation: proof-button-spin .75s linear infinite;
+}
+
+@keyframes proof-button-spin{
+  to{ transform: rotate(360deg); }
 }
 
 .proof-approvedNote{
@@ -1596,7 +1676,7 @@ html[data-theme="dark"] .proof-techClose{
   font-weight: 650;
 }
 
-.proof-vendorSubmitted{
+.proof-receivedMeta{
   margin-top: 10px;
   padding: 10px 12px;
   border: 1px solid rgba(22,163,74,.20);
@@ -1605,19 +1685,33 @@ html[data-theme="dark"] .proof-techClose{
   color: var(--text);
   display:grid;
   gap: 3px;
+  min-width: 0;
 }
 
-.proof-vendorSubmitted strong{
+.proof-receivedMeta strong{
   font-size: 12px;
   font-weight: 780;
 }
 
-.proof-vendorSubmitted span,
-.proof-vendorSubmitted p{
+.proof-receivedMeta span,
+.proof-receivedMeta p{
   margin: 0;
   color: var(--muted);
   font-size: 11.5px;
   line-height: 1.4;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proof-clientUploadMeta{
+  border-color: color-mix(in srgb, var(--stroke2) 82%, transparent);
+  background: rgba(248,250,252,.86);
+}
+
+.proof-mobileUpload + .proof-clientUploadMeta{
+  margin: -3px 14px 13px;
 }
 
 .proof-proofActions{
@@ -1808,6 +1902,11 @@ html[data-theme="dark"] .proof-techClose{
   display:flex;
   align-items:flex-start;
   gap: 10px;
+  flex: 1 1 auto;
+}
+
+.proof-feedbackSectionTop > .chip{
+  flex: 0 0 auto;
 }
 
 .proof-feedbackProofThumb{
@@ -1862,12 +1961,18 @@ html[data-theme="dark"] .proof-techClose{
   display:block;
 }
 
+.proof-feedbackProofCopy{
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .proof-feedbackFilename{
   margin-top: 5px;
   color: var(--text);
   font-size: 13px;
   font-weight: 760;
   overflow:hidden;
+  overflow-wrap:anywhere;
   text-overflow:ellipsis;
   display:-webkit-box;
   -webkit-line-clamp:2;
@@ -2239,6 +2344,48 @@ html[data-theme="dark"] .proof-techClose{
   color: color-mix(in srgb, var(--muted) 78%, white);
   font-size: 11.5px;
   font-weight: 760;
+}
+
+.proof-historyReports{
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--stroke2);
+  display:flex;
+  flex-direction:column;
+  gap: 8px;
+}
+
+.proof-historyReportsTitle{
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.proof-historyReportLink{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--stroke2);
+  background: rgba(248,250,252,.72);
+  color: var(--text);
+  text-decoration:none;
+  font-weight: 760;
+}
+
+.proof-historyReportLink small{
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.proof-historyReportLink[aria-disabled="true"]{
+  pointer-events:none;
+  opacity:.62;
 }
 
 @media (max-width: 980px){

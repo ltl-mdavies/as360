@@ -1,5 +1,6 @@
 // src/domain/selectors/allocationSelectors.ts
 import type { Assignment, Creative, InventoryItem, ProjectScope } from "../types";
+import { resolveCreativeColor } from "../../logic/creativeColors";
 
 /**
  * Build a quick lookup: inventoryId -> creativeId (or null)
@@ -142,7 +143,7 @@ export function buildVariantSections(args: {
           creativeId: c.id,
           filename: c.filename,
           fileMeta: c.fileMeta,
-          color: c.color,
+          color: resolveCreativeColor(c),
           mediaVariantKey: c.mediaVariantKey,
           assignedIds,
           assignedCount: assignedIds.length,

@@ -72,6 +72,8 @@ export type ApiProjectWorkspaceResponse = {
         | "proof_approved"
         | "in_production"
         | "completed"
+        | "cancelled"
+        | "missing"
         | "unknown";
       label: string;
       minLineStepNumber?: number | null;
@@ -79,6 +81,11 @@ export type ApiProjectWorkspaceResponse = {
       proofActionable: boolean;
       productionReference: boolean;
       completed: boolean;
+      orderStatusRaw?: string | null;
+      orderStatusNormalized?: "active" | "cancelled" | "missing" | "unknown" | null;
+      healthStatus?: "ok" | "cancelled" | "missing" | "sync_failed" | "unknown" | null;
+      healthMessage?: string | null;
+      lastOrderSyncAt?: string | null;
     };
     needsAttention?: boolean;
   };
@@ -177,9 +184,11 @@ export type ApiProjectProofLineResponse = {
   lineNumber: number;
   lineStepNumber?: number | null;
   liftOrderLineId?: number | null;
+  liftLineSnapshot?: ApiLiftLineSnapshot | null;
   liftProofingId?: number | null;
   mediaVariantKey: string;
   mediaVariantLabel?: string;
+  liftProductName?: string | null;
   productionRoute?: "primary_print_vendor" | "external_vendor";
   vendorAccountId?: string | null;
   vendorName?: string | null;
@@ -199,6 +208,9 @@ export type ApiProjectProofLineResponse = {
   proofThumbUrl?: string | null;
   proofFullUrl?: string | null;
   liftProofStatus?: string | null;
+  proofApprovedBy?: string | null;
+  proofApprovedDate?: string | null;
+  technicalReports?: ApiProjectProofTechnicalReport[];
   status: "waiting" | "pending" | "approved";
   revised: boolean;
   printTeamFeedback?: string | null;
@@ -216,6 +228,40 @@ export type ApiProjectProofLineResponse = {
   vendorProofNote?: string | null;
   updatedAt?: string;
   updatedByName?: string | null;
+};
+
+export type ApiLiftOrderSnapshot = {
+  orderNumber?: string | null;
+  customerId?: number | null;
+  orderTitle?: string | null;
+  poNumber?: string | number | null;
+  customerName?: string | null;
+  creationDate?: string | null;
+  createdBy?: string | null;
+  orderTypeName?: string | null;
+  orderStatus?: string | null;
+  orderStepId?: number | null;
+  headerStepNumber?: number | null;
+};
+
+export type ApiLiftLineSnapshot = {
+  lineNumber?: number | null;
+  orderLineId?: number | null;
+  quantity?: number | null;
+  productName?: string | null;
+  unitNumber?: string | null;
+  material?: string | null;
+  lineStepId?: number | null;
+  lineStepNumber?: number | null;
+  printHeightIn?: number | null;
+  printWidthIn?: number | null;
+};
+
+export type ApiProjectProofTechnicalReport = {
+  reportId?: number | null;
+  definitionId?: number | null;
+  definitionLabel?: string | null;
+  reportUrl?: string | null;
 };
 
 export type ApiProjectProofCommentAttachment = {
@@ -238,6 +284,9 @@ export type ApiProjectProofVersion = {
   proofThumbUrl?: string | null;
   proofFullUrl?: string | null;
   status?: string | null;
+  proofApprovedBy?: string | null;
+  proofApprovedDate?: string | null;
+  technicalReports?: ApiProjectProofTechnicalReport[];
   createdAt?: string | null;
   replacedAt?: string | null;
   current?: boolean;
@@ -441,7 +490,7 @@ export type ApiLiftPayloadPreview = {
     customer_id: string;
     order_title: string;
     order_note?: string;
-    product_data: Array<{
+    product_data: Array<Array<{
       productSku: string;
       productCategory: "Art";
       productQty: number;
@@ -453,7 +502,7 @@ export type ApiLiftPayloadPreview = {
       safe_width: string;
       assigned_Locations: string;
       mediaVariantLabel: string;
-    }>;
+    }>>;
   };
   validation: {
     ok: boolean;
@@ -589,6 +638,9 @@ export type ApiCustomerSettings = {
   transitApproval: {
     defaultMode: "enabled_all_orders" | "manual_per_project";
     allowProjectOverride: boolean;
+  };
+  workflowPolicies: {
+    productionApprovalMode: "direct" | "hold_for_release";
   };
   collaboration: {
     collaborationLinksEnabled: boolean;
@@ -870,6 +922,8 @@ export type ApiVenueDetailResponse = {
     mediaVariantKey: string;
     mediaType?: string | null;
     unitNumber?: string | null;
+    productionRoutingOverride?: "primary" | "external" | null;
+    externalVendorIdOverride?: string | null;
     trimHeight?: number | null;
     trimWidth?: number | null;
     safeHeight?: number | null;
@@ -1690,6 +1744,37 @@ export async function createCustomerVendor(
   });
 }
 
+export async function createCustomerVendorUser(
+  api: ApiClientLike,
+  customerId: string,
+  payload: {
+    vendorId: string;
+    email: string;
+    displayName?: string;
+    role?: "vendor_admin" | "vendor_user";
+    sendInvite?: boolean;
+  }
+) {
+  return api.request<{
+    user: ApiAdminUser;
+    vendor: {
+      id: string;
+      customerId: string;
+      vendorAccountId: string;
+      name: string;
+    };
+    cognitoUserCreated: boolean;
+    temporaryPassword?: string;
+  }>(`/api/admin/settings`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      customerId,
+      vendorAction: "create_vendor_user",
+      ...payload,
+    }),
+  });
+}
+
 export async function updateCustomerVendor(
   api: ApiClientLike,
   customerId: string,
@@ -1776,6 +1861,11 @@ export type ApiVendorOrderSummary = {
     venueName: string;
     adspaceOrderNumber: string;
     liftOrderId?: string | null;
+    liftOrderStatus?: string | null;
+    liftOrderHealthStatus?: string | null;
+    lastLiftOrderSyncAt?: string | null;
+    lastLiftProofSyncAt?: string | null;
+    liftOrderSnapshot?: ApiLiftOrderSnapshot | null;
     poNumber?: string | null;
     contractNumber?: string | null;
     artworkDueDate?: string | null;
@@ -1823,15 +1913,27 @@ export type ApiVendorOrderLine = {
     thumbUrl?: string | null;
     fullUrl?: string | null;
     contentType?: string | null;
+    uploadedAt?: string | null;
+    uploadedByName?: string | null;
   } | null;
   proof?: {
     status: "waiting" | "pending" | "approved";
     revised?: boolean;
     lineStepNumber?: number | null;
+    liftLineSnapshot?: ApiLiftLineSnapshot | null;
     liftProofStatus?: string | null;
+    proofSource?: "lift_sync" | "vendor_upload" | "adspace_upload" | null;
+    proofApprovedBy?: string | null;
+    proofApprovedDate?: string | null;
     thumbUrl?: string | null;
     fullUrl?: string | null;
     printTeamFeedback?: string | null;
+    proofComments?: ApiProjectProofComment[];
+    proofCommentCount?: number;
+    proofCommentAttachmentCount?: number;
+    latestProofCommentAt?: string | null;
+    proofVersions?: ApiProjectProofVersion[];
+    technicalReports?: ApiProjectProofTechnicalReport[];
     vendorSubmittedAt?: string | null;
     vendorSubmittedByName?: string | null;
     vendorAccountId?: string | null;
@@ -1888,8 +1990,9 @@ export async function fetchVendorOrders(api: ApiClientLike) {
   return api.request<ApiVendorOrdersResponse>("/api/vendor/orders");
 }
 
-export async function fetchVendorOrder(api: ApiClientLike, vendorOrderId: string) {
-  return api.request<ApiVendorOrderResponse>(`/api/vendor/orders/${encodeURIComponent(vendorOrderId)}`);
+export async function fetchVendorOrder(api: ApiClientLike, vendorOrderId: string, options: { refreshLift?: boolean } = {}) {
+  const query = options.refreshLift ? "?refresh=1" : "";
+  return api.request<ApiVendorOrderResponse>(`/api/vendor/orders/${encodeURIComponent(vendorOrderId)}${query}`);
 }
 
 export async function updateVendorOrder(api: ApiClientLike, vendorOrderId: string, payload: VendorLineUpdateInput) {

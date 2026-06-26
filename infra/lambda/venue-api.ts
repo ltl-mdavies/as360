@@ -158,6 +158,8 @@ type InventoryItem = {
   finishing?: string;
   locationDetail?: string;
   notes?: string;
+  productionRoutingOverride?: "primary" | "external";
+  externalVendorIdOverride?: string;
   dpi?: number | null;
   bleedTop?: number | null;
   bleedRight?: number | null;
@@ -250,6 +252,8 @@ type InventoryImportPayload = {
     finishing?: string;
     locationDetail?: string;
     notes?: string;
+    productionRoutingOverride?: "primary" | "external";
+    externalVendorIdOverride?: string;
     dpi?: number | null;
     bleedTop?: number | null;
     bleedRight?: number | null;
@@ -1361,8 +1365,18 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
       throw new HttpError(400, `Inventory row ${index + 1} references an unknown map`);
     }
 
-    const mediaVariantKey = raw.mediaVariantKey || raw.variantLabel || raw.mediaType || "custom_variant";
-    const variantLabel = raw.variantLabel || raw.mediaType || mediaVariantKey;
+    const trimHeight = numberOrNull(raw.trimHeight);
+    const trimWidth = numberOrNull(raw.trimWidth);
+    const variantIdentity = buildInventoryVariantIdentity({
+      mediaVariantKey: raw.mediaVariantKey,
+      variantLabel: raw.variantLabel,
+      mediaType: raw.mediaType,
+      trimHeight,
+      trimWidth,
+    });
+    const mediaVariantKey = variantIdentity.mediaVariantKey;
+    const variantLabel = variantIdentity.variantLabel;
+    const mediaType = variantIdentity.mediaType;
     const inventoryId = raw.inventoryId || raw.id || `INV-${Date.now()}-${index + 1}`;
     const itemId = raw.id || makeId("inventory", venueId, inventoryId);
 
@@ -1375,20 +1389,25 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
       mapName: resolvedMap.name,
       mediaVariantKey,
       variantLabel,
-      mediaType: raw.mediaType,
+      mediaType,
       unitNumber: raw.unitNumber,
       x: typeof raw.x === "number" ? raw.x : null,
       y: typeof raw.y === "number" ? raw.y : null,
       isActive: raw.isActive ?? true,
       mapVisibilityMode: raw.mapVisibilityMode || "hidden",
-      trimHeight: numberOrNull(raw.trimHeight),
-      trimWidth: numberOrNull(raw.trimWidth),
+      trimHeight,
+      trimWidth,
       safeHeight: numberOrNull(raw.safeHeight),
       safeWidth: numberOrNull(raw.safeWidth),
       substrate: raw.substrate,
       finishing: raw.finishing,
       locationDetail: raw.locationDetail,
       notes: raw.notes,
+      productionRoutingOverride:
+        raw.productionRoutingOverride === "external" || raw.productionRoutingOverride === "primary"
+          ? raw.productionRoutingOverride
+          : undefined,
+      externalVendorIdOverride: raw.productionRoutingOverride === "external" ? raw.externalVendorIdOverride : undefined,
       dpi: numberOrNull(raw.dpi),
       bleedTop: numberOrNull(raw.bleedTop),
       bleedRight: numberOrNull(raw.bleedRight),
@@ -1406,7 +1425,7 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
         venueId,
         mediaVariantKey,
         label: variantLabel,
-        mediaType: raw.mediaType,
+        mediaType,
         color: raw.color,
         abbreviation: raw.abbreviation,
         unitNumber: raw.unitNumber,
@@ -1455,15 +1474,28 @@ async function updateInventory(inventoryItemId: string, payload: Record<string, 
     nextMapName = map.name;
   }
 
+  const nextMediaType = hasOwn(payload, "mediaType")
+    ? optionalString(payload.mediaType)
+    : existing.mediaType;
+  const nextTrimHeight = numberOrUndefined(payload.trimHeight, existing.trimHeight);
+  const nextTrimWidth = numberOrUndefined(payload.trimWidth, existing.trimWidth);
+  const nextVariantIdentity = buildInventoryVariantIdentity({
+    mediaVariantKey: hasOwn(payload, "mediaVariantKey") ? optionalString(payload.mediaVariantKey) : existing.mediaVariantKey,
+    variantLabel: hasOwn(payload, "variantLabel") ? optionalString(payload.variantLabel) : existing.variantLabel,
+    mediaType: nextMediaType,
+    trimHeight: nextTrimHeight,
+    trimWidth: nextTrimWidth,
+  });
+
   const next: InventoryItem = {
     ...existing,
     inventoryId: optionalString(payload.inventoryId) || existing.inventoryId,
     locationId: nextMapId || existing.locationId,
     mapName: nextMapName,
     unitNumber: hasOwn(payload, "unitNumber") ? optionalString(payload.unitNumber) || undefined : existing.unitNumber,
-    mediaVariantKey: optionalString(payload.mediaVariantKey) || existing.mediaVariantKey,
-    variantLabel: optionalString(payload.variantLabel) || existing.variantLabel,
-    mediaType: optionalString(payload.mediaType) ?? existing.mediaType,
+    mediaVariantKey: nextVariantIdentity.mediaVariantKey,
+    variantLabel: nextVariantIdentity.variantLabel,
+    mediaType: nextVariantIdentity.mediaType,
     x: numberOrUndefined(payload.x, existing.x),
     y: numberOrUndefined(payload.y, existing.y),
     isActive: optionalBoolean(payload.isActive) ?? existing.isActive,
@@ -1473,14 +1505,22 @@ async function updateInventory(inventoryItemId: string, payload: Record<string, 
         : optionalString(payload.mapVisibilityMode) === "hidden"
           ? "hidden"
           : existing.mapVisibilityMode,
-    trimHeight: numberOrUndefined(payload.trimHeight, existing.trimHeight),
-    trimWidth: numberOrUndefined(payload.trimWidth, existing.trimWidth),
+    trimHeight: nextTrimHeight,
+    trimWidth: nextTrimWidth,
     safeHeight: numberOrUndefined(payload.safeHeight, existing.safeHeight),
     safeWidth: numberOrUndefined(payload.safeWidth, existing.safeWidth),
     substrate: optionalString(payload.substrate) ?? existing.substrate,
     finishing: optionalString(payload.finishing) ?? existing.finishing,
     locationDetail: optionalString(payload.locationDetail) ?? existing.locationDetail,
     notes: optionalString(payload.notes) ?? existing.notes,
+    productionRoutingOverride: hasOwn(payload, "productionRoutingOverride")
+      ? optionalString(payload.productionRoutingOverride) === "external" || optionalString(payload.productionRoutingOverride) === "primary"
+        ? optionalString(payload.productionRoutingOverride) as "primary" | "external"
+        : undefined
+      : existing.productionRoutingOverride,
+    externalVendorIdOverride: hasOwn(payload, "externalVendorIdOverride")
+      ? optionalString(payload.externalVendorIdOverride) || undefined
+      : existing.externalVendorIdOverride,
     dpi: numberOrUndefined(payload.dpi, existing.dpi),
     bleedTop: numberOrUndefined(payload.bleedTop, existing.bleedTop),
     bleedRight: numberOrUndefined(payload.bleedRight, existing.bleedRight),
@@ -1488,6 +1528,9 @@ async function updateInventory(inventoryItemId: string, payload: Record<string, 
     bleedLeft: numberOrUndefined(payload.bleedLeft, existing.bleedLeft),
     updatedAt: isoNow(),
   };
+  if (next.productionRoutingOverride !== "external") {
+    next.externalVendorIdOverride = undefined;
+  }
 
   await putCore(buildInventoryRecord(next));
   const nextInventory = venueItems
@@ -2139,6 +2182,55 @@ function numberOrUndefined(value: unknown, fallback: number | null | undefined) 
   if (value === null) return null;
   if (typeof value === "number" && Number.isFinite(value)) return value;
   return fallback;
+}
+
+function trimDimensionToken(value: number) {
+  return Number.isInteger(value)
+    ? String(value)
+    : String(value).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+function mediaNameFromVariantKey(key?: string) {
+  const parsed = optionalString(key);
+  if (!parsed) return undefined;
+  return optionalString(parsed.split("||")[0]);
+}
+
+function mediaNameFromVariantLabel(label?: string) {
+  const parsed = optionalString(label);
+  if (!parsed) return undefined;
+  return optionalString(parsed.split(/[•·]/)[0]);
+}
+
+function buildInventoryVariantIdentity(args: {
+  mediaVariantKey?: string;
+  variantLabel?: string;
+  mediaType?: string;
+  trimHeight?: number | null;
+  trimWidth?: number | null;
+}) {
+  const mediaType =
+    optionalString(args.mediaType) ||
+    mediaNameFromVariantLabel(args.variantLabel) ||
+    mediaNameFromVariantKey(args.mediaVariantKey) ||
+    "Custom Variant";
+
+  if (typeof args.trimHeight === "number" && Number.isFinite(args.trimHeight) && typeof args.trimWidth === "number" && Number.isFinite(args.trimWidth)) {
+    const height = trimDimensionToken(args.trimHeight);
+    const width = trimDimensionToken(args.trimWidth);
+    return {
+      mediaType,
+      mediaVariantKey: `${mediaType}||${height}||${width}`,
+      variantLabel: `${mediaType} · ${height}"h × ${width}"w`,
+    };
+  }
+
+  const mediaVariantKey = optionalString(args.mediaVariantKey) || optionalString(args.variantLabel) || mediaType;
+  return {
+    mediaType,
+    mediaVariantKey,
+    variantLabel: optionalString(args.variantLabel) || mediaType,
+  };
 }
 
 function normalizeText(value: string) {

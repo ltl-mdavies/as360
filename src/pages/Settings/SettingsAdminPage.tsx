@@ -7,6 +7,7 @@ import { useApiClient } from "../../api/useApiClient";
 import {
   createCustomerAccount,
   createCustomerVendor,
+  createCustomerVendorUser,
   fetchAdminSettings,
   fetchCustomers,
   fetchCustomerSettings,
@@ -83,6 +84,7 @@ type CustomerDraftSettings = {
   notifyWorkflowErrors: boolean;
   notificationEmailRecipients: string;
   notificationRules: NotificationRuleDraft[];
+  productionApprovalMode: "direct" | "hold_for_release";
   transitApprovalDefaultMode: "enabled_all_orders" | "manual_per_project";
   allowTransitProjectOverride: boolean;
   customerShareCollaborationEnabled: boolean;
@@ -99,6 +101,13 @@ type VendorDraft = {
   phone: string;
   notes: string;
   isActive: boolean;
+};
+
+type VendorUserDraft = {
+  displayName: string;
+  email: string;
+  role: "vendor_user" | "vendor_admin";
+  sendInvite: boolean;
 };
 
 type CustomerAccountDraft = {
@@ -277,6 +286,7 @@ function customerDraftFromSettings(settings: ApiCustomerSettings): CustomerDraft
     notifyWorkflowErrors: settings.notifications.workflowErrors,
     notificationEmailRecipients: settings.notifications.emailRecipients,
     notificationRules: settings.notifications.rules || [],
+    productionApprovalMode: settings.workflowPolicies.productionApprovalMode,
     transitApprovalDefaultMode: settings.transitApproval.defaultMode,
     allowTransitProjectOverride: settings.transitApproval.allowProjectOverride,
     customerShareCollaborationEnabled: settings.collaboration.collaborationLinksEnabled,
@@ -295,6 +305,15 @@ function vendorDraftFromVendor(vendor: ApiCustomerVendor): VendorDraft {
     phone: vendor.phone,
     notes: vendor.notes,
     isActive: vendor.isActive,
+  };
+}
+
+function vendorUserDraftFromVendor(vendor: ApiCustomerVendor): VendorUserDraft {
+  return {
+    displayName: vendor.contactName || vendor.name,
+    email: vendor.email || "",
+    role: "vendor_user",
+    sendInvite: false,
   };
 }
 
@@ -363,6 +382,14 @@ export default function SettingsAdminPage() {
   const [customerSaveMessage, setCustomerSaveMessage] = useState<string | null>(null);
   const [vendorDrafts, setVendorDrafts] = useState<Record<string, VendorDraft>>({});
   const [vendorSavingId, setVendorSavingId] = useState<string | null>(null);
+  const [vendorUserDrafts, setVendorUserDrafts] = useState<Record<string, VendorUserDraft>>({});
+  const [vendorUserSavingId, setVendorUserSavingId] = useState<string | null>(null);
+  const [vendorUserCreated, setVendorUserCreated] = useState<{
+    vendorId: string;
+    email: string;
+    temporaryPassword?: string;
+    cognitoUserCreated: boolean;
+  } | null>(null);
   const [customerAccounts, setCustomerAccounts] = useState<ApiCustomerAccount[]>([]);
   const [customerAccountsLoading, setCustomerAccountsLoading] = useState(false);
   const [customerAccountDrafts, setCustomerAccountDrafts] = useState<Record<string, CustomerAccountDraft>>({});
@@ -535,6 +562,18 @@ export default function SettingsAdminPage() {
     });
   }, [snapshot?.users, customerSnapshot?.users]);
 
+  useEffect(() => {
+    const vendors = customerSnapshot?.vendors || [];
+    if (!vendors.length) return;
+    setVendorUserDrafts((current) => {
+      const next = { ...current };
+      for (const vendor of vendors) {
+        next[vendor.id] = current[vendor.id] || vendorUserDraftFromVendor(vendor);
+      }
+      return next;
+    });
+  }, [customerSnapshot?.vendors]);
+
   const hasChanges = useMemo(() => {
     if (!snapshot || !draft) return false;
     return JSON.stringify(draft) !== JSON.stringify(internalDraftFromSettings(snapshot.settings));
@@ -605,6 +644,28 @@ export default function SettingsAdminPage() {
         ...patch,
       },
     }));
+  }
+
+  function patchVendorUserDraft(vendorId: string, patch: Partial<VendorUserDraft>) {
+    setVendorUserDrafts((current) => ({
+      ...current,
+      [vendorId]: {
+        ...(current[vendorId] || vendorUserDraftFromVendor(customerSnapshot?.vendors.find((vendor) => vendor.id === vendorId) || {
+          id: vendorId,
+          customerId: selectedCustomerId,
+          name: "",
+          contactName: "",
+          email: "",
+          phone: "",
+          notes: "",
+          isActive: true,
+          updatedAt: "",
+          updatedByName: "",
+        })),
+        ...patch,
+      },
+    }));
+    setVendorUserCreated(null);
   }
 
   function patchCustomerAccountDraft(customerId: string, patch: Partial<CustomerAccountDraft>) {
@@ -843,6 +904,7 @@ export default function SettingsAdminPage() {
         notifyWorkflowErrors: customerDraft.notifyWorkflowErrors,
         notificationEmailRecipients: customerDraft.notificationEmailRecipients.trim(),
         notificationRules: customerDraft.notificationRules,
+        productionApprovalMode: customerDraft.productionApprovalMode,
         transitApprovalDefaultMode: customerDraft.transitApprovalDefaultMode,
         allowTransitProjectOverride: customerDraft.allowTransitProjectOverride,
         customerShareCollaborationEnabled: customerDraft.customerShareCollaborationEnabled,
@@ -913,6 +975,41 @@ export default function SettingsAdminPage() {
       setCustomerError("We couldn’t add that vendor yet.");
     } finally {
       setNewVendorSaving(false);
+    }
+  }
+
+  async function addVendorUser(vendor: ApiCustomerVendor) {
+    if (!selectedCustomerId) return;
+    const draftValue = vendorUserDrafts[vendor.id] || vendorUserDraftFromVendor(vendor);
+    if (!draftValue.email.trim()) return;
+    setVendorUserSavingId(vendor.id);
+    setCustomerError(null);
+    setVendorUserCreated(null);
+    try {
+      const result = await createCustomerVendorUser(api, selectedCustomerId, {
+        vendorId: vendor.id,
+        email: draftValue.email.trim(),
+        displayName: draftValue.displayName.trim() || draftValue.email.trim(),
+        role: draftValue.role,
+        sendInvite: draftValue.sendInvite,
+      });
+      await refreshAdminData(selectedCustomerId);
+      setVendorUserDrafts((current) => ({
+        ...current,
+        [vendor.id]: vendorUserDraftFromVendor(vendor),
+      }));
+      setVendorUserCreated({
+        vendorId: vendor.id,
+        email: result.user.email,
+        temporaryPassword: result.temporaryPassword,
+        cognitoUserCreated: result.cognitoUserCreated,
+      });
+      setCustomerSaveMessage(`Vendor user ${result.user.email} is linked to ${vendor.name}.`);
+    } catch (saveError) {
+      console.error("Failed to add vendor user", saveError);
+      setCustomerError("We couldn’t create that vendor user.");
+    } finally {
+      setVendorUserSavingId(null);
     }
   }
 
@@ -1914,7 +2011,7 @@ export default function SettingsAdminPage() {
                     {activeLiftEnvironmentDraft ? (
                       <div className="settings-fieldGrid settings-fieldGrid-2">
                         <label className="settings-field"><span className="settings-fieldLabel">Base URL (optional)</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.baseUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { baseUrl: e.target.value })} placeholder="Optional: https://lift.example.com" /></label>
-                        <label className="settings-field"><span className="settings-fieldLabel">Create order URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.orderEndpointUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { orderEndpointUrl: e.target.value })} placeholder={draft.primaryPrintActiveEnvironment === "prod" ? "http://prod-lifterp/lifterp/ords/lifterp/lift/erp/api/create_order" : "http://devcompute/lifterp-qa1/lifterp/liftqa1/erp/api/create_order"} /></label>
+                        <label className="settings-field"><span className="settings-fieldLabel">Create order URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.orderEndpointUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { orderEndpointUrl: e.target.value })} placeholder={draft.primaryPrintActiveEnvironment === "prod" ? "https://ltlco.lifterp.com/ords/api/lift/erp/api/create_order" : "http://devcompute/lifterp-qa1/lifterp/liftqa1/erp/api/create_order"} /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">Fallback order lookup URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.fallbackOrderLookupUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { fallbackOrderLookupUrl: e.target.value })} placeholder="Full URL or relative path" /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">AS360Orders / Flush sync URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.flushSyncUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { flushSyncUrl: e.target.value })} placeholder="Full URL or relative path" /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">Proof endpoint URL template</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.proofEndpointUrlTemplate} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { proofEndpointUrlTemplate: e.target.value })} placeholder="Use %0 for company id and %1 for proofing id" /></label>
@@ -2080,6 +2177,44 @@ export default function SettingsAdminPage() {
                   </div>
                 </div>
               </div>
+            </Panel>
+
+            <Panel className="settings-panel settings-panel-wide">
+              <div className="settings-cardHead">
+                <div>
+                  <div className="settings-sectionEyebrow">Proof Approval</div>
+                  <h3 className="settings-cardTitle">Proof approval posture for {selectedCustomer?.name || "this customer"}</h3>
+                </div>
+                <span className="chip tone-warning">Customer policy</span>
+              </div>
+              {!customerDraft ? (
+                <div className="settings-empty">Select a customer to load proof approval settings.</div>
+              ) : (
+                <div className="settings-subsection">
+                  <div className="settings-subsectionHead">
+                    <div className="settings-subsectionTitle">Client approval behavior</div>
+                    <div className="settings-subsectionMeta">This setting applies only to the selected customer account above.</div>
+                  </div>
+                  <div className="settings-formGrid">
+                    <label className="settings-field">
+                      <span className="settings-fieldLabel">Proof approval mode</span>
+                      <select
+                        className="select settings-input"
+                        value={customerDraft.productionApprovalMode}
+                        onChange={(e) => patchCustomerDraft({ productionApprovalMode: e.target.value as CustomerDraftSettings["productionApprovalMode"] })}
+                      >
+                        <option value="hold_for_release">Production Release queue</option>
+                        <option value="direct">Direct proof approvals</option>
+                      </select>
+                    </label>
+                    <div className="settings-miniNote">
+                      {customerDraft.productionApprovalMode === "direct"
+                        ? "Approved proof lines become production-ready without a separate release step."
+                        : "Approved proofs wait for client admin release before production/vendor action."}
+                    </div>
+                  </div>
+                </div>
+              )}
             </Panel>
 
             <Panel className="settings-panel settings-panel-wide">
@@ -2473,6 +2608,10 @@ export default function SettingsAdminPage() {
                     <div className="settings-list">
                       {customerSnapshot.vendors.map((vendor) => {
                         const vendorDraft = vendorDrafts[vendor.id] || vendorDraftFromVendor(vendor);
+                        const vendorUserDraft = vendorUserDrafts[vendor.id] || vendorUserDraftFromVendor(vendor);
+                        const linkedVendorUsers = (customerSnapshot.users || []).filter((user) =>
+                          vendor.vendorAccountId && (user.vendorAccountIds || []).includes(vendor.vendorAccountId)
+                        );
                         const isDirty = JSON.stringify(vendorDraft) !== JSON.stringify(vendorDraftFromVendor(vendor));
                         return (
                           <div key={vendor.id} className="settings-listItem">
@@ -2497,6 +2636,87 @@ export default function SettingsAdminPage() {
                               <button className="btn btn-ghost btn-soft" type="button" disabled={!isDirty || vendorSavingId === vendor.id} onClick={() => void saveVendor(vendor)}>
                                 {vendorSavingId === vendor.id ? "Saving…" : isDirty ? "Save Vendor" : "Saved"}
                               </button>
+                            </div>
+                            <div className="settings-subsection settings-subsectionNested">
+                              <div className="settings-subsectionHead">
+                                <div>
+                                  <div className="settings-subsectionTitle">Vendor users</div>
+                                  <div className="settings-subsectionMeta">
+                                    Create authenticated workspace users for this vendor account.
+                                  </div>
+                                </div>
+                                <span className="chip tone-neutral">{linkedVendorUsers.length} user{linkedVendorUsers.length === 1 ? "" : "s"}</span>
+                              </div>
+                              {linkedVendorUsers.length ? (
+                                <div className="settings-miniList">
+                                  {linkedVendorUsers.map((user) => (
+                                    <div key={user.id} className="settings-miniListItem">
+                                      <span>{user.displayName || user.email}</span>
+                                      <span>{user.email}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <div className="settings-fieldGrid settings-fieldGrid-3">
+                                <label className="settings-field">
+                                  <span className="settings-fieldLabel">Display name</span>
+                                  <input
+                                    className="field-input settings-input"
+                                    value={vendorUserDraft.displayName}
+                                    onChange={(e) => patchVendorUserDraft(vendor.id, { displayName: e.target.value })}
+                                    placeholder={vendor.contactName || vendor.name}
+                                  />
+                                </label>
+                                <label className="settings-field">
+                                  <span className="settings-fieldLabel">Login email</span>
+                                  <input
+                                    className="field-input settings-input"
+                                    type="email"
+                                    value={vendorUserDraft.email}
+                                    onChange={(e) => patchVendorUserDraft(vendor.id, { email: e.target.value })}
+                                    placeholder={vendor.email || "user@example.com"}
+                                  />
+                                </label>
+                                <label className="settings-field">
+                                  <span className="settings-fieldLabel">Role</span>
+                                  <select
+                                    className="select settings-input"
+                                    value={vendorUserDraft.role}
+                                    onChange={(e) => patchVendorUserDraft(vendor.id, { role: e.target.value as VendorUserDraft["role"] })}
+                                  >
+                                    <option value="vendor_user">Vendor user</option>
+                                    <option value="vendor_admin">Vendor admin</option>
+                                  </select>
+                                </label>
+                              </div>
+                              <div className="settings-actions">
+                                <label className="settings-toggleRow settings-toggleRow-inline">
+                                  <input
+                                    type="checkbox"
+                                    checked={vendorUserDraft.sendInvite}
+                                    onChange={(e) => patchVendorUserDraft(vendor.id, { sendInvite: e.target.checked })}
+                                  />
+                                  <span>Send Cognito invite email</span>
+                                </label>
+                                <button
+                                  className="btn btn-primary"
+                                  type="button"
+                                  disabled={!vendorUserDraft.email.trim() || vendorUserSavingId === vendor.id || !vendorDraft.isActive}
+                                  onClick={() => void addVendorUser(vendor)}
+                                >
+                                  {vendorUserSavingId === vendor.id ? "Creating…" : "Add Vendor User"}
+                                </button>
+                              </div>
+                              {vendorUserCreated?.vendorId === vendor.id ? (
+                                <div className="settings-feedback settings-feedback-success settings-vendorUserResult">
+                                  <div>{vendorUserCreated.email} is ready for Vendor Workspace.</div>
+                                  {vendorUserCreated.temporaryPassword ? (
+                                    <div>Temporary password: <strong>{vendorUserCreated.temporaryPassword}</strong></div>
+                                  ) : (
+                                    <div>Existing Cognito user linked. No password was changed.</div>
+                                  )}
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         );

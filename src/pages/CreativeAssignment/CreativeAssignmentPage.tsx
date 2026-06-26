@@ -68,25 +68,7 @@ import {
 } from "../../logic/mockAssignment";
 
 import { endAssignMode, startAssignMode, type AssignModeState } from "../../logic/useAssignmentMode";
-
-const CREATIVE_DISPLAY_COLORS = [
-  "#3F6ED8",
-  "#10b981",
-  "#f97316",
-  "#a855f7",
-  "#ef4444",
-  "#06b6d4",
-  "#eab308",
-  "#ec4899",
-];
-
-function hashCreativeId(input: string) {
-  let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-  }
-  return hash;
-}
+import { resolveCreativeColor } from "../../logic/creativeColors";
 
 function formatSpecNumber(value: number | string | null | undefined) {
   if (value == null || value === "") return "";
@@ -126,11 +108,12 @@ function mergeInventoryVenueSpecs(inventory: InventoryItem[], venueDetail: ApiVe
     if (!venueItem) return item;
     return {
       ...item,
-      mediaType: item.mediaType || venueItem.mediaType || undefined,
-      trimHeight: item.trimHeight ?? venueItem.trimHeight ?? null,
-      trimWidth: item.trimWidth ?? venueItem.trimWidth ?? null,
-      safeHeight: item.safeHeight ?? venueItem.safeHeight ?? null,
-      safeWidth: item.safeWidth ?? venueItem.safeWidth ?? null,
+      mediaVariantKey: venueItem.mediaVariantKey || item.mediaVariantKey,
+      mediaType: venueItem.mediaType || item.mediaType || undefined,
+      trimHeight: venueItem.trimHeight ?? item.trimHeight ?? null,
+      trimWidth: venueItem.trimWidth ?? item.trimWidth ?? null,
+      safeHeight: venueItem.safeHeight ?? item.safeHeight ?? null,
+      safeWidth: venueItem.safeWidth ?? item.safeWidth ?? null,
       notes: item.notes?.trim() ? item.notes : venueItem.notes || item.notes || "",
     };
   });
@@ -339,11 +322,11 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
   const creativeDisplayColorById = useMemo(() => {
     const next = new Map<string, string>();
     creatives.forEach((creative) => {
-      const index = hashCreativeId(creative.id) % CREATIVE_DISPLAY_COLORS.length;
-      next.set(creative.id, CREATIVE_DISPLAY_COLORS[index] || creative.color || "#3F6ED8");
+      const variant = variantByKey.get(creative.mediaVariantKey) as any;
+      next.set(creative.id, resolveCreativeColor(creative, { variantColor: variant?.color }));
     });
     return next;
-  }, [creatives]);
+  }, [creatives, variantByKey]);
 
   const liveOrderNumber = liveWorkspace?.project.liftOrderId || null;
   const isSubmitted = isDemo ? ctx.isSubmitted : !!liveOrderNumber;
@@ -2428,7 +2411,7 @@ useEffect(() => {
 										  alt=""
 										  loading="lazy"
 										/>
-										<span className="assign-listDot" style={{ background: assigned.color }} />
+										<span className="assign-listDot" style={{ background: creativeDisplayColorById.get(assigned.id) || assigned.color }} />
 										<span className="assign-listName" title={assigned.filename}>
 										  {assigned.filename}
 										</span>
@@ -2462,7 +2445,7 @@ useEffect(() => {
 											  setOpenInvPickerId(null);
 											}}
 										  >
-											<span className="pin-pop-color" style={{ background: c.color }} />
+											<span className="pin-pop-color" style={{ background: creativeDisplayColorById.get(c.id) || c.color }} />
 											<img
 											  className="pin-pop-thumb"
 											  src={getCreativeThumb(c)}
@@ -2691,7 +2674,7 @@ useEffect(() => {
                   )}
                   <div className="pin-layer">
                     {inventory
-                      .filter((item) => item.mapId === mapModalInventory.mapId)
+                      .filter((item) => item.id === mapModalInventory.id)
                       .map((inv) => {
                         const variant: any = variantCatalog.find((v: any) => v.key === inv.mediaVariantKey);
                         const assignedCreative = inv.assignedCreativeId ? creativeById.get(inv.assignedCreativeId) : null;

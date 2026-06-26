@@ -64,6 +64,8 @@ export type ProjectRollup = {
       | "proof_approved"
       | "in_production"
       | "completed"
+      | "cancelled"
+      | "missing"
       | "unknown";
     label: string;
     minLineStepNumber?: number | null;
@@ -71,6 +73,11 @@ export type ProjectRollup = {
     proofActionable: boolean;
     productionReference: boolean;
     completed: boolean;
+    orderStatusRaw?: string | null;
+    orderStatusNormalized?: "active" | "cancelled" | "missing" | "unknown" | null;
+    healthStatus?: "ok" | "cancelled" | "missing" | "sync_failed" | "unknown" | null;
+    healthMessage?: string | null;
+    lastOrderSyncAt?: string | null;
   };
 
   needsAttention: boolean;

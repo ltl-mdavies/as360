@@ -6,11 +6,17 @@ import {
   ScanCommand,
 } from "@aws-sdk/client-dynamodb";
 import { ApiGatewayManagementApiClient, GoneException, PostToConnectionCommand } from "@aws-sdk/client-apigatewaymanagementapi";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  AdminCreateUserCommand,
+  AdminGetUserCommand,
+  CognitoIdentityProviderClient,
+} from "@aws-sdk/client-cognito-identity-provider";
+import { DeleteObjectCommand, CopyObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, createSign, randomBytes } from "node:crypto";
 import JSZip from "jszip";
 import {
   renderDigestMessage,
@@ -222,6 +228,8 @@ type InventoryItem = {
   finishing?: string;
   locationDetail?: string;
   notes?: string;
+  productionRoutingOverride?: "primary" | "external";
+  externalVendorIdOverride?: string;
   dpi?: number | null;
   bleedTop?: number | null;
   bleedRight?: number | null;
@@ -338,6 +346,13 @@ type ProjectItem = {
   liftOrderOverriddenAt?: string | null;
   liftOrderOverriddenByName?: string | null;
   liftOrderOverrideNote?: string | null;
+  liftOrderStatus?: string | null;
+  liftOrderStatusNormalized?: "active" | "cancelled" | "missing" | "unknown" | null;
+  liftOrderHealthStatus?: "ok" | "cancelled" | "missing" | "sync_failed" | "unknown" | null;
+  liftOrderHealthMessage?: string | null;
+  liftOrderCancelledAt?: string | null;
+  lastLiftOrderSyncAt?: string | null;
+  liftOrderSnapshot?: ProjectLiftOrderSnapshot | null;
   lastLiftProofSyncAt?: string | null;
   lastLiftProofChangeAt?: string | null;
   orderSubmittedAt?: string | null;
@@ -352,6 +367,20 @@ type ProjectItem = {
   contractNumber?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type ProjectLiftOrderSnapshot = {
+  orderNumber?: string | null;
+  customerId?: number | null;
+  orderTitle?: string | null;
+  poNumber?: string | number | null;
+  customerName?: string | null;
+  creationDate?: string | null;
+  createdBy?: string | null;
+  orderTypeName?: string | null;
+  orderStatus?: string | null;
+  orderStepId?: number | null;
+  headerStepNumber?: number | null;
 };
 
 type ProjectScopeItem = {
@@ -594,6 +623,9 @@ type CustomerSettingsItem = {
     defaultMode: "enabled_all_orders" | "manual_per_project";
     allowProjectOverride: boolean;
   };
+  workflowPolicies: {
+    productionApprovalMode: ProductionApprovalMode;
+  };
   collaboration: {
     collaborationLinksEnabled: boolean;
     artworkUploadLinksEnabled: boolean;
@@ -664,10 +696,12 @@ type ProjectProofLineItem = {
   lineNumber: number;
   lineStepNumber?: number | null;
   liftOrderLineId?: number | null;
+  liftLineSnapshot?: ProjectLiftLineSnapshot | null;
   // Lift's proof approval API uses ATTACHMENT_ID as the proofing id.
   liftProofingId?: number | null;
   mediaVariantKey: string;
   mediaVariantLabel?: string;
+  liftProductName?: string | null;
   productionRoute?: ProofProductionRoute;
   vendorAccountId?: string | null;
   vendorName?: string | null;
@@ -683,6 +717,9 @@ type ProjectProofLineItem = {
   liftProofThumbUrl?: string | null;
   liftProofFullUrl?: string | null;
   liftProofStatus?: string | null;
+  proofApprovedBy?: string | null;
+  proofApprovedDate?: string | null;
+  technicalReports?: ProjectProofTechnicalReport[];
   lastLiftSyncAt?: string | null;
   status: ProofLineStatus;
   revised: boolean;
@@ -702,6 +739,26 @@ type ProjectProofLineItem = {
   createdAt: string;
   updatedAt: string;
   updatedByName?: string;
+};
+
+type ProjectLiftLineSnapshot = {
+  lineNumber?: number | null;
+  orderLineId?: number | null;
+  quantity?: number | null;
+  productName?: string | null;
+  unitNumber?: string | null;
+  material?: string | null;
+  lineStepId?: number | null;
+  lineStepNumber?: number | null;
+  printHeightIn?: number | null;
+  printWidthIn?: number | null;
+};
+
+type ProjectProofTechnicalReport = {
+  reportId?: number | null;
+  definitionId?: number | null;
+  definitionLabel?: string | null;
+  reportUrl?: string | null;
 };
 
 type ProjectProofCommentAttachment = {
@@ -724,6 +781,9 @@ type ProjectProofVersion = {
   proofThumbUrl?: string | null;
   proofFullUrl?: string | null;
   status?: string | null;
+  proofApprovedBy?: string | null;
+  proofApprovedDate?: string | null;
+  technicalReports?: ProjectProofTechnicalReport[];
   createdAt?: string | null;
   replacedAt?: string | null;
   current?: boolean;
@@ -832,13 +892,27 @@ type ProjectListItem = {
     released: boolean;
   };
   liftSync?: {
-    phase: "not_submitted" | "waiting_for_proof" | "proof_review" | "proof_approved" | "in_production" | "completed" | "unknown";
+    phase:
+      | "not_submitted"
+      | "waiting_for_proof"
+      | "proof_review"
+      | "proof_approved"
+      | "in_production"
+      | "completed"
+      | "cancelled"
+      | "missing"
+      | "unknown";
     label: string;
     minLineStepNumber?: number | null;
     maxLineStepNumber?: number | null;
     proofActionable: boolean;
     productionReference: boolean;
     completed: boolean;
+    orderStatusRaw?: string | null;
+    orderStatusNormalized?: "active" | "cancelled" | "missing" | "unknown" | null;
+    healthStatus?: "ok" | "cancelled" | "missing" | "sync_failed" | "unknown" | null;
+    healthMessage?: string | null;
+    lastOrderSyncAt?: string | null;
   };
   needsAttention: boolean;
   scopeIncludedCount: number;
@@ -847,14 +921,20 @@ type ProjectListItem = {
 const client = new DynamoDBClient({});
 const s3 = new S3Client({});
 const sqs = new SQSClient({});
+const cognito = new CognitoIdentityProviderClient({});
+const secrets = new SecretsManagerClient({});
 const CORE_TABLE_NAME = requiredEnv("CORE_TABLE_NAME");
 const AUDIT_TABLE_NAME = requiredEnv("AUDIT_TABLE_NAME");
+const USER_POOL_ID = process.env.USER_POOL_ID || "";
 const PROJECT_ASSETS_BUCKET_NAME = requiredEnv("PROJECT_ASSETS_BUCKET_NAME");
 const VENUE_ASSETS_BUCKET_NAME = process.env.VENUE_ASSETS_BUCKET_NAME || "";
 const GENERATED_DOCS_BUCKET_NAME = process.env.GENERATED_DOCS_BUCKET_NAME || "";
 const SHORT_LINKS_TABLE_NAME = process.env.SHORT_LINKS_TABLE_NAME || "";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://app.adspace360.com";
 const SHORT_BASE_URL = process.env.SHORT_BASE_URL || "https://go.adspace360.com";
+const LIFT_ASSET_CLOUDFRONT_DOMAIN = process.env.LIFT_ASSET_CLOUDFRONT_DOMAIN || "";
+const LIFT_ASSET_CLOUDFRONT_KEY_PAIR_ID = process.env.LIFT_ASSET_CLOUDFRONT_KEY_PAIR_ID || "";
+const LIFT_ASSET_CLOUDFRONT_PRIVATE_KEY_SECRET_NAME = process.env.LIFT_ASSET_CLOUDFRONT_PRIVATE_KEY_SECRET_NAME || "";
 const NOTIFICATIONS_FROM_EMAIL = process.env.NOTIFICATIONS_FROM_EMAIL || "noreply@adspace360.com";
 const PRESENCE_TABLE_NAME = process.env.PRESENCE_TABLE_NAME || "";
 const PRESENCE_WS_URL = process.env.PRESENCE_WS_URL || "";
@@ -1003,7 +1083,9 @@ export async function handler(event: ApiEvent) {
       case "GET /api/vendor/orders":
         return ok(await listVendorWorkspaceOrders(auth));
       case "GET /api/vendor/orders/{vendorOrderId}":
-        return ok(await getVendorWorkspaceOrder(requirePath(event, "vendorOrderId"), auth));
+        return ok(await getVendorWorkspaceOrder(requirePath(event, "vendorOrderId"), auth, {
+          refreshLift: event.queryStringParameters?.refresh === "1",
+        }));
       case "PATCH /api/vendor/orders/{vendorOrderId}":
         return ok(await updateVendorWorkspaceOrder(requirePath(event, "vendorOrderId"), getBody(event), auth));
       case "PATCH /api/vendor/orders/{vendorOrderId}/lines":
@@ -2323,6 +2405,12 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
         liftOrderOverriddenAt: nextProject.updatedAt,
         liftOrderOverriddenByName: auth.actorName,
         liftOrderOverrideNote: liftOrderOverride.note,
+        liftOrderStatus: normalizedLiftOrderId ? null : undefined,
+        liftOrderStatusNormalized: normalizedLiftOrderId ? null : undefined,
+        liftOrderHealthStatus: normalizedLiftOrderId ? "unknown" : undefined,
+        liftOrderHealthMessage: normalizedLiftOrderId ? "Lift order override saved. Refresh Lift status to verify the linked order." : undefined,
+        liftOrderCancelledAt: null,
+        lastLiftOrderSyncAt: null,
       };
     }
   }
@@ -2442,7 +2530,10 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
   }
   if (liftOrderOverride) {
     const staleProofs = await listProjectProofLines(projectId);
-    await Promise.all(staleProofs.map((proof) => deleteProjectProofLine(proof)));
+    const staleLiftProofs = staleProofs.filter(
+      (proof) => proof.integrationMode !== "adspace" && proof.productionRoute !== "external_vendor"
+    );
+    await Promise.all(staleLiftProofs.map((proof) => deleteProjectProofLine(proof)));
   }
   await writeAudit(`PROJECT#${projectId}`, "project.updated", auth, {
     projectId,
@@ -2521,9 +2612,91 @@ async function createProjectCreative(projectId: string, payload: Record<string, 
     },
   });
 
+  const autoAssignment = await maybeAutoAssignSingleLocationCreative(project, creative, auth, now);
+
   return {
-    creative: await toWorkspaceCreative(creative, []),
+    creative: await toWorkspaceCreative(creative, autoAssignment ? [autoAssignment.inventory.inventoryId] : []),
   };
+}
+
+async function maybeAutoAssignSingleLocationCreative(
+  project: ProjectItem,
+  creative: ProjectCreativeAssetItem,
+  auth: AuthContext,
+  occurredAt = isoNow()
+) {
+  if (project.productionReleasedAt) return null;
+
+  const scope = await findProjectScopeByProjectId(project.id);
+  if (!scope?.includedIds.length) return null;
+
+  const includedIds = new Set(scope.includedIds);
+  const scopedInventory = (await listInventoryForVenue(project.venueId)).filter(
+    (item) => item.isActive && includedIds.has(item.id) && item.mediaVariantKey === creative.mediaVariantKey
+  );
+  if (scopedInventory.length !== 1) return null;
+
+  const inventory = scopedInventory[0];
+  const assignments = await listProjectAssignments(project.id);
+  const existingAssignment = assignments.find((assignment) => assignment.inventoryId === inventory.id) || null;
+  if (existingAssignment?.creativeId) return null;
+
+  const previousAssignedCount = assignments.filter(
+    (assignment) => !!assignment.creativeId && includedIds.has(assignment.inventoryId)
+  ).length;
+  const assignment: ProjectAssignmentItem = {
+    entityType: "ProjectAssignment",
+    id: `${project.id}:${inventory.id}`,
+    projectId: project.id,
+    inventoryId: inventory.id,
+    creativeId: creative.id,
+    updatedAt: occurredAt,
+    updatedByName: auth.actorName,
+  };
+
+  await putCore(buildProjectAssignmentRecord(assignment));
+  await writeAudit(`PROJECT#${project.id}`, "assignment.auto_assigned", auth, {
+    projectId: project.id,
+    inventoryId: inventory.id,
+    inventoryLabel: inventory.inventoryId,
+    creativeId: creative.id,
+    creativeFilename: creative.filename,
+    mediaVariantKey: creative.mediaVariantKey,
+    reason: "single_location_variant",
+  });
+
+  const nextAssignedCount = previousAssignedCount + 1;
+  if (scope.includedIds.length > 0 && previousAssignedCount < scope.includedIds.length && nextAssignedCount >= scope.includedIds.length) {
+    await dispatchProjectNotificationEvent({
+      project,
+      auth,
+      eventType: "all_inventory_assigned",
+      occurredAt,
+      detail: {
+        assignedCount: nextAssignedCount,
+        requiredCount: scope.includedIds.length,
+      },
+    });
+  }
+
+  await broadcastWorkspaceChangeBestEffort({
+    projectId: project.id,
+    workspace: "assignment",
+    eventType: "assignment.auto_assigned",
+    summary: `${creative.filename} was auto-assigned to ${inventory.inventoryId}.`,
+    auth,
+    originSessionId: null,
+    occurredAt,
+    detail: {
+      inventoryId: inventory.id,
+      inventoryLabel: inventory.inventoryId,
+      creativeId: creative.id,
+      creativeFilename: creative.filename,
+      mediaVariantKey: creative.mediaVariantKey,
+    },
+  });
+
+  return { assignment, inventory };
 }
 
 async function updateProjectCreative(
@@ -2704,6 +2877,12 @@ async function submitProjectOrder(projectId: string, payload: Record<string, unk
     extId: makeAdspaceExternalId(adspaceOrderNumber),
     liftOrderId,
     liftOrderLookupSource: submissionResult.lookupSource,
+    liftOrderStatus: null,
+    liftOrderStatusNormalized: "unknown",
+    liftOrderHealthStatus: "unknown",
+    liftOrderHealthMessage: "Lift order submitted. Waiting for the first Lift order sync.",
+    liftOrderCancelledAt: null,
+    lastLiftOrderSyncAt: null,
     orderSubmittedAt: now,
     orderSubmittedByName: auth.actorName,
     orderSubmissionNote: note,
@@ -2712,13 +2891,14 @@ async function submitProjectOrder(projectId: string, payload: Record<string, unk
 
   await putCore(buildProjectRecord(nextProject));
   await seedProofLinesForSubmittedProject(projectId, liftPayload.baselineProofs, auth.actorName);
+  invalidateProjectResponseCaches();
   const snapshotDocuments: ProjectDocumentItem[] = [];
   try {
     const requestDocument = await createLiftSnapshotDocument(
       projectId,
       liftOrderId,
       "request",
-      liftPayload.payload,
+      toLiftCreateOrderRequestPayload(liftPayload.payload),
       auth.actorName
     );
     if (requestDocument) snapshotDocuments.push(requestDocument);
@@ -2797,6 +2977,7 @@ async function submitProjectOrder(projectId: string, payload: Record<string, unk
       lookupSource: submissionResult.lookupSource,
     },
   });
+  invalidateProjectResponseCaches();
 
   return {
     project: await toProjectListItem(await findProjectById(projectId) || nextProject, scope),
@@ -2851,9 +3032,10 @@ async function previewProjectOrderSubmission(projectId: string, payload: Record<
   });
 
   let document: Awaited<ReturnType<typeof toProjectDocumentResponse>> | null = null;
+  const requestPayload = toLiftCreateOrderRequestPayload(liftPayload.payload);
   if (persistSnapshot) {
     try {
-      const snapshot = await createLiftPreviewPayloadDocument(project, liftPayload.payload, auth.actorName);
+      const snapshot = await createLiftPreviewPayloadDocument(project, requestPayload, auth.actorName);
       if (snapshot) {
         document = await toProjectDocumentResponse(snapshot);
       }
@@ -2874,7 +3056,7 @@ async function previewProjectOrderSubmission(projectId: string, payload: Record<
   return {
     project: await toProjectListItem(project, scope),
     preview: {
-      payload: liftPayload.payload,
+      payload: requestPayload,
       validation: liftPayload.validation,
       completeness: {
         required,
@@ -2928,6 +3110,10 @@ type LiftCreateOrderPayload = {
   product_data: LiftCreateOrderProduct[];
 };
 
+type LiftCreateOrderRequestPayload = Omit<LiftCreateOrderPayload, "product_data"> & {
+  product_data: LiftCreateOrderProduct[][];
+};
+
 async function buildLiftCreateOrderPayload(args: {
   project: ProjectItem;
   customer: CustomerItem;
@@ -2940,9 +3126,10 @@ async function buildLiftCreateOrderPayload(args: {
   const { project, customer, scopedInventory, creatives, assignments, note, actorName } = args;
   const errors: string[] = [];
   const warnings: string[] = [];
+  const vendorRegistryCustomerId = project.sourceCustomerId || project.customerId;
   const [variants, customerVendors, settings] = await Promise.all([
     listVariantsForVenue(project.venueId),
-    listCustomerVendors(project.customerId).catch(() => [] as CustomerVendorItem[]),
+    listCustomerVendors(vendorRegistryCustomerId).catch(() => [] as CustomerVendorItem[]),
     findAppSettings(),
   ]);
   const hydratedSettings = hydrateAppSettings(settings, actorName);
@@ -2977,6 +3164,7 @@ async function buildLiftCreateOrderPayload(args: {
     }
     const variant = variantsByKey.get(inventory.mediaVariantKey);
     const route = resolveProofLineRouteMetadata({
+      inventory,
       variant,
       customerId: project.customerId,
       customerVendorsById,
@@ -2998,7 +3186,12 @@ async function buildLiftCreateOrderPayload(args: {
 
     const artFileUrl =
       route.integrationMode === "lift"
-        ? await signLiftOutboundAssetUrl(creative.bucketName || PROJECT_ASSETS_BUCKET_NAME, creative.objectKey)
+        ? await signLiftOutboundAssetUrl(
+            creative.bucketName || PROJECT_ASSETS_BUCKET_NAME,
+            creative.objectKey,
+            creative.filename,
+            creative.contentType
+          )
         : null;
     const groupKey = `${route.vendorAccountId}||${creative.id}||${unitNumber || "adspace"}||${inventory.mediaVariantKey}`;
     const existing = grouped.get(groupKey);
@@ -3316,12 +3509,131 @@ function sanitizeLiftFilename(name: string) {
     .trim();
 }
 
-async function signLiftOutboundAssetUrl(bucketName: string, key: string) {
+let liftCloudFrontPrivateKeyPromise: Promise<string | null> | null = null;
+
+async function getLiftCloudFrontPrivateKey() {
+  if (!LIFT_ASSET_CLOUDFRONT_PRIVATE_KEY_SECRET_NAME) return null;
+  if (!liftCloudFrontPrivateKeyPromise) {
+    liftCloudFrontPrivateKeyPromise = secrets
+      .send(new GetSecretValueCommand({ SecretId: LIFT_ASSET_CLOUDFRONT_PRIVATE_KEY_SECRET_NAME }))
+      .then((response) => response.SecretString || null)
+      .catch((error) => {
+        console.warn("Failed to read Lift CloudFront private key secret", errorMessage(error));
+        return null;
+      });
+  }
+  return liftCloudFrontPrivateKeyPromise;
+}
+
+function toCloudFrontSignature(value: Buffer) {
+  return value.toString("base64").replace(/\+/g, "-").replace(/=/g, "_").replace(/\//g, "~");
+}
+
+function signCloudFrontUrl(resourceUrl: string, expiresAtEpochSeconds: number, privateKey: string) {
+  const policy = JSON.stringify({
+    Statement: [
+      {
+        Resource: resourceUrl,
+        Condition: {
+          DateLessThan: {
+            "AWS:EpochTime": expiresAtEpochSeconds,
+          },
+        },
+      },
+    ],
+  });
+  const signer = createSign("RSA-SHA1");
+  signer.update(policy);
+  const signature = toCloudFrontSignature(signer.sign(privateKey));
+  const separator = resourceUrl.includes("?") ? "&" : "?";
+  return `${resourceUrl}${separator}Expires=${expiresAtEpochSeconds}&Signature=${signature}&Key-Pair-Id=${encodeURIComponent(
+    LIFT_ASSET_CLOUDFRONT_KEY_PAIR_ID
+  )}`;
+}
+
+function s3CopySource(bucketName: string, key: string) {
+  return `${bucketName}/${encodeURIComponent(key).replace(/%2F/g, "/")}`;
+}
+
+async function createLiftCloudFrontAssetUrl(
+  bucketName: string,
+  key: string,
+  filename: string,
+  contentType: string,
+  expiresAtEpochSeconds: number
+) {
+  if (
+    bucketName !== PROJECT_ASSETS_BUCKET_NAME ||
+    !LIFT_ASSET_CLOUDFRONT_DOMAIN ||
+    !LIFT_ASSET_CLOUDFRONT_KEY_PAIR_ID ||
+    !LIFT_ASSET_CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
+  ) {
+    return null;
+  }
+
+  const privateKey = await getLiftCloudFrontPrivateKey();
+  if (!privateKey) return null;
+
+  const outboundKey = `lift-outbound/${randomBytes(6).toString("hex")}/${filename}`;
+  await s3.send(
+    new CopyObjectCommand({
+      Bucket: PROJECT_ASSETS_BUCKET_NAME,
+      Key: outboundKey,
+      CopySource: s3CopySource(bucketName, key),
+      MetadataDirective: "REPLACE",
+      ContentType: contentType,
+      ContentDisposition: `attachment; filename="${filename.replace(/"/g, "")}"`,
+    })
+  );
+
+  const encodedPath = outboundKey.split("/").map(encodeURIComponent).join("/");
+  const resourceUrl = `https://${LIFT_ASSET_CLOUDFRONT_DOMAIN}/${encodedPath}`;
+  return signCloudFrontUrl(resourceUrl, expiresAtEpochSeconds, privateKey);
+}
+
+async function signLiftOutboundAssetUrl(
+  bucketName: string,
+  key: string,
+  filename?: string | null,
+  contentType?: string | null
+) {
+  const expiresAtEpochSeconds = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
+  const expiresAt = new Date(expiresAtEpochSeconds * 1000).toISOString();
+  const downloadFilename = sanitizeLiftFilename(filename || key.split("/").pop() || "artwork.pdf") || "artwork.pdf";
+  const responseContentType =
+    optionalString(contentType) ||
+    (/\.jpe?g$/i.test(downloadFilename)
+      ? "image/jpeg"
+      : /\.png$/i.test(downloadFilename)
+      ? "image/png"
+      : /\.gif$/i.test(downloadFilename)
+      ? "image/gif"
+      : "application/pdf");
+  const cloudFrontUrl = await createLiftCloudFrontAssetUrl(
+    bucketName,
+    key,
+    downloadFilename,
+    responseContentType,
+    expiresAtEpochSeconds
+  );
+  if (cloudFrontUrl) return cloudFrontUrl;
+
   const command = new GetObjectCommand({
     Bucket: bucketName,
     Key: key,
+    ResponseContentDisposition: `attachment; filename="${downloadFilename.replace(/"/g, "")}"`,
+    ResponseContentType: responseContentType,
   });
-  return getSignedUrl(s3, command, { expiresIn: 60 * 60 * 24 });
+  const signedUrl = await getSignedUrl(s3, command, { expiresIn: 60 * 60 * 24 });
+  return createShortExternalUrl(signedUrl, expiresAt, downloadFilename);
+}
+
+async function createShortExternalUrl(targetUrl: string, expiresAt?: string | null, filename?: string | null) {
+  if (!SHORT_LINKS_TABLE_NAME) return targetUrl;
+  const shortCode = createShortCode();
+  await putShortLinkRecord(shortCode, targetUrl, expiresAt);
+  const fileSuffix = filename ? `/${encodeURIComponent(sanitizeLiftFilename(filename))}` : "";
+  return `${SHORT_BASE_URL}/${shortCode}${fileSuffix}`;
 }
 
 async function getS3ObjectBuffer(bucketName: string, key: string) {
@@ -3404,6 +3716,14 @@ function resolveLiftEnvironmentUrl(
   return resolveLiftUrl(getLiftEnvironmentConfig(vendor, environment).baseUrl, value);
 }
 
+const HTTP_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+function assertValidHttpHeaderName(name: string) {
+  if (!HTTP_HEADER_NAME_PATTERN.test(name)) {
+    throw new HttpError(400, `Invalid Lift header name "${name}". Header names cannot contain spaces.`);
+  }
+}
+
 function parseLiftHeaders(raw: string) {
   const trimmed = String(raw || "").trim();
   if (!trimmed) return {} as Record<string, string>;
@@ -3411,10 +3731,15 @@ function parseLiftHeaders(raw: string) {
     const parsed = JSON.parse(trimmed);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return Object.fromEntries(
-        Object.entries(parsed).map(([key, value]) => [key, String(value)])
+        Object.entries(parsed).map(([key, value]) => {
+          const headerName = key.trim();
+          assertValidHttpHeaderName(headerName);
+          return [headerName, String(value)];
+        })
       );
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
     // fall through to line parsing
   }
 
@@ -3428,7 +3753,18 @@ function parseLiftHeaders(raw: string) {
         return [key.trim(), rest.join(":").trim()];
       })
       .filter(([key, value]) => key && value)
+      .map(([key, value]) => {
+        assertValidHttpHeaderName(key);
+        return [key, value];
+      })
   );
+}
+
+function toLiftCreateOrderRequestPayload(payload: LiftCreateOrderPayload): LiftCreateOrderRequestPayload {
+  return {
+    ...payload,
+    product_data: [payload.product_data],
+  };
 }
 
 function parseMaybeJson(text: string) {
@@ -3438,6 +3774,17 @@ function parseMaybeJson(text: string) {
   } catch {
     return null;
   }
+}
+
+function formatLiftFetchFailure(action: string, endpointUrl: string, error: unknown) {
+  let host = endpointUrl;
+  try {
+    host = new URL(endpointUrl).host;
+  } catch {
+    // Keep the raw configured value when it is not URL-shaped.
+  }
+  const detail = error instanceof Error ? error.message : String(error || "unknown network error");
+  return `Lift ${action} network request failed for ${host}: ${detail}`;
 }
 
 function extractLiftOrderId(value: unknown): string | null {
@@ -3487,15 +3834,21 @@ async function submitLiftCreateOrder(
     Ext_ID: payload.ext_id,
     User: config.createOrderUsername,
     Password: config.createOrderPassword,
-    "Company ID": config.companyId,
+    Company: config.companyId,
     ...parseLiftHeaders(config.defaultHeaders),
   };
+  const requestPayload = toLiftCreateOrderRequestPayload(payload);
 
-  const response = await fetch(orderUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  });
+  let response: Response;
+  try {
+    response = await fetch(orderUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestPayload),
+    });
+  } catch (error) {
+    throw new HttpError(502, formatLiftFetchFailure("create_order", orderUrl, error));
+  }
   const responseText = await response.text();
   const responseBody = parseMaybeJson(responseText) || { raw: responseText };
 
@@ -3508,9 +3861,11 @@ async function submitLiftCreateOrder(
     };
   }
 
-  const proxyLikeFailure =
-    !response.ok ||
-    /proxy error|error reading from remote server/i.test(responseText);
+  const proxyLikeFailure = /proxy error|error reading from remote server/i.test(responseText);
+
+  if (!response.ok) {
+    throw new HttpError(502, `Lift create_order failed: ${responseText || response.statusText}`);
+  }
 
   if (!proxyLikeFailure) {
     throw new HttpError(502, `Lift create_order failed: ${responseText || response.statusText}`);
@@ -3519,10 +3874,16 @@ async function submitLiftCreateOrder(
     throw new HttpError(502, "Lift create_order failed and fallback order lookup is not configured.");
   }
 
-  const lookup = await fetch(`${lookupUrl}${lookupUrl.includes("?") ? "&" : "?"}offset=0&p0=${encodeURIComponent(payload.po_number)}`, {
-    method: "GET",
-    headers: parseLiftHeaders(config.defaultHeaders),
-  });
+  const lookupRequestUrl = `${lookupUrl}${lookupUrl.includes("?") ? "&" : "?"}offset=0&p0=${encodeURIComponent(payload.po_number)}`;
+  let lookup: Response;
+  try {
+    lookup = await fetch(lookupRequestUrl, {
+      method: "GET",
+      headers: parseLiftHeaders(config.defaultHeaders),
+    });
+  } catch (error) {
+    throw new HttpError(502, formatLiftFetchFailure("fallback order lookup", lookupRequestUrl, error));
+  }
   const lookupText = await lookup.text();
   const lookupBody = parseMaybeJson(lookupText) || { raw: lookupText };
   const fallbackOrderId = extractLiftOrderId(lookupBody) || extractLiftOrderId(lookupText);
@@ -3594,6 +3955,7 @@ export function mergeProjectProofLinesFromLift(args: {
     const rawUnitNumber = optionalString(rawLine.UNIT_NUMBER) || null;
     const rawQuantity = optionalNumber(rawLine.QUANTITY);
     const lineIdentityProof = existingLineProofs[0];
+    const liftLineSnapshot = buildLiftLineSnapshot(rawLine, lineIdentityProof.liftLineSnapshot);
     if (rawOrderLineId != null && lineIdentityProof.liftOrderLineId != null && lineIdentityProof.liftOrderLineId !== rawOrderLineId) {
       issues.push({
         severity: "warning",
@@ -3682,12 +4044,18 @@ export function mergeProjectProofLinesFromLift(args: {
       const proofCommentCount = proofComments.length;
       const proofCommentAttachmentCount = proofComments.reduce((sum, comment) => sum + comment.attachments.length, 0);
       const latestProofCommentAt = latestProofCommentTimestamp(proofComments);
+      const proofApprovedBy = optionalString(proofRecord?.PROOF_APPROVED_BY) || null;
+      const proofApprovedDate = optionalString(proofRecord?.PROOF_APPROVED_DATE) || null;
+      const technicalReports = liftProofTechnicalReportsForRecord(proofRecord);
       const proofVersion = historicalReferenceVersion
         ? {
             ...historicalReferenceVersion,
             current: true,
             replacedAt: null,
             status: liftStatus || historicalReferenceVersion.status || null,
+            proofApprovedBy: proofApprovedBy || historicalReferenceVersion.proofApprovedBy || null,
+            proofApprovedDate: proofApprovedDate || historicalReferenceVersion.proofApprovedDate || null,
+            technicalReports: technicalReports.length ? technicalReports : historicalReferenceVersion.technicalReports || [],
           }
         : buildProjectProofVersion({
             proofRecord,
@@ -3741,12 +4109,17 @@ export function mergeProjectProofLinesFromLift(args: {
         lineNumber,
         lineStepNumber: lineStepNumber ?? existing.lineStepNumber ?? null,
         liftOrderLineId: rawOrderLineId ?? existing.liftOrderLineId ?? null,
+        liftLineSnapshot,
         unitNumber: rawUnitNumber || existing.unitNumber || null,
         quantity: rawQuantity ?? existing.quantity ?? null,
+        liftProductName: optionalString(rawLine.PRODUCT_NAME) || existing.liftProductName || null,
         liftProofingId: nextProofingId,
         liftProofThumbUrl: nextProofThumbUrl,
         liftProofFullUrl: nextProofFullUrl,
         liftProofStatus: liftStatus || historicalReferenceVersion?.status || null,
+        proofApprovedBy: proofApprovedBy || (nextStatus === "approved" ? existing.proofApprovedBy : null) || null,
+        proofApprovedDate: proofApprovedDate || (nextStatus === "approved" ? existing.proofApprovedDate : null) || null,
+        technicalReports: technicalReports.length ? technicalReports : existing.technicalReports || [],
         lastLiftSyncAt: syncedAt,
         status: nextStatus,
         printTeamFeedback:
@@ -3915,6 +4288,54 @@ function latestProofCommentBody(comments: ProjectProofComment[]) {
   return "";
 }
 
+function vendorProofNoteComment(proof: ProjectProofLineItem): ProjectProofComment | null {
+  const body = optionalString(proof.vendorProofNote);
+  if (!body) return null;
+  return {
+    id: `vendor-proof-note:${proof.id}:${proof.vendorProofSubmittedAt || proof.updatedAt || "pending"}`,
+    body,
+    createdAt: proof.vendorProofSubmittedAt || proof.updatedAt || null,
+    attachments: [],
+  };
+}
+
+function proofCommentsWithVendorNote(proof: ProjectProofLineItem): ProjectProofComment[] {
+  const comments = proof.proofComments || [];
+  if (comments.length) return comments;
+  const vendorComment = vendorProofNoteComment(proof);
+  return vendorComment ? [vendorComment] : comments;
+}
+
+function liftProofTechnicalReportsForRecord(record: Record<string, unknown> | undefined | null) {
+  if (!record) return [];
+  const rawReports = Array.isArray(record.DETAILED_REPORT)
+    ? record.DETAILED_REPORT
+    : Array.isArray(record.DETAIL_REPORT)
+      ? record.DETAIL_REPORT
+      : record.DETAILED_REPORT && typeof record.DETAILED_REPORT === "object"
+        ? [record.DETAILED_REPORT]
+        : record.DETAIL_REPORT && typeof record.DETAIL_REPORT === "object"
+          ? [record.DETAIL_REPORT]
+          : [];
+  const reports: ProjectProofTechnicalReport[] = [];
+  for (const rawReport of rawReports) {
+    if (!rawReport || typeof rawReport !== "object") continue;
+    const row = rawReport as Record<string, unknown>;
+    const reportUrl = optionalString(row.REPORT_URL);
+    const reportId = optionalNumber(row.REPORT_ID);
+    const definitionId = optionalNumber(row.DEFINITION_ID);
+    const definitionLabel = optionalString(row.DEFINITION_LABEL);
+    if (!reportUrl && reportId == null && definitionId == null && !definitionLabel) continue;
+    reports.push({
+      reportId,
+      definitionId,
+      definitionLabel: definitionLabel || null,
+      reportUrl: reportUrl || null,
+    });
+  }
+  return reports;
+}
+
 function buildProjectProofVersion(args: {
   proofRecord: Record<string, unknown> | undefined | null;
   attachmentId: number | null;
@@ -3931,6 +4352,9 @@ function buildProjectProofVersion(args: {
     proofThumbUrl: args.proofThumbUrl,
     proofFullUrl: args.proofFullUrl,
     status: args.status,
+    proofApprovedBy: optionalString(args.proofRecord?.PROOF_APPROVED_BY) || null,
+    proofApprovedDate: optionalString(args.proofRecord?.PROOF_APPROVED_DATE) || null,
+    technicalReports: liftProofTechnicalReportsForRecord(args.proofRecord),
     createdAt: optionalString(args.proofRecord?.CREATION_DATE) || null,
     replacedAt: null,
     current: true,
@@ -3994,6 +4418,9 @@ function buildStoredProofVersionFromLine(proof: ProjectProofLineItem, replacedAt
     proofThumbUrl: proof.liftProofThumbUrl || null,
     proofFullUrl: proof.liftProofFullUrl || null,
     status: proof.liftProofStatus || proof.status || null,
+    proofApprovedBy: proof.proofApprovedBy || null,
+    proofApprovedDate: proof.proofApprovedDate || null,
+    technicalReports: proof.technicalReports || [],
     createdAt: proof.createdAt || null,
     replacedAt,
     current: false,
@@ -4082,6 +4509,7 @@ function buildLiftProofLineShell(args: {
     `${productName} line ${lineNumber}`;
   const unitNumber = optionalString(args.rawLine.UNIT_NUMBER) || args.existing?.unitNumber || null;
   const quantity = optionalNumber(args.rawLine.QUANTITY) ?? args.existing?.quantity ?? null;
+  const liftLineSnapshot = buildLiftLineSnapshot(args.rawLine, args.existing?.liftLineSnapshot);
 
   return {
     entityType: "ProjectProofLine" as const,
@@ -4090,9 +4518,11 @@ function buildLiftProofLineShell(args: {
     lineNumber,
     lineStepNumber,
     liftOrderLineId: orderLineId,
+    liftLineSnapshot,
     liftProofingId: optionalNumber(proofRecord?.ATTACHMENT_ID) ?? args.existing?.liftProofingId ?? null,
     mediaVariantKey,
     mediaVariantLabel: formatVariantLabel(mediaVariantKey),
+    liftProductName: productName,
     productionRoute: args.existing?.productionRoute || "primary_print_vendor",
     vendorAccountId: args.existing?.vendorAccountId || "vendor_primary_print",
     vendorName: args.existing?.vendorName || null,
@@ -4108,6 +4538,9 @@ function buildLiftProofLineShell(args: {
     liftProofThumbUrl: args.existing?.liftProofThumbUrl || null,
     liftProofFullUrl: args.existing?.liftProofFullUrl || null,
     liftProofStatus: args.existing?.liftProofStatus || null,
+    proofApprovedBy: args.existing?.proofApprovedBy || null,
+    proofApprovedDate: args.existing?.proofApprovedDate || null,
+    technicalReports: args.existing?.technicalReports || [],
     lastLiftSyncAt: args.existing?.lastLiftSyncAt || null,
     status: args.existing?.status || "waiting",
     revised: args.existing?.revised || false,
@@ -4128,6 +4561,41 @@ function buildLiftProofLineShell(args: {
     updatedAt: args.syncedAt,
     updatedByName: args.actorName,
   } satisfies ProjectProofLineItem;
+}
+
+function buildLiftOrderSnapshot(order: Record<string, unknown> | null): ProjectLiftOrderSnapshot | null {
+  if (!order) return null;
+  return {
+    orderNumber: optionalString(order.ORDER_NUMBER) || null,
+    customerId: optionalNumber(order.CUSTOMER_ID) ?? null,
+    orderTitle: optionalString(order.ORDER_TITLE) || null,
+    poNumber: optionalString(order.PO_NUMBER) || optionalNumber(order.PO_NUMBER) || null,
+    customerName: optionalString(order.CUSTOMER_NAME) || null,
+    creationDate: optionalString(order.CREATION_DATE) || null,
+    createdBy: optionalString(order.CREATED_BY) || null,
+    orderTypeName: optionalString(order.ORDER_TYPE_NAME) || null,
+    orderStatus: optionalString(order.ORDER_STATUS) || optionalString(order.STATUS) || null,
+    orderStepId: optionalNumber(order.ORDER_STEP_ID) ?? null,
+    headerStepNumber: optionalNumber(order.HEADER_STEP_NUMBER) ?? null,
+  };
+}
+
+function buildLiftLineSnapshot(
+  rawLine: Record<string, unknown>,
+  previous?: ProjectLiftLineSnapshot | null
+): ProjectLiftLineSnapshot {
+  return {
+    lineNumber: optionalNumber(rawLine.LINE_NUMBER) ?? previous?.lineNumber ?? null,
+    orderLineId: optionalNumber(rawLine.ORDER_LINE_ID) ?? previous?.orderLineId ?? null,
+    quantity: optionalNumber(rawLine.QUANTITY) ?? previous?.quantity ?? null,
+    productName: optionalString(rawLine.PRODUCT_NAME) || previous?.productName || null,
+    unitNumber: optionalString(rawLine.UNIT_NUMBER) || previous?.unitNumber || null,
+    material: optionalString(rawLine.MATERIAL) || previous?.material || null,
+    lineStepId: optionalNumber(rawLine.LINE_STEP_ID) ?? previous?.lineStepId ?? null,
+    lineStepNumber: optionalNumber(rawLine.LINE_STEP_NUMBER) ?? optionalNumber(rawLine.STEP_NUMBER) ?? previous?.lineStepNumber ?? null,
+    printHeightIn: optionalNumber(rawLine.PRINT_H_IN) ?? previous?.printHeightIn ?? null,
+    printWidthIn: optionalNumber(rawLine.PRINT_W_IN) ?? previous?.printWidthIn ?? null,
+  };
 }
 
 async function ensureProofLinesForManualLiftRelink(args: {
@@ -4172,7 +4640,8 @@ async function ensureProofLinesForManualLiftRelink(args: {
       existing.mediaVariantKey !== nextProof.mediaVariantKey ||
       existing.mediaVariantLabel !== nextProof.mediaVariantLabel ||
       existing.clientFileName !== nextProof.clientFileName ||
-      existing.unitNumber !== nextProof.unitNumber
+      existing.unitNumber !== nextProof.unitNumber ||
+      JSON.stringify(existing.liftLineSnapshot || null) !== JSON.stringify(nextProof.liftLineSnapshot || null)
     ) {
       changedProofs.push(nextProof);
     }
@@ -4190,11 +4659,19 @@ async function syncProjectProofLinesFromLift(project: ProjectItem, auth: AuthCon
   const settings = hydrateAppSettings(await findAppSettings(), auth.actorName);
   if (!options.forceRead && (!settings.integrations.liftProofSyncEnabled || !settings.integrations.primaryPrintVendor.enabled)) return;
 
-  const rawLines = await fetchLiftProofSyncLines(project.liftOrderId, settings, project.id, auth);
-
+  const syncPayload = await fetchLiftProofSyncPayload(project.liftOrderId, settings, project.id, auth);
+  const rawLines = syncPayload.rawLines;
   const syncedAt = isoNow();
+  const orderHealth = deriveLiftOrderHealth(syncPayload.order, project.liftOrderId, syncedAt);
+  const orderSnapshot = buildLiftOrderSnapshot(syncPayload.order);
+  if (orderHealth.healthStatus === "cancelled" || orderHealth.healthStatus === "missing") {
+    await updateProjectLiftSyncMetadata(project, syncedAt, false, orderHealth, auth, orderSnapshot);
+    invalidateProjectResponseCaches();
+    return [];
+  }
+
   if (!rawLines.length) {
-    await updateProjectLiftProofSyncMetadata(project, syncedAt, false);
+    await updateProjectLiftSyncMetadata(project, syncedAt, false, orderHealth, auth, orderSnapshot);
     invalidateProjectResponseCaches();
     return;
   }
@@ -4227,7 +4704,7 @@ async function syncProjectProofLinesFromLift(project: ProjectItem, auth: AuthCon
     await deleteProjectProofLine(obsoleteProof);
   }
   const proofSyncChanged = merged.changedProofs.length > 0 || merged.obsoleteProofs.length > 0;
-  await updateProjectLiftProofSyncMetadata(project, syncedAt, proofSyncChanged);
+  await updateProjectLiftSyncMetadata(project, syncedAt, proofSyncChanged, orderHealth, auth, orderSnapshot);
   invalidateProjectResponseCaches();
 
   const latestProofs = merged.updatedProofs;
@@ -4272,16 +4749,103 @@ async function syncProjectProofLinesFromLift(project: ProjectItem, auth: AuthCon
   return Promise.all(latestProofs.map((proof) => toProjectProofLineResponse(proof, variants)));
 }
 
-async function updateProjectLiftProofSyncMetadata(project: ProjectItem, syncedAt: string, changed: boolean) {
+async function updateProjectLiftSyncMetadata(
+  project: ProjectItem,
+  syncedAt: string,
+  changed: boolean,
+  orderHealth: LiftOrderHealthUpdate,
+  auth: AuthContext,
+  orderSnapshot?: ProjectLiftOrderSnapshot | null
+) {
+  const previousHealthStatus = project.liftOrderHealthStatus || null;
   const nextProject: ProjectItem = {
     ...project,
+    liftOrderStatus: orderHealth.orderStatusRaw,
+    liftOrderStatusNormalized: orderHealth.orderStatusNormalized,
+    liftOrderHealthStatus: orderHealth.healthStatus,
+    liftOrderHealthMessage: orderHealth.healthMessage,
+    liftOrderSnapshot: orderSnapshot || project.liftOrderSnapshot || null,
+    liftOrderCancelledAt:
+      orderHealth.healthStatus === "cancelled"
+        ? project.liftOrderCancelledAt || syncedAt
+        : orderHealth.healthStatus === "ok"
+          ? null
+          : project.liftOrderCancelledAt || null,
+    lastLiftOrderSyncAt: syncedAt,
     lastLiftProofSyncAt: syncedAt,
     lastLiftProofChangeAt: changed ? syncedAt : project.lastLiftProofChangeAt || null,
   };
   await putCore(buildProjectRecord(nextProject));
+  if (previousHealthStatus !== orderHealth.healthStatus) {
+    await writeAudit(`PROJECT#${project.id}`, "project.lift_order_health_changed", auth, {
+      projectId: project.id,
+      liftOrderId: project.liftOrderId || null,
+      previousHealthStatus,
+      nextHealthStatus: orderHealth.healthStatus,
+      orderStatus: orderHealth.orderStatusRaw,
+      message: orderHealth.healthMessage,
+    });
+  }
 }
 
-async function fetchLiftProofSyncLines(
+type LiftOrderHealthUpdate = {
+  orderStatusRaw: string | null;
+  orderStatusNormalized: "active" | "cancelled" | "missing" | "unknown";
+  healthStatus: "ok" | "cancelled" | "missing" | "unknown";
+  healthMessage: string | null;
+};
+
+function deriveLiftOrderHealth(
+  order: Record<string, unknown> | null,
+  liftOrderId: string,
+  syncedAt: string
+): LiftOrderHealthUpdate {
+  if (!order) {
+    return {
+      orderStatusRaw: null,
+      orderStatusNormalized: "missing",
+      healthStatus: "missing",
+      healthMessage: `Lift order ${liftOrderId} was not returned by the AS360Orders flush report as of ${syncedAt}. It may be cancelled, replaced, or unavailable; use Lift Order Override or an explicit Adspace cancellation action after review.`,
+    };
+  }
+
+  const orderStatusRaw = optionalString(order.ORDER_STATUS) || optionalString(order.STATUS) || null;
+  const normalized = normalizeLiftOrderStatus(orderStatusRaw);
+  if (normalized === "cancelled") {
+    return {
+      orderStatusRaw,
+      orderStatusNormalized: "cancelled",
+      healthStatus: "cancelled",
+      healthMessage: `Lift reports order ${liftOrderId} as cancelled. Adspace has not cancelled the project automatically; relink, rebuild, or cancel the Adspace order manually after review.`,
+    };
+  }
+
+  if (normalized === "active") {
+    return {
+      orderStatusRaw,
+      orderStatusNormalized: "active",
+      healthStatus: "ok",
+      healthMessage: null,
+    };
+  }
+
+  return {
+    orderStatusRaw,
+    orderStatusNormalized: "unknown",
+    healthStatus: "unknown",
+    healthMessage: orderStatusRaw ? `Lift returned unrecognized order status "${orderStatusRaw}".` : null,
+  };
+}
+
+function normalizeLiftOrderStatus(status: string | null): "active" | "cancelled" | "unknown" {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized) return "unknown";
+  if (/(cancelled|canceled|void|voided)/.test(normalized)) return "cancelled";
+  if (/(hold|proof|production|complete|completed|open|active|submitted|received|new|progress)/.test(normalized)) return "active";
+  return "unknown";
+}
+
+async function fetchLiftProofSyncPayload(
   liftOrderId: string,
   settings: AppSettingsItem,
   projectId: string,
@@ -4289,18 +4853,18 @@ async function fetchLiftProofSyncLines(
 ) {
   const config = settings.integrations.primaryPrintVendor;
   const flush = await fetchLiftFlushOrder(liftOrderId, settings, projectId, auth);
-  const order = flush?.rowset?.[0];
+  const order = Array.isArray(flush?.rowset) ? (flush.rowset[0] as Record<string, unknown> | undefined) || null : null;
   const orderLines = Array.isArray(order?.LINES) ? (order.LINES as Array<Record<string, unknown>>) : [];
-  if (!orderLines.length) return [];
+  if (!orderLines.length) return { order, rawLines: [] };
 
   const resolverUrl = resolveLiftEnvironmentUrl(config, getLiftEnvironmentConfig(config).proofUrlResolverUrl);
-  if (!resolverUrl) return orderLines;
+  if (!resolverUrl) return { order, rawLines: orderLines };
 
   const proofReadableLines = orderLines.filter((line) => {
     const lineStepNumber = optionalNumber(line.LINE_STEP_NUMBER) ?? optionalNumber(line.STEP_NUMBER);
     return lineStepNumber != null && lineStepNumber >= 7.02 && optionalNumber(line.ORDER_LINE_ID) != null;
   });
-  if (!proofReadableLines.length) return orderLines;
+  if (!proofReadableLines.length) return { order, rawLines: orderLines };
 
   let failedLineReads = 0;
   const proofRows = await mapWithConcurrency(proofReadableLines, 5, async (line) => {
@@ -4316,7 +4880,7 @@ async function fetchLiftProofSyncLines(
   });
   const flattenedProofRows = proofRows.flat();
   if (flattenedProofRows.length > 0) {
-    return mergeLiftOrderLinesWithProofRows(orderLines, flattenedProofRows);
+    return { order, rawLines: mergeLiftOrderLinesWithProofRows(orderLines, flattenedProofRows) };
   }
 
   // If line-level proof reads failed outright, try one full AS360ProofReport as a compatibility fallback.
@@ -4324,14 +4888,14 @@ async function fetchLiftProofSyncLines(
     try {
       const proofReport = await fetchLiftProofReport(liftOrderId, settings, projectId, auth);
       if (Array.isArray(proofReport?.rowset)) {
-        return mergeLiftOrderLinesWithProofRows(orderLines, proofReport.rowset as Array<Record<string, unknown>>);
+        return { order, rawLines: mergeLiftOrderLinesWithProofRows(orderLines, proofReport.rowset as Array<Record<string, unknown>>) };
       }
     } catch {
-      return orderLines;
+      return { order, rawLines: orderLines };
     }
   }
 
-  return orderLines;
+  return { order, rawLines: orderLines };
 }
 
 function buildLiftQueryUrl(endpointUrl: string, params: Record<string, string>) {
@@ -4417,6 +4981,10 @@ function mergeLiftOrderLinesWithProofRows(
     return {
       ...line,
       ...proofRow,
+      PRODUCT_NAME: optionalString(line.PRODUCT_NAME) || optionalString(proofRow.PRODUCT_NAME) || null,
+      MATERIAL: optionalString(line.MATERIAL) || optionalString(proofRow.MATERIAL) || null,
+      PRINT_H_IN: optionalNumber(line.PRINT_H_IN) ?? optionalNumber(proofRow.PRINT_H_IN) ?? null,
+      PRINT_W_IN: optionalNumber(line.PRINT_W_IN) ?? optionalNumber(proofRow.PRINT_W_IN) ?? null,
       PROOFS: matchedProofRows,
       LINE_NUMBER: proofRow.LINE_NUMBER ?? line.LINE_NUMBER,
       ORDER_LINE_ID: proofRow.ORDER_LINE_ID ?? line.ORDER_LINE_ID,
@@ -4791,6 +5359,16 @@ function base64UrlEncode(value: string) {
   return Buffer.from(value).toString("base64url");
 }
 
+function summarizeUrlForLog(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return value.slice(0, 240);
+  }
+}
+
 async function sendLiftProofDecision(args: {
   project: ProjectItem;
   proof: ProjectProofLineItem;
@@ -4812,6 +5390,26 @@ async function sendLiftProofDecision(args: {
     .replace("%1", encodeURIComponent(String(proofingId)));
   if (!proofUrl) throw new HttpError(400, "Lift proof endpoint is not configured in Internal Admin.");
 
+  const isRevisionUpload =
+    body.approve === false && body.upload === true && typeof body.artUrl === "string" && !!body.artUrl;
+  if (isRevisionUpload) {
+    const artMimeType = optionalString(body.artMimeType);
+    console.info(
+      "Lift proof revision upload request",
+      JSON.stringify({
+        projectId: project.id,
+        adspaceOrderNumber: project.adspaceOrderNumber || null,
+        liftOrderId: project.liftOrderId || null,
+        proofLineId: proof.id,
+        lineNumber: proof.lineNumber,
+        liftProofingId: proofingId,
+        liftOrderLineId: proof.liftOrderLineId || null,
+        artUrl: summarizeUrlForLog(body.artUrl),
+        artMimeType: artMimeType || null,
+      })
+    );
+  }
+
   const jwt = createLiftJwt(config.proofClientId, config.proofClientSecret);
   const response = await fetch(proofUrl, {
     method: "PUT",
@@ -4825,6 +5423,23 @@ async function sendLiftProofDecision(args: {
   });
   const responseText = await response.text();
   const responseBody = parseMaybeJson(responseText) || { raw: responseText };
+  if (isRevisionUpload) {
+    console.info(
+      "Lift proof revision upload response",
+      JSON.stringify({
+        projectId: project.id,
+        adspaceOrderNumber: project.adspaceOrderNumber || null,
+        liftOrderId: project.liftOrderId || null,
+        proofLineId: proof.id,
+        lineNumber: proof.lineNumber,
+        liftProofingId: proofingId,
+        liftOrderLineId: proof.liftOrderLineId || null,
+        status: response.status,
+        ok: response.ok,
+        body: responseBody,
+      })
+    );
+  }
   if (!response.ok) {
     await recordWorkflowError(`PROJECT#${project.id}`, auth, {
       severity: "error",
@@ -5012,12 +5627,13 @@ async function updateProjectProofLine(
 
   let existing = await findProjectProofLineById(projectId, lineItemId);
   if (!existing) throw new HttpError(404, `Proof line ${lineItemId} not found`);
+  const useClientCreativeAsProof = optionalBoolean(payload.useClientCreativeAsProof) === true;
+  const isClientRevisionUpload = useClientCreativeAsProof && optionalBoolean(payload.revised) === true;
   const expectedUpdatedAt = payload.expectedUpdatedAt === null ? null : optionalString(payload.expectedUpdatedAt) || null;
-  if (expectedUpdatedAt !== (existing.updatedAt || null)) {
+  if (!isClientRevisionUpload && expectedUpdatedAt !== (existing.updatedAt || null)) {
     throw new HttpError(409, "This proof line changed since you loaded it. Refresh and try again.");
   }
 
-  const useClientCreativeAsProof = optionalBoolean(payload.useClientCreativeAsProof) === true;
   const clientCreative = useClientCreativeAsProof
     ? await findProjectCreativeById(projectId, existing.clientCreativeId)
     : null;
@@ -5027,7 +5643,10 @@ async function updateProjectProofLine(
 
   const nextStatus = optionalProofStatus(payload.status) ?? existing.status;
   const proofDecisionComment = optionalString(payload.proofDecisionComment) || null;
+  const isAdspaceManagedProofLine =
+    existing.integrationMode === "adspace" || existing.productionRoute === "external_vendor";
   const shouldUseLiftProofing =
+    !isAdspaceManagedProofLine &&
     !!project.liftOrderId &&
     settings.integrations.liftProofSyncEnabled &&
     settings.integrations.primaryPrintVendor.enabled;
@@ -5053,9 +5672,12 @@ async function updateProjectProofLine(
         },
       });
     } else if (optionalBoolean(payload.revised) === true && useClientCreativeAsProof && clientCreative) {
+      const revisedArtMimeType = optionalString(clientCreative.contentType) || "application/pdf";
       const revisedArtUrl = await signLiftOutboundAssetUrl(
         clientCreative.bucketName || PROJECT_ASSETS_BUCKET_NAME,
-        clientCreative.objectKey
+        clientCreative.objectKey,
+        clientCreative.filename,
+        revisedArtMimeType
       );
       await sleep(3500);
       await sendLiftProofDecision({
@@ -5069,6 +5691,7 @@ async function updateProjectProofLine(
           userName: "ADSPACE360",
           rejectReason: "REVISED_ART_WILL_BE_SENT",
           artUrl: revisedArtUrl,
+          artMimeType: revisedArtMimeType,
           upload: true,
         },
       });
@@ -5089,11 +5712,12 @@ async function updateProjectProofLine(
   }
 
   const nextUpdatedAt = isoNow();
-  const clearsLiftProofForRevision = shouldUseLiftProofing && useClientCreativeAsProof && optionalBoolean(payload.revised) === true;
+  const clearsCurrentProofForRevision =
+    isClientRevisionUpload && (shouldUseLiftProofing || isAdspaceManagedProofLine);
   const nextProofLine: ProjectProofLineItem = {
     ...existing,
     status:
-      clearsLiftProofForRevision
+      clearsCurrentProofForRevision
         ? "waiting"
         : useClientCreativeAsProof
         ? nextStatus || "pending"
@@ -5104,7 +5728,7 @@ async function updateProjectProofLine(
         ? existing.clientFileName
         : optionalString(payload.clientFileName) || existing.clientFileName,
     proofObjectKey:
-      clearsLiftProofForRevision
+      clearsCurrentProofForRevision
         ? undefined
         : useClientCreativeAsProof
         ? clientCreative?.objectKey
@@ -5112,7 +5736,7 @@ async function updateProjectProofLine(
         ? undefined
         : optionalString(payload.proofObjectKey) || existing.proofObjectKey,
     proofThumbObjectKey:
-      clearsLiftProofForRevision
+      clearsCurrentProofForRevision
         ? undefined
         : useClientCreativeAsProof
         ? clientCreative?.thumbObjectKey
@@ -5120,26 +5744,39 @@ async function updateProjectProofLine(
         ? undefined
         : optionalString(payload.proofThumbObjectKey) || existing.proofThumbObjectKey,
     liftProofThumbUrl:
-      clearsLiftProofForRevision
+      clearsCurrentProofForRevision
         ? null
         : existing.liftProofThumbUrl ?? null,
     liftProofFullUrl:
-      clearsLiftProofForRevision
+      clearsCurrentProofForRevision
         ? null
         : existing.liftProofFullUrl ?? null,
+    liftProofStatus:
+      clearsCurrentProofForRevision
+        ? null
+        : existing.liftProofStatus ?? null,
     printTeamFeedback:
-      clearsLiftProofForRevision
+      clearsCurrentProofForRevision
         ? undefined
         : payload.printTeamFeedback === null
         ? undefined
         : optionalString(payload.printTeamFeedback) || existing.printTeamFeedback,
-    proofComments: clearsLiftProofForRevision ? [] : existing.proofComments || [],
-    proofCommentCount: clearsLiftProofForRevision ? 0 : existing.proofCommentCount || 0,
-    proofCommentAttachmentCount: clearsLiftProofForRevision ? 0 : existing.proofCommentAttachmentCount || 0,
-    latestProofCommentAt: clearsLiftProofForRevision ? null : existing.latestProofCommentAt || null,
-    proofVersions: clearsLiftProofForRevision
+    proofComments: clearsCurrentProofForRevision ? [] : existing.proofComments || [],
+    proofCommentCount: clearsCurrentProofForRevision ? 0 : existing.proofCommentCount || 0,
+    proofCommentAttachmentCount: clearsCurrentProofForRevision ? 0 : existing.proofCommentAttachmentCount || 0,
+    latestProofCommentAt: clearsCurrentProofForRevision ? null : existing.latestProofCommentAt || null,
+    proofVersions: clearsCurrentProofForRevision
       ? mergeStoredProofVersion(existing.proofVersions || [], buildStoredProofVersionFromLine(existing, nextUpdatedAt))
       : existing.proofVersions || [],
+    vendorProofSubmittedAt: clearsCurrentProofForRevision ? null : existing.vendorProofSubmittedAt || null,
+    vendorProofSubmittedByName: clearsCurrentProofForRevision ? null : existing.vendorProofSubmittedByName || null,
+    vendorProofSubmittedByVendorAccountId: clearsCurrentProofForRevision
+      ? null
+      : existing.vendorProofSubmittedByVendorAccountId || null,
+    vendorProofFilename: clearsCurrentProofForRevision ? null : existing.vendorProofFilename || null,
+    vendorProofContentType: clearsCurrentProofForRevision ? null : existing.vendorProofContentType || null,
+    vendorProofSizeBytes: clearsCurrentProofForRevision ? null : existing.vendorProofSizeBytes ?? null,
+    vendorProofNote: clearsCurrentProofForRevision ? null : existing.vendorProofNote || null,
     updatedAt: nextUpdatedAt,
     updatedByName: auth.actorName,
   };
@@ -5914,15 +6551,27 @@ type VendorWorkspaceLine = {
     thumbUrl?: string | null;
     fullUrl?: string | null;
     contentType?: string | null;
+    uploadedAt?: string | null;
+    uploadedByName?: string | null;
   } | null;
   proof: {
     status: ProofLineStatus;
     revised?: boolean;
     lineStepNumber?: number | null;
+    liftLineSnapshot?: ProjectLiftLineSnapshot | null;
     liftProofStatus?: string | null;
+    proofSource?: "lift_sync" | "vendor_upload" | "adspace_upload" | null;
+    proofApprovedBy?: string | null;
+    proofApprovedDate?: string | null;
     thumbUrl?: string | null;
     fullUrl?: string | null;
     printTeamFeedback?: string | null;
+    proofComments?: ProjectProofComment[];
+    proofCommentCount?: number;
+    proofCommentAttachmentCount?: number;
+    latestProofCommentAt?: string | null;
+    proofVersions?: ProjectProofVersion[];
+    technicalReports?: ProjectProofTechnicalReport[];
     vendorSubmittedAt?: string | null;
     vendorSubmittedByName?: string | null;
     vendorAccountId?: string | null;
@@ -5965,6 +6614,11 @@ type VendorWorkspaceOrder = {
     venueName: string;
     adspaceOrderNumber: string;
     liftOrderId: string | null;
+    liftOrderStatus: string | null;
+    liftOrderHealthStatus: string | null;
+    lastLiftOrderSyncAt: string | null;
+    lastLiftProofSyncAt: string | null;
+    liftOrderSnapshot: ProjectLiftOrderSnapshot | null;
     poNumber: string | null;
     contractNumber: string | null;
     artworkDueDate: string | null;
@@ -6107,6 +6761,12 @@ function buildVendorLineWorkflow(args: {
   baselineProductionStatus: VendorOrderStatus;
 }): VendorWorkspaceLine["workflow"] {
   const submitted = isVendorOrderSubmitted(args.project);
+  const liftRouteBlocked =
+    submitted &&
+    !!args.proof &&
+    args.proof?.integrationMode !== "adspace" &&
+    args.proof?.productionRoute !== "external_vendor" &&
+    (args.project.liftOrderHealthStatus === "cancelled" || args.project.liftOrderHealthStatus === "missing");
   const proofApproved =
     args.proof?.status === "approved" ||
     String(args.proof?.liftProofStatus || "").toUpperCase() === "APPROVED" ||
@@ -6139,6 +6799,18 @@ function buildVendorLineWorkflow(args: {
       canUpdateProduction: false,
       canUpdateShipping: false,
       lockReason,
+    };
+  }
+  if (liftRouteBlocked) {
+    return {
+      stage: "blocked",
+      label: args.project.liftOrderHealthStatus === "cancelled" ? "Lift Order Cancelled" : "Lift Order Unavailable",
+      canSubmitProof: false,
+      canUpdateProduction: false,
+      canUpdateShipping: false,
+      lockReason:
+        args.project.liftOrderHealthMessage ||
+        "The linked Lift order needs operator review before vendor actions can continue.",
     };
   }
   if (args.productionStatus === "blocked") {
@@ -6228,6 +6900,14 @@ function rollupVendorWorkflow(
 ): VendorWorkspaceOrder["summary"]["workflow"] {
   const submitted = isVendorOrderSubmitted(project);
   const allLinesProductionEditable = lines.length > 0 && lines.every((line) => line.workflow.canUpdateProduction);
+  const everyLineAtOrPastProductionReady =
+    lines.length > 0 &&
+    lines.every((line) =>
+      line.workflow.stage === "production_ready" ||
+      line.workflow.stage === "in_production" ||
+      line.workflow.stage === "shipped" ||
+      line.workflow.stage === "complete"
+    );
   if (!submitted) {
     return {
       stage: "incoming",
@@ -6246,25 +6926,34 @@ function rollupVendorWorkflow(
       lockReason: null,
     };
   }
+  if (lines.some((line) => line.workflow.stage === "blocked")) {
+    return {
+      stage: "blocked",
+      label: "Blocked",
+      canGeneratePackage: true,
+      canUpdateProduction: false,
+      lockReason: lines.find((line) => line.workflow.stage === "blocked")?.workflow.lockReason || null,
+    };
+  }
   if (status === "complete") {
     return { stage: "complete", label: "Complete", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
   }
   if (status === "shipped") {
     return { stage: "shipped", label: "Shipped", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
   }
-  if (lines.some((line) => line.workflow.stage === "in_production")) {
+  if (everyLineAtOrPastProductionReady && lines.some((line) => line.workflow.stage === "in_production")) {
     return { stage: "in_production", label: "In Production", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
   }
-  if (lines.some((line) => line.workflow.stage === "production_ready")) {
+  if (everyLineAtOrPastProductionReady) {
     return { stage: "production_ready", label: "Ready for Production", canGeneratePackage: true, canUpdateProduction: allLinesProductionEditable, lockReason: null };
   }
-  if (lines.some((line) => line.workflow.stage === "client_approved")) {
+  if (lines.some((line) => line.workflow.stage === "needs_proof")) {
     return {
-      stage: "client_approved",
-      label: "Client Approved",
+      stage: "needs_proof",
+      label: "Needs Vendor Proof",
       canGeneratePackage: true,
       canUpdateProduction: false,
-      lockReason: "Production updates unlock after Adspace releases this order to production.",
+      lockReason: "Production updates unlock after every assigned line has an approved proof.",
     };
   }
   if (lines.some((line) => line.workflow.stage === "client_review")) {
@@ -6273,7 +6962,16 @@ function rollupVendorWorkflow(
       label: "Client Review",
       canGeneratePackage: true,
       canUpdateProduction: false,
-      lockReason: "Production updates unlock after the client approves the proof.",
+      lockReason: "Production updates unlock after every assigned line has an approved proof.",
+    };
+  }
+  if (lines.some((line) => line.workflow.stage === "client_approved")) {
+    return {
+      stage: "client_approved",
+      label: "Client Approved",
+      canGeneratePackage: true,
+      canUpdateProduction: false,
+      lockReason: "Production updates unlock after Adspace releases this order to production.",
     };
   }
   return {
@@ -6285,28 +6983,54 @@ function rollupVendorWorkflow(
   };
 }
 
-async function getVendorAccountForVariant(
-  variant: MediaVariantItem | undefined,
-  customerId: string,
-  customerVendorsById: Map<string, CustomerVendorItem>,
-  primaryVendor: VendorAccountItem,
-  actorName: string
-) {
-  if (variant?.productionRouting === "external" && variant.externalVendorId) {
-    const customerVendor = customerVendorsById.get(variant.externalVendorId);
-    if (customerVendor?.isActive) return ensureCustomerVendorAccount(customerVendor, actorName);
+function resolveInventoryProductionRouting(inventory: InventoryItem | undefined, variant?: MediaVariantItem) {
+  const rowRouting = inventory?.productionRoutingOverride;
+  if (rowRouting === "external") {
+    return {
+      productionRouting: "external" as const,
+      externalVendorId: inventory?.externalVendorIdOverride || variant?.externalVendorId,
+      source: "inventory_override" as const,
+    };
   }
-  return primaryVendor;
+  if (rowRouting === "primary") {
+    return {
+      productionRouting: "primary" as const,
+      externalVendorId: undefined,
+      source: "inventory_override" as const,
+    };
+  }
+  return {
+    productionRouting: variant?.productionRouting === "external" ? "external" as const : "primary" as const,
+    externalVendorId: variant?.externalVendorId,
+    source: "variant_default" as const,
+  };
+}
+
+async function getVendorAccountForInventoryRoute(args: {
+  inventory?: InventoryItem;
+  variant?: MediaVariantItem;
+  customerVendorsById: Map<string, CustomerVendorItem>;
+  primaryVendor: VendorAccountItem;
+  actorName: string;
+}) {
+  const route = resolveInventoryProductionRouting(args.inventory, args.variant);
+  if (route.productionRouting === "external" && route.externalVendorId) {
+    const customerVendor = args.customerVendorsById.get(route.externalVendorId);
+    if (customerVendor?.isActive) return ensureCustomerVendorAccount(customerVendor, args.actorName);
+  }
+  return args.primaryVendor;
 }
 
 function resolveProofLineRouteMetadata(args: {
+  inventory?: InventoryItem;
   variant?: MediaVariantItem;
   customerId: string;
   customerVendorsById: Map<string, CustomerVendorItem>;
   primaryVendorName: string;
 }): ProofLineRouteMetadata {
-  if (args.variant?.productionRouting === "external" && args.variant.externalVendorId) {
-    const customerVendor = args.customerVendorsById.get(args.variant.externalVendorId);
+  const route = resolveInventoryProductionRouting(args.inventory, args.variant);
+  if (route.productionRouting === "external" && route.externalVendorId) {
+    const customerVendor = args.customerVendorsById.get(route.externalVendorId);
     if (customerVendor?.isActive) {
       return {
         productionRoute: "external_vendor",
@@ -6345,10 +7069,11 @@ function proofRouteFallback(
 async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAccountIds?: Set<string>, actorName = "System") {
   const bundle = await loadProjectRecordBundle(project.id);
   if (!bundle.project) return [];
+  const vendorRegistryCustomerId = project.sourceCustomerId || project.customerId;
   const [inventory, variants, customerVendors, settings, events, market, venue] = await Promise.all([
     listInventoryForVenue(project.venueId),
     listVariantsForVenue(project.venueId),
-    listCustomerVendors(project.customerId).catch(() => [] as CustomerVendorItem[]),
+    listCustomerVendors(vendorRegistryCustomerId).catch(() => [] as CustomerVendorItem[]),
     findAppSettings(),
     rawListProjectAuditEvents(project.id).catch(() => [] as Array<Record<string, unknown>>),
     findMarketById(project.marketId).catch(() => null),
@@ -6356,11 +7081,19 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
   ]);
   const shippingDestination = resolveShippingDestination(market, venue);
   const hydratedSettings = hydrateAppSettings(settings, actorName);
+  const customerSettings = hydrateCustomerSettings(
+    await findCustomerSettings(project.customerId),
+    project.customerId,
+    actorName,
+    hydratedSettings
+  );
   const primaryVendor = await ensurePrimaryVendorAccount(hydratedSettings, actorName);
   const customerVendorsById = new Map(customerVendors.map((vendor) => [vendor.id, vendor] as const));
   const variantsByKey = new Map(variants.map((variant) => [variant.mediaVariantKey, variant] as const));
   const inventoryById = new Map(inventory.map((item) => [item.id, item] as const));
+  const inventoryByPublicId = new Map(inventory.map((item) => [item.inventoryId, item] as const));
   const assignmentsByInventoryId = new Map(bundle.assignments.map((assignment) => [assignment.inventoryId, assignment] as const));
+  const assignedInventoryIdsByCreative = buildAssignedInventoryIdsByCreative(bundle.assignments, inventory);
   const creativesById = new Map(bundle.creatives.map((creative) => [creative.id, creative] as const));
   const proofById = new Map(bundle.proofLines.map((proof) => [proof.id, proof] as const));
   const statusByLineId = new Map(
@@ -6382,98 +7115,190 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
     overrideUpdatedAt?: string | null;
   }) {
     const variant = variantsByKey.get(args.mediaVariantKey);
-    const vendor = await getVendorAccountForVariant(variant, project.customerId, customerVendorsById, primaryVendor, actorName);
-    if (allowedVendorAccountIds && !allowedVendorAccountIds.has(vendor.id)) return;
-    const vendorOrderId = buildVendorOrderId(project.id, vendor.id);
-    const status = statusByLineId.get(`${vendor.id}:${args.id}`);
-    const creative = args.creativeId ? creativesById.get(args.creativeId) || null : null;
-    const creativeAsset = creative ? await toWorkspaceCreative(creative, args.assignedInventoryIds) : null;
-    const proofAsset = args.proof
-      ? await toProjectProofLineResponse(args.proof, variants, creativesById, signedUrlCache)
-      : null;
-    const assignedInventory = args.assignedInventoryIds
-      .map((inventoryId) => inventoryById.get(inventoryId))
+    const creativeAssignedInventoryIds = args.creativeId ? assignedInventoryIdsByCreative.get(args.creativeId) || [] : [];
+    const candidateInventoryIds = args.assignedInventoryIds.length
+      ? args.assignedInventoryIds
+      : args.proof?.locations?.length
+        ? args.proof.locations
+        : creativeAssignedInventoryIds;
+    const assignedInventory = candidateInventoryIds
+      .map((inventoryId) => inventoryById.get(inventoryId) || inventoryByPublicId.get(inventoryId))
       .filter((item): item is InventoryItem => !!item);
-    const baselineStatus = vendorStatusFromProof(args.proof);
-    const productionStatus = status?.productionStatus || baselineStatus;
-    const hasCreative = Boolean(args.asset?.fullUrl || args.asset?.thumbUrl || creativeAsset?.fullUrl || creativeAsset?.thumbUrl);
-    const workflow = buildVendorLineWorkflow({
-      project,
-      productionApprovalMode: hydratedSettings.workflowPolicies.productionApprovalMode,
-      proof: args.proof,
-      proofLineId: args.proof?.id || null,
-      hasCreative,
-      productionStatus,
-      baselineProductionStatus: baselineStatus,
-    });
-    const line: VendorWorkspaceLine = {
-      id: args.id,
-      projectId: project.id,
-      vendorOrderId,
-      vendorAccountId: vendor.id,
-      sourceType: args.sourceType,
-      lineNumber: args.proof?.lineNumber ?? null,
-      proofLineId: args.proof?.id || null,
-      liftOrderLineId: args.proof?.liftOrderLineId ?? null,
-      liftProofingId: args.proof?.liftProofingId ?? null,
-      mediaVariantKey: args.mediaVariantKey,
-      mediaVariantLabel: variant?.label || args.proof?.mediaVariantLabel || formatVariantLabel(args.mediaVariantKey),
-      productLabel: args.productLabel || variant?.label || args.proof?.mediaVariantLabel || formatVariantLabel(args.mediaVariantKey),
-      quantity: args.quantity ?? args.proof?.quantity ?? Math.max(1, assignedInventory.length),
-      inventory: assignedInventory.map((item) => ({
-        id: item.id,
-        inventoryId: item.inventoryId,
-        mapName: item.mapName || "",
-        unitNumber: item.unitNumber || "",
-      })),
-      creative: args.asset?.fullUrl || args.asset?.thumbUrl
-        ? {
-            id: creative?.id || args.creativeId || "",
-            filename: args.asset.filename || creative?.filename || args.proof?.clientFileName || "Artwork",
-            thumbUrl: args.asset.thumbUrl || null,
-            fullUrl: args.asset.fullUrl || null,
-            contentType: args.asset.contentType || creative?.contentType || null,
-          }
-        : creativeAsset
-        ? {
-            id: creativeAsset.id,
-            filename: creativeAsset.filename,
-            thumbUrl: creativeAsset.thumbUrl,
-            fullUrl: creativeAsset.fullUrl,
-            contentType: creativeAsset.contentType || null,
-          }
-        : null,
-          proof: proofAsset
-        ? {
-            status: proofAsset.status,
-            revised: proofAsset.revised,
-            lineStepNumber: proofAsset.lineStepNumber,
-            liftProofStatus: proofAsset.liftProofStatus,
-            thumbUrl: proofAsset.proofThumbUrl,
-            fullUrl: proofAsset.proofFullUrl,
-            printTeamFeedback: proofAsset.printTeamFeedback,
-            vendorSubmittedAt: proofAsset.vendorProofSubmittedAt,
-            vendorSubmittedByName: proofAsset.vendorProofSubmittedByName,
-            vendorAccountId: proofAsset.vendorProofSubmittedByVendorAccountId,
-            vendorFilename: proofAsset.vendorProofFilename,
-            vendorNote: proofAsset.vendorProofNote,
-            sizeBytes: proofAsset.vendorProofSizeBytes,
-          }
-        : null,
-      productionStatus,
-      baselineProductionStatus: baselineStatus,
-      workflow,
-      vendorReference: status?.vendorReference || "",
-      note: status?.note || "",
-      shippingCarrier: status?.shippingCarrier || "",
-      trackingNumber: status?.trackingNumber || "",
-      shippedAt: status?.shippedAt || "",
-      updatedAt: status?.updatedAt || args.overrideUpdatedAt || args.proof?.updatedAt || project.updatedAt,
-      updatedByName: status?.updatedByName || "",
-    };
-    const lines = grouped.get(vendor.id) || [];
-    lines.push(line);
-    grouped.set(vendor.id, lines);
+    const vendorAssignments: Array<{ vendor: VendorAccountItem; assignedInventory: InventoryItem[]; lineId: string }> = [];
+    if (args.proof?.vendorAccountId) {
+      vendorAssignments.push({
+        vendor: {
+          ...primaryVendor,
+          id: args.proof.vendorAccountId,
+          name: args.proof.vendorName || args.proof.vendorAccountId,
+          accountType: args.proof.vendorAccountId === primaryVendor.id ? primaryVendor.accountType : "external" as const,
+        },
+        assignedInventory,
+        lineId: args.id,
+      });
+    } else if (assignedInventory.length) {
+      const byVendorId = new Map<string, { vendor: VendorAccountItem; assignedInventory: InventoryItem[] }>();
+      for (const item of assignedInventory) {
+        const vendor = await getVendorAccountForInventoryRoute({
+          inventory: item,
+          variant,
+          customerVendorsById,
+          primaryVendor,
+          actorName,
+        });
+        const group = byVendorId.get(vendor.id) || { vendor, assignedInventory: [] };
+        group.assignedInventory.push(item);
+        byVendorId.set(vendor.id, group);
+      }
+      const groups = Array.from(byVendorId.values());
+      groups.forEach((group) => {
+        vendorAssignments.push({
+          ...group,
+          lineId: groups.length > 1 ? `${args.id}_${group.vendor.id}` : args.id,
+        });
+      });
+    } else {
+      vendorAssignments.push({
+        vendor: await getVendorAccountForInventoryRoute({
+          variant,
+          customerVendorsById,
+          primaryVendor,
+          actorName,
+        }),
+        assignedInventory,
+        lineId: args.id,
+      });
+    }
+
+    for (const vendorAssignment of vendorAssignments) {
+      const vendor = vendorAssignment.vendor;
+      if (allowedVendorAccountIds && !allowedVendorAccountIds.has(vendor.id)) continue;
+      const vendorOrderId = buildVendorOrderId(project.id, vendor.id);
+      const status = statusByLineId.get(`${vendor.id}:${vendorAssignment.lineId}`) || statusByLineId.get(`${vendor.id}:${args.id}`);
+      const lineInventoryIds = vendorAssignment.assignedInventory.map((item) => item.id);
+      const creative = args.creativeId ? creativesById.get(args.creativeId) || null : null;
+      const creativeAsset = creative ? await toWorkspaceCreative(creative, lineInventoryIds.length ? lineInventoryIds : args.assignedInventoryIds) : null;
+      const proofAsset = args.proof
+        ? await toProjectProofLineResponse(args.proof, variants, creativesById, signedUrlCache)
+        : null;
+      const baselineStatus = vendorStatusFromProof(args.proof);
+      const productionStatus = status?.productionStatus || baselineStatus;
+      const hasCreative = Boolean(args.asset?.fullUrl || args.asset?.thumbUrl || creativeAsset?.fullUrl || creativeAsset?.thumbUrl);
+      const fallbackInventoryRefs = Array.from(new Set([
+        ...candidateInventoryIds,
+        ...creativeAssignedInventoryIds,
+        ...(proofAsset?.locations || []),
+      ].filter(Boolean)));
+      const vendorInventoryRows = vendorAssignment.assignedInventory.length
+        ? vendorAssignment.assignedInventory.map((item) => ({
+            id: item.id,
+            inventoryId: item.inventoryId,
+            mapName: item.mapName || "",
+            unitNumber: item.unitNumber || "",
+          }))
+        : fallbackInventoryRefs.map((inventoryRef) => {
+            const item = inventoryById.get(inventoryRef) || inventoryByPublicId.get(inventoryRef);
+            return {
+              id: item?.id || inventoryRef,
+              inventoryId: item?.inventoryId || inventoryRef,
+              mapName: item?.mapName || "",
+              unitNumber: item?.unitNumber || "",
+            };
+          });
+      const vendorInventoryCount = vendorInventoryRows.length || vendorAssignment.assignedInventory.length;
+      const workflow = buildVendorLineWorkflow({
+        project,
+        productionApprovalMode: customerSettings.workflowPolicies.productionApprovalMode,
+        proof: args.proof,
+        proofLineId: args.proof?.id || null,
+        hasCreative,
+        productionStatus,
+        baselineProductionStatus: baselineStatus,
+      });
+      const line: VendorWorkspaceLine = {
+        id: vendorAssignment.lineId,
+        projectId: project.id,
+        vendorOrderId,
+        vendorAccountId: vendor.id,
+        sourceType: args.sourceType,
+        lineNumber: args.proof?.lineNumber ?? null,
+        proofLineId: args.proof?.id || null,
+        liftOrderLineId: args.proof?.liftOrderLineId ?? null,
+        liftProofingId: args.proof?.liftProofingId ?? null,
+        mediaVariantKey: args.mediaVariantKey,
+        mediaVariantLabel: variant?.label || args.proof?.mediaVariantLabel || formatVariantLabel(args.mediaVariantKey),
+        productLabel: args.productLabel || variant?.label || args.proof?.mediaVariantLabel || formatVariantLabel(args.mediaVariantKey),
+        quantity: args.quantity != null && vendorAssignments.length === 1
+          ? args.quantity
+          : args.proof?.quantity ?? Math.max(1, vendorInventoryCount),
+        inventory: vendorInventoryRows,
+        creative: args.asset?.fullUrl || args.asset?.thumbUrl
+          ? {
+              id: creative?.id || args.creativeId || "",
+              filename: args.asset.filename || creative?.filename || args.proof?.clientFileName || "Artwork",
+              thumbUrl: args.asset.thumbUrl || null,
+              fullUrl: args.asset.fullUrl || null,
+              contentType: args.asset.contentType || creative?.contentType || null,
+              uploadedAt: creative?.createdAt || args.overrideUpdatedAt || args.proof?.updatedAt || args.proof?.createdAt || null,
+              uploadedByName: creative?.uploadedByName || null,
+            }
+          : creativeAsset
+          ? {
+              id: creativeAsset.id,
+              filename: creativeAsset.filename,
+              thumbUrl: creativeAsset.thumbUrl,
+              fullUrl: creativeAsset.fullUrl,
+              contentType: creativeAsset.contentType || null,
+              uploadedAt: creativeAsset.createdAt || null,
+              uploadedByName: creativeAsset.uploadedByName || null,
+            }
+          : null,
+        proof: proofAsset
+          ? {
+              status: proofAsset.status,
+              revised: proofAsset.revised,
+              lineStepNumber: proofAsset.lineStepNumber,
+              liftLineSnapshot: proofAsset.liftLineSnapshot || null,
+              liftProofStatus: proofAsset.liftProofStatus,
+              proofSource: proofAsset.vendorProofSubmittedAt
+                ? "vendor_upload"
+                : proofAsset.proofFullUrl || proofAsset.proofThumbUrl || proofAsset.liftProofStatus
+                  ? proofAsset.integrationMode === "lift" ? "lift_sync" : "adspace_upload"
+                  : null,
+              proofApprovedBy: proofAsset.proofApprovedBy || null,
+              proofApprovedDate: proofAsset.proofApprovedDate || null,
+              thumbUrl: proofAsset.proofThumbUrl,
+              fullUrl: proofAsset.proofFullUrl,
+              printTeamFeedback: proofAsset.printTeamFeedback,
+              proofComments: proofAsset.proofComments || [],
+              proofCommentCount: proofAsset.proofCommentCount || 0,
+              proofCommentAttachmentCount: proofAsset.proofCommentAttachmentCount || 0,
+              latestProofCommentAt: proofAsset.latestProofCommentAt || null,
+              proofVersions: proofAsset.proofVersions || [],
+              technicalReports: proofAsset.technicalReports || [],
+              vendorSubmittedAt: proofAsset.vendorProofSubmittedAt,
+              vendorSubmittedByName: proofAsset.vendorProofSubmittedByName,
+              vendorAccountId: proofAsset.vendorProofSubmittedByVendorAccountId,
+              vendorFilename: proofAsset.vendorProofFilename,
+              vendorNote: proofAsset.vendorProofNote,
+              sizeBytes: proofAsset.vendorProofSizeBytes,
+            }
+          : null,
+        productionStatus,
+        baselineProductionStatus: baselineStatus,
+        workflow,
+        vendorReference: status?.vendorReference || "",
+        note: status?.note || "",
+        shippingCarrier: status?.shippingCarrier || "",
+        trackingNumber: status?.trackingNumber || "",
+        shippedAt: status?.shippedAt || "",
+        updatedAt: status?.updatedAt || args.overrideUpdatedAt || args.proof?.updatedAt || project.updatedAt,
+        updatedByName: status?.updatedByName || "",
+      };
+      const lines = grouped.get(vendor.id) || [];
+      lines.push(line);
+      grouped.set(vendor.id, lines);
+    }
   }
 
   const activeOverrides = bundle.allocationOverrideRows.filter((row) => !row.hidden);
@@ -6490,7 +7315,7 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
         id: `override_${row.id}`,
         sourceType: "allocation_override",
         mediaVariantKey: row.mediaVariantKey,
-        assignedInventoryIds: row.assignedInventoryIds || [],
+        assignedInventoryIds: row.assignedInventoryIds?.length ? row.assignedInventoryIds : proof?.locations || [],
         creativeId: row.sourceCreativeId || proof?.clientCreativeId || null,
         proof,
         productLabel: row.productLabel,
@@ -6570,6 +7395,11 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
         venueName: project.venueName,
         adspaceOrderNumber: getProjectAdspaceOrderNumber(project),
         liftOrderId: project.liftOrderId || null,
+        liftOrderStatus: project.liftOrderStatus || null,
+        liftOrderHealthStatus: project.liftOrderHealthStatus || null,
+        lastLiftOrderSyncAt: project.lastLiftOrderSyncAt || null,
+        lastLiftProofSyncAt: project.lastLiftProofSyncAt || null,
+        liftOrderSnapshot: project.liftOrderSnapshot || null,
         poNumber: project.poNumber || null,
         contractNumber: project.contractNumber || null,
         artworkDueDate: project.artworkDueDate || null,
@@ -6606,7 +7436,6 @@ async function listVendorWorkspaceOrders(auth: AuthContext) {
   const vendorAccountIds = auth.vendorAccountIds;
   const projects = (await scanByEntityType("Project"))
     .filter((item): item is ProjectItem => item.entityType === "Project")
-    .filter((project) => project.projectMode !== "internal_sandbox")
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const ordersByProject = await Promise.all(
     projects.map((project) => buildVendorOrdersForProject(project, vendorAccountIds, auth.actorName))
@@ -6625,12 +7454,17 @@ async function listVendorWorkspaceOrders(auth: AuthContext) {
   };
 }
 
-async function getVendorWorkspaceOrder(vendorOrderId: string, auth: AuthContext) {
+async function getVendorWorkspaceOrder(vendorOrderId: string, auth: AuthContext, options: { refreshLift?: boolean } = {}) {
   assertVendorWorkspaceUser(auth);
   const { projectId, vendorAccountId } = parseVendorOrderId(vendorOrderId);
   assertVendorAccountAccess(auth, vendorAccountId);
-  const project = await findProjectById(projectId);
-  if (!project || project.projectMode === "internal_sandbox") throw new HttpError(404, "Vendor order not found");
+  let project = await findProjectById(projectId);
+  if (!project) throw new HttpError(404, "Vendor order not found");
+  if (options.refreshLift && project.liftOrderId) {
+    await syncProjectProofLinesFromLift(project, auth, { forceRead: true });
+    project = await findProjectById(projectId);
+    if (!project) throw new HttpError(404, "Vendor order not found");
+  }
   const orders = await buildVendorOrdersForProject(project, new Set([vendorAccountId]), auth.actorName);
   const order = orders.find((item) => item.id === vendorOrderId);
   if (!order) throw new HttpError(404, "Vendor order not found");
@@ -6743,6 +7577,17 @@ async function submitVendorWorkspaceProof(vendorOrderId: string, lineId: string,
   const now = isoNow();
   const filename = optionalString(payload.filename) || "Vendor proof";
   const note = optionalString(payload.note) || null;
+  const proofComments = note
+    ? [
+        ...(proof.proofComments || []),
+        {
+          id: `vendor-proof-note:${proof.id}:${now}`,
+          body: note,
+          createdAt: now,
+          attachments: [],
+        },
+      ]
+    : proof.proofComments || [];
   const existingVersions =
     proof.proofObjectKey || proof.liftProofFullUrl || proof.liftProofThumbUrl
       ? mergeStoredProofVersion(proof.proofVersions || [], buildStoredProofVersionFromLine(proof, now))
@@ -6762,6 +7607,11 @@ async function submitVendorWorkspaceProof(vendorOrderId: string, lineId: string,
     vendorProofContentType: optionalString(payload.contentType) || null,
     vendorProofSizeBytes: optionalNumber(payload.sizeBytes) ?? null,
     vendorProofNote: note,
+    printTeamFeedback: note || proof.printTeamFeedback || "",
+    proofComments,
+    proofCommentCount: proofComments.length,
+    proofCommentAttachmentCount: proofComments.reduce((sum, comment) => sum + (comment.attachments?.length || 0), 0),
+    latestProofCommentAt: proofComments.length ? proofComments[proofComments.length - 1].createdAt || now : proof.latestProofCommentAt || null,
     proofVersions: existingVersions,
     updatedAt: now,
     updatedByName: auth.actorName,
@@ -7280,6 +8130,7 @@ type ProjectListItemOptions = {
   assignments?: ProjectAssignmentItem[];
   proofLines?: ProjectProofLineItem[];
   transit?: ProjectTransitApprovalItem | null;
+  productionApprovalMode?: ProductionApprovalMode;
 };
 
 const LIFT_PROOF_REVIEW_STEP = 7.02;
@@ -7289,6 +8140,14 @@ const LIFT_COMPLETED_STEP = 18;
 type ProjectLiftSyncSummary = NonNullable<ProjectListItem["liftSync"]>;
 
 function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectProofLineItem[]): ProjectLiftSyncSummary {
+  const baseOrderHealth = {
+    orderStatusRaw: project.liftOrderStatus || null,
+    orderStatusNormalized: project.liftOrderStatusNormalized || null,
+    healthStatus: project.liftOrderHealthStatus || null,
+    healthMessage: project.liftOrderHealthMessage || null,
+    lastOrderSyncAt: project.lastLiftOrderSyncAt || null,
+  };
+
   if (!project.liftOrderId) {
     return {
       phase: "not_submitted",
@@ -7298,6 +8157,33 @@ function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectP
       proofActionable: false,
       productionReference: false,
       completed: false,
+      ...baseOrderHealth,
+    };
+  }
+
+  if (project.liftOrderHealthStatus === "cancelled" || project.liftOrderStatusNormalized === "cancelled") {
+    return {
+      phase: "cancelled",
+      label: "Cancelled in Lift",
+      minLineStepNumber: null,
+      maxLineStepNumber: null,
+      proofActionable: false,
+      productionReference: false,
+      completed: false,
+      ...baseOrderHealth,
+    };
+  }
+
+  if (project.liftOrderHealthStatus === "missing" || project.liftOrderStatusNormalized === "missing") {
+    return {
+      phase: "missing",
+      label: "Lift order unavailable",
+      minLineStepNumber: null,
+      maxLineStepNumber: null,
+      proofActionable: false,
+      productionReference: false,
+      completed: false,
+      ...baseOrderHealth,
     };
   }
 
@@ -7329,6 +8215,7 @@ function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectP
       proofActionable: false,
       productionReference: true,
       completed: true,
+      ...baseOrderHealth,
     };
   }
 
@@ -7341,6 +8228,7 @@ function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectP
       proofActionable: false,
       productionReference: true,
       completed: false,
+      ...baseOrderHealth,
     };
   }
 
@@ -7353,6 +8241,7 @@ function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectP
       proofActionable: false,
       productionReference: false,
       completed: false,
+      ...baseOrderHealth,
     };
   }
 
@@ -7365,6 +8254,7 @@ function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectP
       proofActionable: true,
       productionReference: false,
       completed: false,
+      ...baseOrderHealth,
     };
   }
 
@@ -7377,6 +8267,7 @@ function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectP
       proofActionable: false,
       productionReference: false,
       completed: false,
+      ...baseOrderHealth,
     };
   }
 
@@ -7388,6 +8279,7 @@ function deriveProjectLiftSyncSummary(project: ProjectItem, proofLines: ProjectP
     proofActionable,
     productionReference: false,
     completed: false,
+    ...baseOrderHealth,
   };
 }
 
@@ -7402,6 +8294,8 @@ async function toProjectListItem(
     options.proofLines ? Promise.resolve(options.proofLines) : listProjectProofLines(project.id),
     options.transit !== undefined ? Promise.resolve(options.transit) : findProjectTransitApproval(project.id),
   ]);
+  const productionApprovalMode =
+    options.productionApprovalMode || await resolveProjectProductionApprovalMode(project, "System");
   const required = scope?.includedIds.length || 0;
   const assignmentMap = buildAssignmentMap(assignments);
   let assigned = 0;
@@ -7414,11 +8308,16 @@ async function toProjectListItem(
   const proofsRevised = proofLines.filter((line) => line.revised).length;
   const transitStatus = project.liftOrderId ? transit?.status || "not_started" : "not_required";
   const liftSync = deriveProjectLiftSyncSummary(project, proofLines);
-  const productionReady =
+  const proofsReadyForProduction =
     !!project.liftOrderId &&
+    liftSync.phase !== "cancelled" &&
+    liftSync.phase !== "missing" &&
     proofLines.length > 0 &&
-    proofsApproved === proofLines.length &&
-    transitStatus === "approved";
+    proofsApproved === proofLines.length;
+  const productionReady =
+    productionApprovalMode === "direct"
+      ? proofsReadyForProduction
+      : proofsReadyForProduction && transitStatus === "approved";
   const productionReleased = !!project.productionReleasedAt;
   const adspaceOrderNumber = getProjectAdspaceOrderNumber(project);
   const customerLogoUrl = await signCustomerLogoUrl(customer);
@@ -7469,19 +8368,33 @@ async function toProjectListItem(
       status: transitStatus,
     },
     production: {
-      policy: "hold_for_release",
+      policy: productionApprovalMode,
       ready: productionReady,
-      awaitingRelease: productionReady && !productionReleased,
+      awaitingRelease: productionApprovalMode === "hold_for_release" && productionReady && !productionReleased,
       released: productionReleased,
     },
     liftSync,
     needsAttention: !project.liftOrderId
       ? required > 0 && assigned < required
-      : !liftSync.productionReference &&
+      : liftSync.phase === "cancelled" ||
+        liftSync.phase === "missing" ||
+        !liftSync.productionReference &&
         !productionReleased &&
         (proofsPending > 0 || proofsWaiting > 0 || transitStatus === "rejected"),
     scopeIncludedCount: required,
   };
+}
+
+async function resolveProjectProductionApprovalMode(project: Pick<ProjectItem, "customerId">, actorName: string) {
+  const appSettings = hydrateAppSettings(await findAppSettings(), actorName);
+  const customerId = project.customerId;
+  const customerSettings = hydrateCustomerSettings(
+    await findCustomerSettings(customerId),
+    customerId,
+    actorName,
+    appSettings
+  );
+  return customerSettings.workflowPolicies.productionApprovalMode;
 }
 
 async function listProjectAuditEvents(projectId: string, auth: AuthContext) {
@@ -7568,7 +8481,7 @@ function defaultLiftEnvironmentConfig(environment: LiftEnvironmentKey): LiftEnvi
 
   return {
     baseUrl: "",
-    orderEndpointUrl: "http://prod-lifterp/lifterp/ords/lifterp/lift/erp/api/create_order",
+    orderEndpointUrl: "https://ltlco.lifterp.com/ords/api/lift/erp/api/create_order",
     fallbackOrderLookupUrl: "",
     orderUrlResolverUrl: "",
     customerContactListUrl:
@@ -7595,6 +8508,9 @@ function defaultCustomerSettings(customerId: string, actorName: string, appSetti
     transitApproval: {
       defaultMode: "enabled_all_orders",
       allowProjectOverride: true,
+    },
+    workflowPolicies: {
+      productionApprovalMode: appSettings.workflowPolicies.productionApprovalMode,
     },
     collaboration: {
       collaborationLinksEnabled: appSettings.shareDefaults.collaboration.enabled,
@@ -7740,6 +8656,10 @@ function hydrateCustomerSettings(
     transitApproval: {
       ...defaults.transitApproval,
       ...existing.transitApproval,
+    },
+    workflowPolicies: {
+      ...defaults.workflowPolicies,
+      ...existing.workflowPolicies,
     },
     collaboration: {
       ...defaults.collaboration,
@@ -8103,6 +9023,10 @@ async function handleAdminSettingsPatch(payload: Record<string, unknown>, auth: 
     return createCustomerVendor(customerId, payload, auth);
   }
 
+  if (customerId && vendorAction === "create_vendor_user") {
+    return createCustomerVendorUser(customerId, payload, auth);
+  }
+
   if (customerId && vendorAction === "update_vendor") {
     const vendorId = requiredString(payload, "vendorId");
     return updateCustomerVendor(customerId, vendorId, payload, auth);
@@ -8161,6 +9085,9 @@ async function getCustomerSettings(customerId: string, auth: AuthContext) {
   }
 
   const [profiles, vendors] = await Promise.all([listUserProfiles(), listCustomerVendors(customerId)]);
+  const customerVendorAccountIds = new Set(
+    vendors.map((vendor) => vendor.vendorAccountId || vendorAccountIdForCustomerVendor(vendor.customerId, vendor.id))
+  );
 
   return {
     customer: {
@@ -8179,7 +9106,10 @@ async function getCustomerSettings(customerId: string, auth: AuthContext) {
     },
     settings,
     users: profiles
-      .filter((profile) => profile.customerIds.includes(customerId))
+      .filter((profile) =>
+        profile.customerIds.includes(customerId) ||
+        (profile.vendorAccountIds || []).some((vendorAccountId) => customerVendorAccountIds.has(vendorAccountId))
+      )
       .map((profile) => ({
         id: profile.id,
         displayName: profile.displayName,
@@ -8628,6 +9558,10 @@ async function updateCustomerSettings(customerId: string, payload: Record<string
       allowProjectOverride:
         optionalBoolean(payload.allowTransitProjectOverride) ?? existing.transitApproval.allowProjectOverride,
     },
+    workflowPolicies: {
+      productionApprovalMode:
+        optionalProductionApprovalMode(payload.productionApprovalMode) ?? existing.workflowPolicies.productionApprovalMode,
+    },
     collaboration: {
       collaborationLinksEnabled:
         optionalBoolean(payload.customerShareCollaborationEnabled) ?? existing.collaboration.collaborationLinksEnabled,
@@ -8744,6 +9678,85 @@ async function updateCustomerVendor(customerId: string, vendorId: string, payloa
   };
 }
 
+async function createCustomerVendorUser(customerId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  assertCustomerAccess(auth, customerId);
+  const customer = await findCustomerById(customerId);
+  if (!customer) throw new HttpError(404, `Customer ${customerId} not found`);
+  const vendorId = requiredString(payload, "vendorId");
+  const vendor = await findCustomerVendor(customerId, vendorId);
+  if (!vendor) throw new HttpError(404, `Vendor ${vendorId} not found for customer ${customerId}`);
+  if (!vendor.isActive) throw new HttpError(400, `${vendor.name} is inactive. Activate the vendor before creating users.`);
+  if (!USER_POOL_ID) throw new HttpError(500, "User pool is not configured for vendor user creation.");
+
+  const email = requiredString(payload, "email").toLowerCase();
+  const displayName = optionalString(payload.displayName) || optionalString(payload.name) || vendor.contactName || email.split("@")[0];
+  const role = optionalString(payload.role) === "vendor_admin" ? "vendor_admin" : "vendor_user";
+  const sendInvite = optionalBoolean(payload.sendInvite) === true;
+  const vendorAccount = await ensureCustomerVendorAccount(vendor, auth.actorName);
+
+  const { user, created, temporaryPassword } = await getOrCreateCognitoAdminUser({
+    email,
+    displayName,
+    sendInvite,
+  });
+  const sub = user.UserAttributes?.find((attribute) => attribute.Name === "sub")?.Value;
+  if (!sub) throw new HttpError(502, `Could not resolve Cognito sub for ${email}`);
+
+  const existingProfile = await findUserProfileBySub(sub) || await findUserProfileByEmail(email);
+  if (existingProfile && !isVendorRole(existingProfile.role)) {
+    throw new HttpError(409, `${email} already belongs to a non-vendor Adspace user.`);
+  }
+  const vendorAccountIds = Array.from(new Set([...(existingProfile?.vendorAccountIds || []), vendorAccount.id]));
+  const now = isoNow();
+  const profile: UserProfileItem = {
+    entityType: "UserProfile",
+    id: sub,
+    cognitoSub: sub,
+    email,
+    displayName,
+    role,
+    customerIds: [],
+    vendorAccountIds,
+    isActive: true,
+    createdAt: existingProfile?.createdAt || now,
+    updatedAt: now,
+  };
+
+  await putCore(buildUserProfileRecord(profile));
+  invalidateUserCaches(profile);
+  await writeAudit(`ADMIN_SETTINGS#CUSTOMER#${customerId}`, "customer.vendor_user.created", auth, {
+    customerId,
+    vendorId: vendor.id,
+    vendorName: vendor.name,
+    vendorAccountId: vendorAccount.id,
+    userId: profile.id,
+    email: profile.email,
+    role: profile.role,
+    cognitoUserCreated: created,
+  });
+
+  return {
+    user: {
+      id: profile.id,
+      displayName: profile.displayName,
+      email: profile.email,
+      role: profile.role,
+      customerIds: profile.customerIds,
+      vendorAccountIds: profile.vendorAccountIds || [],
+      isActive: profile.isActive,
+      updatedAt: profile.updatedAt,
+    },
+    vendor: {
+      id: vendor.id,
+      customerId: vendor.customerId,
+      vendorAccountId: vendorAccount.id,
+      name: vendor.name,
+    },
+    cognitoUserCreated: created,
+    temporaryPassword: temporaryPassword || undefined,
+  };
+}
+
 async function findUserProfileBySub(cognitoSub: string) {
   const cached = readLocalCache(userProfileBySubCache.get(cognitoSub));
   if (cached.hit) return cached.value;
@@ -8763,6 +9776,46 @@ async function findUserProfileByEmail(email: string) {
   if (profile) cacheUserProfile(profile);
   else userProfileByEmailCache.set(normalizedEmail, makeLocalCacheEntry(null, USER_CACHE_TTL_MS));
   return profile;
+}
+
+async function getOrCreateCognitoAdminUser(args: {
+  email: string;
+  displayName: string;
+  sendInvite: boolean;
+}) {
+  try {
+    const existing = await cognito.send(
+      new AdminGetUserCommand({
+        UserPoolId: USER_POOL_ID,
+        Username: args.email,
+      })
+    );
+    return { user: existing, created: false, temporaryPassword: "" };
+  } catch (error) {
+    if ((error as { name?: string })?.name !== "UserNotFoundException") throw error;
+  }
+
+  const temporaryPassword = generateTemporaryPassword();
+  await cognito.send(
+    new AdminCreateUserCommand({
+      UserPoolId: USER_POOL_ID,
+      Username: args.email,
+      TemporaryPassword: temporaryPassword,
+      MessageAction: args.sendInvite ? undefined : "SUPPRESS",
+      UserAttributes: [
+        { Name: "email", Value: args.email },
+        { Name: "email_verified", Value: "true" },
+        { Name: "name", Value: args.displayName },
+      ],
+    })
+  );
+  const user = await cognito.send(
+    new AdminGetUserCommand({
+      UserPoolId: USER_POOL_ID,
+      Username: args.email,
+    })
+  );
+  return { user, created: true, temporaryPassword };
 }
 
 async function requireUserAuthContext(event: ApiEvent): Promise<AuthContext> {
@@ -9189,6 +10242,7 @@ async function touchShareParticipant(participant: ShareParticipantItem) {
 async function putShortLinkRecord(code: string, targetPath: string, expiresAt?: string | null) {
   if (!SHORT_LINKS_TABLE_NAME) return;
   const epochExpiresAt = expiresAt ? Math.floor(new Date(expiresAt).getTime() / 1000) : undefined;
+  const targetKey = targetPath.startsWith("http://") || targetPath.startsWith("https://") ? "targetUrl" : "targetPath";
   await client.send(
     new PutItemCommand({
       TableName: SHORT_LINKS_TABLE_NAME,
@@ -9196,7 +10250,7 @@ async function putShortLinkRecord(code: string, targetPath: string, expiresAt?: 
         {
           code,
           status: "active",
-          targetPath,
+          [targetKey]: targetPath,
           expiresAt: epochExpiresAt,
         },
         { removeUndefinedValues: true }
@@ -9678,6 +10732,7 @@ async function toWorkspaceCreative(creative: ProjectCreativeAssetItem, assignedI
     color: creative.color,
     contentType: creative.contentType || null,
     createdAt: creative.createdAt,
+    uploadedByName: creative.uploadedByName || null,
     thumbUrl: thumbUrl || (isImage ? assetUrl : null),
     fullUrl: assetUrl,
     assignedInventoryIds,
@@ -9708,15 +10763,20 @@ async function toProjectProofLineResponse(
   const proofThumbUrl = proof.proofThumbObjectKey
     ? await signBucketReadUrl(PROJECT_ASSETS_BUCKET_NAME, proof.proofThumbObjectKey, undefined, signedUrlCache)
     : proof.liftProofThumbUrl || proofFullUrl;
+  const proofComments = proofCommentsWithVendorNote(proof);
+  const proofCommentAttachmentCount = proofComments.reduce((sum, comment) => sum + (comment.attachments?.length || 0), 0);
+  const latestVendorOrProofCommentAt = latestProofCommentTimestamp(proofComments);
 
   return {
     lineItemId: proof.id,
     lineNumber: proof.lineNumber,
     lineStepNumber: proof.lineStepNumber ?? null,
     liftOrderLineId: proof.liftOrderLineId ?? null,
+    liftLineSnapshot: proof.liftLineSnapshot || null,
     liftProofingId: proof.liftProofingId ?? null,
     mediaVariantKey: proof.mediaVariantKey,
     mediaVariantLabel,
+    liftProductName: proof.liftProductName || null,
     productionRoute: route.productionRoute,
     vendorAccountId: proof.vendorAccountId || null,
     vendorName: proof.vendorName || null,
@@ -9736,16 +10796,16 @@ async function toProjectProofLineResponse(
     proofThumbUrl,
     proofFullUrl,
     liftProofStatus: proof.liftProofStatus || null,
+    proofApprovedBy: proof.proofApprovedBy || null,
+    proofApprovedDate: proof.proofApprovedDate || null,
+    technicalReports: proof.technicalReports || [],
     status: proof.status,
     revised: proof.revised,
-    printTeamFeedback: proof.printTeamFeedback || null,
-    proofComments: proof.proofComments || [],
-    proofCommentCount: proof.proofCommentCount || proof.proofComments?.length || 0,
-    proofCommentAttachmentCount:
-      proof.proofCommentAttachmentCount ||
-      proof.proofComments?.reduce((sum, comment) => sum + (comment.attachments?.length || 0), 0) ||
-      0,
-    latestProofCommentAt: proof.latestProofCommentAt || null,
+    printTeamFeedback: proof.printTeamFeedback || proof.vendorProofNote || null,
+    proofComments,
+    proofCommentCount: Math.max(proof.proofCommentCount || 0, proofComments.length),
+    proofCommentAttachmentCount: Math.max(proof.proofCommentAttachmentCount || 0, proofCommentAttachmentCount),
+    latestProofCommentAt: proof.latestProofCommentAt || latestVendorOrProofCommentAt || null,
     proofVersions: proof.proofVersions || [],
     vendorProofSubmittedAt: proof.vendorProofSubmittedAt || null,
     vendorProofSubmittedByName: proof.vendorProofSubmittedByName || null,
@@ -9860,7 +10920,11 @@ function buildAssignmentStateMap(assignments: ProjectAssignmentItem[]) {
 }
 
 function buildAssignedInventoryIdsByCreative(assignments: ProjectAssignmentItem[], inventory: InventoryItem[]) {
-  const labelsByInventoryId = new Map(inventory.map((item) => [item.id, item.inventoryId]));
+  const labelsByInventoryId = new Map<string, string>();
+  inventory.forEach((item) => {
+    labelsByInventoryId.set(item.id, item.inventoryId);
+    labelsByInventoryId.set(item.inventoryId, item.inventoryId);
+  });
   const byCreative = new Map<string, string[]>();
   assignments.forEach((assignment) => {
     if (!assignment.creativeId) return;
@@ -10121,6 +11185,10 @@ function optionalProjectMode(value: unknown): ProjectItem["projectMode"] | undef
   throw new HttpError(400, `Invalid project mode ${parsed}`);
 }
 
+function generateTemporaryPassword() {
+  return `As360-${randomBytes(9).toString("base64url")}!7`;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -10130,6 +11198,13 @@ function optionalCustomerTransitDefaultMode(value: unknown): CustomerSettingsIte
   if (!parsed) return undefined;
   if (parsed === "enabled_all_orders" || parsed === "manual_per_project") return parsed;
   throw new HttpError(400, `Invalid customer transit approval mode ${parsed}`);
+}
+
+function optionalProductionApprovalMode(value: unknown): ProductionApprovalMode | undefined {
+  const parsed = optionalString(value);
+  if (!parsed) return undefined;
+  if (parsed === "direct" || parsed === "hold_for_release") return parsed;
+  throw new HttpError(400, `Invalid production approval mode ${parsed}`);
 }
 
 function optionalProofStatus(value: unknown): ProofLineStatus | undefined {

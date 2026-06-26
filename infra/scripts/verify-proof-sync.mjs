@@ -344,6 +344,68 @@ runCase("AS360ProofReport flat rows map directly into proof sync", () => {
   assert.equal(merged.updatedProofs[0].printTeamFeedback, "Looks good from Lift.");
 });
 
+runCase("AS360ProofReport approval actor and detailed reports are preserved", () => {
+  const existingProofs = [
+    makeProofLine({
+      id: "proof_report_fields",
+      lineNumber: 1,
+      mediaVariantKey: "2sheet_46.2x60.2",
+      mediaVariantLabel: '2-Sheet Poster • 46.2"h x 60.2"w',
+      unitNumber: "2SHEET_46x60_48PT",
+      locations: ["PS-2-001"],
+      clientCreativeId: "creative_report_fields",
+      clientFileName: "2-Sheet.pdf",
+      liftOrderLineId: 9593148,
+    }),
+  ];
+
+  const merged = mergeProjectProofLinesFromLift({
+    existingProofs,
+    rawLines: [
+      {
+        ORDER_NUMBER: "A0224882",
+        ORDER_LINE_ID: 9593148,
+        LINE_NUMBER: 1,
+        LINE_STEP_NUMBER: 7.05,
+        PRODUCT_NAME: "2 Sheet 46.2x60.2 48pt* wLive",
+        ATTACHMENT_ID: 26369463,
+        CREATION_DATE: "2026-06-24",
+        PROOF_FILENAME: "A0224882_1_example.jpg",
+        PROOF_LINK_LOW: "https://lift.example/proofs/26369463-low.jpg",
+        PROOF_LINK_HIGH: "https://lift.example/proofs/26369463-high.jpg",
+        PROOF_APPROVAL_STATUS: "APPROVED",
+        PROOF_APPROVED_BY: "ADSPACE360",
+        PROOF_APPROVED_DATE: "2026-06-24",
+        DETAILED_REPORT: [
+          {
+            REPORT_ID: 148169,
+            DEFINITION_ID: 4092,
+            DEFINITION_LABEL: "Detailed Report",
+            REPORT_URL: "https://lift.example/reports/148169.pdf",
+          },
+        ],
+      },
+    ],
+    actorName: "Verifier",
+    syncedAt: "2026-06-24T16:00:00.000Z",
+  });
+
+  assert.equal(merged.issues.length, 0);
+  assert.equal(merged.updatedProofs[0].status, "approved");
+  assert.equal(merged.updatedProofs[0].liftProductName, "2 Sheet 46.2x60.2 48pt* wLive");
+  assert.equal(merged.updatedProofs[0].proofApprovedBy, "ADSPACE360");
+  assert.equal(merged.updatedProofs[0].proofApprovedDate, "2026-06-24");
+  assert.deepEqual(merged.updatedProofs[0].technicalReports, [
+    {
+      reportId: 148169,
+      definitionId: 4092,
+      definitionLabel: "Detailed Report",
+      reportUrl: "https://lift.example/reports/148169.pdf",
+    },
+  ]);
+  assert.equal(merged.updatedProofs[0].proofVersions[0].technicalReports[0].reportUrl, "https://lift.example/reports/148169.pdf");
+});
+
 runCase("Lift rows with canceled line step id are treated as canceled and hidden", () => {
   const existingProofs = [
     makeProofLine({

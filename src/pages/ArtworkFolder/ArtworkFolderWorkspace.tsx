@@ -13,6 +13,7 @@ import {
   type CreativeAsset,
   type InventoryItem,
 } from "../../logic/mockAssignment";
+import { resolveCreativeColor } from "../../logic/creativeColors";
 
 import "../../styles/artworkFolder.css";
 
@@ -90,6 +91,7 @@ export default function ArtworkFolderWorkspace({
     openUrl?: string;
     assetType?: "image" | "document";
   } | null>(null);
+  const [expandedInventoryVariants, setExpandedInventoryVariants] = useState<Set<string>>(() => new Set());
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const variantLookup = useMemo(() => {
@@ -98,11 +100,16 @@ export default function ArtworkFolderWorkspace({
   }, [variantCatalog]);
 
   const sections = useMemo(() => {
-    const requiredByVariant = new Map<string, number>();
+    const inventoryIdsByVariant = new Map<string, string[]>();
     inventory.forEach((item: any) => {
       if (!item.mediaVariantKey) return;
-      requiredByVariant.set(item.mediaVariantKey, (requiredByVariant.get(item.mediaVariantKey) || 0) + 1);
+      const inventoryId = String(item.id || item.inventoryId || "").trim();
+      if (!inventoryId) return;
+      const current = inventoryIdsByVariant.get(item.mediaVariantKey) || [];
+      current.push(inventoryId);
+      inventoryIdsByVariant.set(item.mediaVariantKey, current);
     });
+    inventoryIdsByVariant.forEach((ids) => ids.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })));
 
     const creativesByVariant = new Map<string, CreativeAsset[]>();
     creatives.forEach((creative) => {
@@ -111,13 +118,14 @@ export default function ArtworkFolderWorkspace({
       creativesByVariant.set(creative.mediaVariantKey, arr);
     });
 
-    const keys = new Set<string>([...Array.from(requiredByVariant.keys()), ...Array.from(creativesByVariant.keys())]);
+    const keys = new Set<string>([...Array.from(inventoryIdsByVariant.keys()), ...Array.from(creativesByVariant.keys())]);
 
     return Array.from(keys)
       .map((key) => {
         const variant = variantLookup.get(key) || variantForKey(key);
         const files = (creativesByVariant.get(key) || []).slice().sort((a, b) => a.filename.localeCompare(b.filename));
-        const requiredCount = requiredByVariant.get(key) || 0;
+        const inventoryIds = inventoryIdsByVariant.get(key) || [];
+        const requiredCount = inventoryIds.length;
         const assignedCount = files.reduce((sum, c) => sum + (c.assignedInventoryIds?.length || 0), 0);
         const uploadedCount = files.length;
         const guideTone =
@@ -157,6 +165,7 @@ export default function ArtworkFolderWorkspace({
           guideTone,
           guideLabel,
           guideBody,
+          inventoryIds,
           files,
         };
       })
@@ -180,6 +189,15 @@ export default function ArtworkFolderWorkspace({
     const prepared = prepareUploadFiles(list);
     if (prepared.length === 0) return;
     onUploadFiles({ variantKey, files: toProjectUploadFiles(prepared) });
+  }
+
+  function toggleInventoryList(variantKey: string) {
+    setExpandedInventoryVariants((current) => {
+      const next = new Set(current);
+      if (next.has(variantKey)) next.delete(variantKey);
+      else next.add(variantKey);
+      return next;
+    });
   }
 
   const content = (
@@ -260,6 +278,18 @@ export default function ArtworkFolderWorkspace({
                     <div>
                       <div className="artwork-folder-variantTitle">{section.variant.mediaName}</div>
                       <div className="artwork-folder-variantSub">{formatMediaDimensions(section.variant.w, section.variant.h)}</div>
+                      {section.inventoryIds.length > 0 ? (
+                        <div className="artwork-folder-inventoryRefs" aria-label={`Inventory IDs for ${section.variant.mediaName}`}>
+                          {section.inventoryIds.slice(0, 6).map((inventoryId) => (
+                            <span key={inventoryId}>{inventoryId}</span>
+                          ))}
+                          {section.inventoryIds.length > 6 ? (
+                            <button className="artwork-folder-inventoryToggle" type="button" onClick={() => toggleInventoryList(section.key)}>
+                              {expandedInventoryVariants.has(section.key) ? "Hide" : `+${section.inventoryIds.length - 6} more`}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                   </div>
                 </div>
                 <div className="artwork-folder-variantStats">
@@ -267,6 +297,14 @@ export default function ArtworkFolderWorkspace({
                   <span>{section.uploadedCount} file{section.uploadedCount === 1 ? "" : "s"} uploaded</span>
                 </div>
                 </div>
+
+                {expandedInventoryVariants.has(section.key) && section.inventoryIds.length > 6 ? (
+                  <div className="artwork-folder-inventoryPanel">
+                    {section.inventoryIds.map((inventoryId) => (
+                      <span key={inventoryId}>{inventoryId}</span>
+                    ))}
+                  </div>
+                ) : null}
 
                 <div className={`artwork-folder-variantGuide artwork-folder-variantGuide-${section.guideTone}`}>
                   <div className="artwork-folder-variantGuideLabel">{section.guideLabel}</div>
@@ -356,37 +394,39 @@ export default function ArtworkFolderWorkspace({
                       <span>Drag files into the upload target or use the guided uploader.</span>
                     </div>
                   ) : (
-                    section.files.map((creative) => (
-                      <div key={creative.id} className="artwork-folder-fileRow">
-                        <button
-                          className="artwork-folder-thumbBtn"
-                          type="button"
-                          onClick={() =>
-                            setLightbox({
-                              src: (creative as any).fullUrl || (creative as any).thumbUrl,
-                              fallbackSrc: (creative as any).thumbUrl,
-                              title: creative.filename,
-                              subtitle: creative.fileMeta,
-                              openUrl: (creative as any).fullUrl || (creative as any).thumbUrl,
-                              assetType: creative.fileMeta?.toUpperCase().includes("PDF") ? "document" : "image",
-                            })
-                          }
-                          title="Preview artwork"
-                        >
-                          {(creative as any).thumbUrl ? (
-                            <img src={(creative as any).thumbUrl} alt="" loading="lazy" />
-                          ) : (
-                            <span>PDF</span>
-                          )}
-                          <i style={{ background: section.variant.color }} />
-                        </button>
-                        <div className="artwork-folder-fileMain">
-                          <div className="artwork-folder-fileName" title={creative.filename}>
-                            {creative.filename}
+                    section.files.map((creative) => {
+                      const creativeColor = resolveCreativeColor(creative, { variantColor: section.variant.color });
+                      return (
+                        <div key={creative.id} className="artwork-folder-fileRow">
+                          <button
+                            className="artwork-folder-thumbBtn"
+                            type="button"
+                            onClick={() =>
+                              setLightbox({
+                                src: (creative as any).fullUrl || (creative as any).thumbUrl,
+                                fallbackSrc: (creative as any).thumbUrl,
+                                title: creative.filename,
+                                subtitle: creative.fileMeta,
+                                openUrl: (creative as any).fullUrl || (creative as any).thumbUrl,
+                                assetType: creative.fileMeta?.toUpperCase().includes("PDF") ? "document" : "image",
+                              })
+                            }
+                            title="Preview artwork"
+                          >
+                            {(creative as any).thumbUrl ? (
+                              <img src={(creative as any).thumbUrl} alt="" loading="lazy" />
+                            ) : (
+                              <span>PDF</span>
+                            )}
+                            <i style={{ background: creativeColor }} />
+                          </button>
+                          <div className="artwork-folder-fileMain">
+                            <div className="artwork-folder-fileName" title={creative.filename}>
+                              {creative.filename}
+                            </div>
+                            <div className="artwork-folder-fileMeta">{creative.fileMeta}</div>
                           </div>
-                          <div className="artwork-folder-fileMeta">{creative.fileMeta}</div>
-                        </div>
-                        <div className="artwork-folder-fileStatus">
+                          <div className="artwork-folder-fileStatus">
                           {creative.uploadState === "uploading"
                             ? "Uploading…"
                             : creative.uploadState === "processing"
@@ -418,7 +458,8 @@ export default function ArtworkFolderWorkspace({
                           ) : null}
                         </div>
                       </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>

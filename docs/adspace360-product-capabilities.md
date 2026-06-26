@@ -340,6 +340,10 @@ Capabilities:
 - route-aware references for LTL/Lift versus external Adspace-managed vendors
 - persisted proof-line route metadata for Lift-backed versus Adspace-managed production paths
 - vendor proof upload for client/admin approval
+- vendor proof notes routed through the customer proof feedback acknowledgment flow
+- vendor line art history with current client upload, current proof, timestamps, source, and technical details
+- primary/LTL pages with Lift order data and line-level Lift references
+- external vendor pages without irrelevant Lift-specific language
 - vendor package download with assigned artwork and scoped manifests
 - selected-line bulk production/shipping updates
 - market or venue ship-to destination display
@@ -350,6 +354,7 @@ Business value:
 - gives production vendors the information they need without exposing customer/admin workspaces
 - prevents vendors from interfering with artwork assignment before print submission
 - keeps LTL/Lift-backed workflows integrated while supporting external vendors that are not in Lift
+- keeps end-client proof review vendor-neutral even when production routes differ behind the scenes
 - reduces duplicate manual communication around proofs, production status, and shipping
 
 ### 16. Mobile, Tablet, Desktop, and App-Like Use

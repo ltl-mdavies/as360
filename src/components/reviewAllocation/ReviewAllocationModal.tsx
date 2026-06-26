@@ -1,5 +1,6 @@
 // src/components/reviewAllocation/ReviewAllocationModal.tsx
 import { useEffect, useMemo, useState, useRef } from "react";
+import { ArrowRight, CheckCircle2, Clock3 } from "lucide-react";
 import Portal from "../common/Portal";
 import Lightbox from "../common/Lightbox";
 import { useApiClient } from "../../api/useApiClient";
@@ -8,6 +9,7 @@ import { logProjectErrorEvent, previewProjectOrderSubmission, submitProjectOrder
 import type { MapLayer, CreativeAsset, InventoryItem as LegacyInventoryItem, MediaVariant } from "../../logic/mockAssignment";
 import { mediaLabelFromKey } from "../../logic/mockAssignment";
 import { buildDocumentThumbUrl } from "../../logic/imageUrls";
+import { resolveCreativeColor } from "../../logic/creativeColors";
 
 import { buildCreateOrderPayload } from "../../logic/orderBuilder";
 import { submitOrderToLiftStub } from "../../logic/submitOrder";
@@ -92,6 +94,7 @@ export default function ReviewAllocationModal({
   const isDemo = project.id === "demo_001";
   const isShareMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("share");
   const [submittedOrderNumber, setSubmittedOrderNumber] = useState<string | null>(null);
+  const confirmedOrderNumber = submittedOrderNumber || project.orderNumber || null;
   const isSubmittedContext = !!(project.orderNumber || submittedOrderNumber);
 
   useEffect(() => {
@@ -138,10 +141,12 @@ export default function ReviewAllocationModal({
   const [termsChecked, setTermsChecked] = useState(false);
   const [submissionNote, setSubmissionNote] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPreview, setSubmitPreview] = useState<ApiLiftPayloadPreview | null>(null);
   const [submitPreviewLoading, setSubmitPreviewLoading] = useState(false);
   const [submitPreviewError, setSubmitPreviewError] = useState<string | null>(null);
   const [submitPreviewSavedAt, setSubmitPreviewSavedAt] = useState<string | null>(null);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   
   const [redirectSeconds, setRedirectSeconds] = useState<number | null>(null);
   const redirectTimerRef = useRef<number | null>(null);
@@ -152,6 +157,12 @@ export default function ReviewAllocationModal({
 	  setRedirectSeconds(null);
 	}
 
+  function returnToHubAfterSubmit() {
+    cancelRedirect();
+    onClose();
+    onAfterSubmit?.();
+  }
+
   useEffect(() => {
     if (!isOpen) return;
     setSubmitSuccess(false);
@@ -159,6 +170,7 @@ export default function ReviewAllocationModal({
     setSubmitPreview(null);
     setSubmitPreviewError(null);
     setSubmitPreviewSavedAt(null);
+    setIsSubmitting(false);
   }, [isOpen, project.orderNumber]);
   
   useEffect(() => {
@@ -304,11 +316,10 @@ export default function ReviewAllocationModal({
       ...section,
       creatives: section.creatives.map((creative) => ({
         ...creative,
+        color: resolveCreativeColor({ id: creative.creativeId, color: creative.color }, {
+          variantColor: variantCatalog?.find((variant: MediaVariant) => variant.key === creative.mediaVariantKey)?.color,
+        }),
         assignedIds: creative.assignedIds.map((id) => inventoryDisplayIdById.get(id) || id),
-        variantColor:
-          variantCatalog?.find((variant: MediaVariant) => variant.key === creative.mediaVariantKey)?.color ||
-          creative.color ||
-          "#94a3b8",
       })),
     }));
   }, [inventoryDisplayIdById, isDemo, sections, variantCatalog]);
@@ -381,7 +392,19 @@ export default function ReviewAllocationModal({
   const canSubmit =
     completeness.isComplete &&
     termsChecked &&
+    !isSubmitting &&
     (isDemo || (!!submitPreview?.validation.ok && !submitPreviewLoading));
+  const submitBlockedReason = !canSubmitOrder
+    ? "This shared link does not allow order submission."
+    : !completeness.isComplete
+      ? "Complete all creative assignments before submitting."
+      : !termsChecked
+        ? "Review and accept the Terms of Submission to unlock submit."
+        : !isDemo && submitPreviewLoading
+          ? "Building the Lift payload preview..."
+          : !isDemo && !submitPreview?.validation.ok
+            ? "Resolve the Lift payload preview before submitting."
+            : null;
 
   async function loadSubmitPreview(persistSnapshot = false) {
     if (isDemo || isSubmittedContext) return;
@@ -416,6 +439,8 @@ export default function ReviewAllocationModal({
   }, [isDemo, isOpen, isSubmittedContext, submitPreview, submitPreviewError, submitPreviewLoading, tab]);
 
   async function performSubmitOrder() {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       let submissionResult:
       | {
@@ -493,8 +518,7 @@ export default function ReviewAllocationModal({
 		      redirectTimerRef.current = null;
 	
 		      setTimeout(() => {
-			    onClose();
-			    onAfterSubmit?.();
+			    returnToHubAfterSubmit();
 		      }, 120);
 	
 		      return null;
@@ -515,12 +539,19 @@ export default function ReviewAllocationModal({
         }, isShareMode);
       }
       alert(error instanceof Error ? error.message : "Submit failed.");
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
   function handleSubmit() {
+    if (isSubmitting) return;
     if (!canSubmitOrder) {
       demoStore.actions.pushToast("warning", "This shared link does not allow order submission");
+      return;
+    }
+    if (!canSubmit) {
+      demoStore.actions.pushToast("warning", submitBlockedReason || "Finish the submit requirements before submitting");
       return;
     }
 
@@ -588,15 +619,15 @@ export default function ReviewAllocationModal({
 
           <div className="review-tabs">
             <button className={`review-tab ${tab === "details" ? "is-active" : ""}`} type="button" onClick={() => setTab("details")}>
-              Allocation Details
+              Creative Allocation
             </button>
 
             <button className={`review-tab ${tab === "inventory" ? "is-active" : ""}`} type="button" onClick={() => setTab("inventory")}>
-              Inventory List
+              Inventory Assignments
             </button>
 
             <button className={`review-tab ${tab === "summary" ? "is-active" : ""}`} type="button" onClick={() => setTab("summary")}>
-              Summary
+              Project Summary
             </button>
 
             {completeness.isComplete && !isSubmittedContext && (
@@ -605,7 +636,7 @@ export default function ReviewAllocationModal({
                 type="button"
                 onClick={() => setTab("submit")}
               >
-                Submit Order <span className="review-tab-cta-spark" aria-hidden="true">✨</span>
+                Review &amp; Submit Order <span className="review-tab-cta-spark" aria-hidden="true">✨</span>
               </button>
             )}
 
@@ -645,24 +676,38 @@ export default function ReviewAllocationModal({
             {tab === "submit" &&
               (submitSuccess ? (
                 <div className="review-section">
-                  <div className="review-submitCard">
-                    <div className="review-submitTitle">Order submitted</div>
-                    <div className="review-submitSub">
-                      Your order has been submitted successfully. Returning to Project Hub in{" "}
-                      <strong>{redirectSeconds ?? 5}</strong> seconds.
+                  <div className="review-submitCard review-submitCard-success">
+                    <div className="review-submitIcon" aria-hidden="true">
+                      <CheckCircle2 size={26} strokeWidth={2.4} />
                     </div>
-                  </div>
-                  <div className="review-note">
-                    <div className="review-note-title">Next step</div>
-                    <div className="review-note-sub">Proofs are ready for review, and the project hub will reopen automatically.</div>
+                    <div>
+                      <div className="review-submitEyebrow">Order confirmed</div>
+                      <div className="review-submitTitle">Your order was submitted successfully.</div>
+                      <div className="review-submitSub">
+                        {confirmedOrderNumber ? (
+                          <>
+                            Lift order <strong>{confirmedOrderNumber}</strong> is linked to this Adspace project.
+                          </>
+                        ) : (
+                          "The order is linked to this Adspace project."
+                        )}{" "}
+                        Proofing is the next step.
+                      </div>
+                      <div className="review-submitMeta">
+                        <span><Clock3 size={14} /> Returning to Project Hub in <strong>{redirectSeconds ?? 5}</strong> seconds</span>
+                      </div>
+                    </div>
+                    <div className="review-submitActions">
+                      <button className="btn btn-primary" type="button" onClick={returnToHubAfterSubmit}>
+                        Return to Hub <ArrowRight size={16} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : !isSubmittedContext ? (
                 <SubmitTab
                   project={project}
                   completeness={completeness}
-                  checked={termsChecked}
-                  onCheckedChange={setTermsChecked}
                   submissionNote={submissionNote}
                   onSubmissionNoteChange={setSubmissionNote}
                   isDemo={isDemo}
@@ -679,15 +724,30 @@ export default function ReviewAllocationModal({
                 />
               ) : (
                 <div className="review-section">
-                  <div className="review-submitCard">
-                    <div className="review-submitTitle">Order already submitted</div>
-                    <div className="review-submitSub">This project is already in review. Use the allocation packet and proof workflow for the next steps.</div>
+                  <div className="review-submitCard review-submitCard-confirmed">
+                    <div className="review-submitIcon" aria-hidden="true">
+                      <CheckCircle2 size={24} strokeWidth={2.4} />
+                    </div>
+                    <div>
+                      <div className="review-submitEyebrow">Order confirmed</div>
+                      <div className="review-submitTitle">This order has been submitted.</div>
+                      <div className="review-submitSub">
+                        {confirmedOrderNumber ? (
+                          <>
+                            Lift order <strong>{confirmedOrderNumber}</strong> is linked to this project.
+                          </>
+                        ) : (
+                          "The order is linked to this Adspace project."
+                        )}{" "}
+                        Continue with proof review and production tracking from the Project Hub.
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
           </div>
 
-          <div className="review-footer">
+          <div className={["review-footer", tab === "submit" && !isSubmittedContext && !submitSuccess ? "is-submit" : ""].filter(Boolean).join(" ")}>
           {submitSuccess && redirectSeconds !== null && (
 			  <div className="review-redirectToast" role="status" aria-live="polite">
 				<div className="review-redirectToastText">
@@ -704,6 +764,28 @@ export default function ReviewAllocationModal({
             <button className="btn btn-ghost btn-soft" type="button" onClick={onClose}>
               Close
             </button>
+
+            {!isSubmittedContext && tab === "submit" && !submitSuccess && (
+              <div className={`review-submitGate ${termsChecked ? "is-ready" : "is-required"}`}>
+                <label className="review-submitGateCheck">
+                  <input
+                    type="checkbox"
+                    checked={termsChecked}
+                    onChange={(e) => setTermsChecked(e.target.checked)}
+                  />
+                  <span>
+                    <strong>Terms of Submission</strong>
+                    <small>I have read and understand the terms.</small>
+                  </span>
+                </label>
+                <div className="review-submitGateStatus" role="status" aria-live="polite">
+                  {submitBlockedReason || "Ready to submit."}
+                </div>
+                <button className="btn btn-ghost btn-soft review-submitGateReview" type="button" onClick={() => setShowTermsModal(true)}>
+                  Review Terms
+                </button>
+              </div>
+            )}
 
             {isSubmittedContext && (
               <button className="btn btn-primary btn-wide" type="button" onClick={onDownloadPdf}>
@@ -724,8 +806,8 @@ export default function ReviewAllocationModal({
             )}
 
             {!isSubmittedContext && tab === "submit" && !submitSuccess && (
-              <button className="btn btn-primary btn-wide" type="button" disabled={!canSubmit || !canSubmitOrder} onClick={handleSubmit}>
-                Submit Order
+              <button className="btn btn-primary btn-wide" type="button" disabled={!canSubmit || !canSubmitOrder || isSubmitting} onClick={handleSubmit} title={submitBlockedReason || "Submit order"}>
+                {isSubmitting ? "Submitting..." : "Submit Order"}
               </button>
             )}
           </div>
@@ -740,6 +822,15 @@ export default function ReviewAllocationModal({
             assetType={lb?.assetType}
             onClose={() => setLb(null)}
           />
+
+          {showTermsModal && (
+            <TermsOfSubmissionModal
+              termsText={project.termsOfSubmissionText}
+              checked={termsChecked}
+              onCheckedChange={setTermsChecked}
+              onClose={() => setShowTermsModal(false)}
+            />
+          )}
         </div>
       </div>
     </Portal>
@@ -900,7 +991,7 @@ function AllocationDetailsTab({
                       <span
                         className="review-thumbDot"
                         style={{
-                          background: (c as any).variantColor || c.color || "#94a3b8",
+                          background: c.color || "#94a3b8",
                         }}
                       />
                     </button>
@@ -935,13 +1026,18 @@ function AllocationDetailsTab({
                       {c.assignedCount === 0 ? (
                         <div className="review-creativeEmpty">Not assigned to any locations</div>
                       ) : (
-                        <div className="review-creativeLocs">
-                          {c.assignedIds.slice(0, 6).map((id) => (
-                            <span key={id} className="review-locChip">{id}</span>
-                          ))}
-                          {c.assignedCount > 6 && (
-                            <span className="review-locMore">+ {c.assignedCount - 6} more</span>
-                          )}
+                        <div>
+                          <div className="review-creativeQty">
+                            QTY: {c.assignedCount}
+                          </div>
+                          <div className="review-creativeLocs">
+                            {c.assignedIds.slice(0, 6).map((id) => (
+                              <span key={id} className="review-locChip">{id}</span>
+                            ))}
+                            {c.assignedCount > 6 && (
+                              <span className="review-locMore">+ {c.assignedCount - 6} more</span>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1164,8 +1260,6 @@ function AllocationSummaryTab({
 function SubmitTab({
   project,
   completeness,
-  checked,
-  onCheckedChange,
   submissionNote,
   onSubmissionNoteChange,
   isDemo,
@@ -1178,8 +1272,6 @@ function SubmitTab({
 }: {
   project: ProjectMeta;
   completeness: { assigned: number; required: number; remaining: number; isComplete: boolean };
-  checked: boolean;
-  onCheckedChange: (v: boolean) => void;
   submissionNote: string;
   onSubmissionNoteChange: (v: string) => void;
   isDemo: boolean;
@@ -1435,30 +1527,47 @@ function SubmitTab({
         </div>
       )}
 
-      <TermsOfSubmissionPanel termsText={project.termsOfSubmissionText} checked={checked} onCheckedChange={onCheckedChange} />
     </div>
   );
 }
 
-function TermsOfSubmissionPanel({
+function TermsOfSubmissionModal({
   termsText,
   checked,
   onCheckedChange,
+  onClose,
 }: {
   termsText: string;
   checked: boolean;
   onCheckedChange: (v: boolean) => void;
+  onClose: () => void;
 }) {
   return (
-    <div className="review-terms">
-      <div className="review-terms-title">Terms of Submission</div>
-      <div className="review-terms-box">
-        <div className="review-terms-scroll">{termsText}</div>
+    <div className="review-termsModalBackdrop" role="presentation" onClick={onClose}>
+      <div className="review-termsModal" role="dialog" aria-modal="true" aria-labelledby="review-terms-modal-title" onClick={(e) => e.stopPropagation()}>
+        <div className="review-termsModalHead">
+          <div>
+            <div className="review-termsModalEyebrow">Order Submission</div>
+            <div className="review-termsModalTitle" id="review-terms-modal-title">Terms of Submission</div>
+          </div>
+          <button className="btn btn-ghost btn-soft" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className="review-termsModalBody">{termsText}</div>
+        <div className="review-termsModalFoot">
+          <label className="review-submitGateCheck">
+            <input type="checkbox" checked={checked} onChange={(e) => onCheckedChange(e.target.checked)} />
+            <span>
+              <strong>I have read and understand the Terms of Submission.</strong>
+              <small>This unlocks the final submit action.</small>
+            </span>
+          </label>
+          <button className="btn btn-primary btn-wide" type="button" onClick={onClose}>
+            Done
+          </button>
+        </div>
       </div>
-      <label className="review-terms-check">
-        <input type="checkbox" checked={checked} onChange={(e) => onCheckedChange(e.target.checked)} />
-        <span>I have read and understand the Terms of Submission.</span>
-      </label>
     </div>
   );
 }
