@@ -159,6 +159,21 @@ Internal/admin proof views now use persisted route metadata for route-aware grou
 - Internal route badges are shown only to proof editors/operators.
 - Customer/end-client proof references remain organized around Adspace proof lines and do not expose vendor names.
 
+## Proof Feedback Experience
+
+Proof comments and attachments from Lift-backed lines and external vendor proof submissions follow one customer-facing feedback pattern.
+
+Current behavior:
+
+- Proof file receipt banners show proof-file metadata only: received timestamp and clean filename.
+- Vendor proof comments do not display in the receipt banner; they route to the proof feedback thread.
+- Feedback threads open in a centered modal/popover on desktop and mobile.
+- The customer must open the feedback before the acknowledgement checkbox is shown.
+- Unchecking acknowledgement resets the viewed state and hides approval/revision actions again.
+- Before acknowledgement, the feedback gate is compact and centered. After acknowledgement, the full action dock appears with line note and proof action buttons.
+
+This keeps the proofing experience vendor-neutral while still ensuring comments and attachments are reviewed before approval or revision actions.
+
 ## Packages
 
 Vendor package generation is scoped to assigned lines.

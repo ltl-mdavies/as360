@@ -296,13 +296,25 @@
 
   .proof-commandActions,
   .proof-commandActions .btn,
+  .proof-commandSyncStatus,
   .proof-commandQueueStatus{
     width:100%;
   }
 
+  .proof-commandActions{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:7px;
+  }
+
   .proof-commandActions .btn,
+  .proof-commandSyncStatus,
   .proof-commandQueueStatus{
     justify-content:center;
+  }
+
+  .proof-commandSyncStatus{
+    max-width:none;
   }
 
   .proof-workspace.is-command-header .proof-layout{
@@ -1821,19 +1833,23 @@ html[data-theme="dark"] .proof-techClose{
   inset: 0;
   z-index: 86;
   display:flex;
-  justify-content:flex-end;
+  align-items:center;
+  justify-content:center;
+  padding: 32px;
   background: rgba(15,23,42,.28);
   backdrop-filter: blur(10px);
+  overflow:auto;
 }
 
 .proof-feedbackDrawer{
-  width: min(520px, 94vw);
-  height: 100%;
+  width: min(760px, calc(100vw - 48px));
+  max-height: min(86dvh, 820px);
   overflow:auto;
-  border-left: 1px solid rgba(226,232,240,.88);
+  border: 1px solid rgba(226,232,240,.92);
+  border-radius: 24px;
   background: rgba(255,255,255,.97);
-  box-shadow: -28px 0 80px rgba(15,23,42,.20);
-  padding: 22px;
+  box-shadow: 0 28px 90px rgba(15,23,42,.26);
+  padding: 24px;
 }
 
 .proof-feedbackDrawerHead{
@@ -2185,6 +2201,64 @@ html[data-theme="dark"] .proof-techClose{
   font-weight: 720;
 }
 
+@media (max-width: 720px){
+  .proof-feedbackScrim{
+    align-items:flex-start;
+    padding: 14px;
+  }
+
+  .proof-feedbackDrawer{
+    width: 100%;
+    max-height: calc(100dvh - 28px);
+    border-radius: 22px;
+    padding: 18px;
+  }
+
+  .proof-feedbackDrawerHead{
+    gap: 12px;
+    padding-bottom: 14px;
+  }
+
+  .proof-feedbackDrawerHead .btn{
+    min-height: 40px;
+    padding-inline: 14px;
+  }
+
+  .proof-feedbackTitle{
+    font-size: 22px;
+    line-height: 1.08;
+  }
+
+  .proof-feedbackMeta{
+    gap: 6px;
+  }
+
+  .proof-feedbackCurrent{
+    padding: 12px;
+    border-radius: 17px;
+  }
+
+  .proof-feedbackSectionTop{
+    flex-direction:column;
+  }
+
+  .proof-feedbackSectionTop > .chip{
+    align-self:flex-start;
+  }
+
+  .proof-feedbackProofIntro{
+    width:100%;
+  }
+
+  .proof-feedbackComment{
+    padding: 12px;
+  }
+
+  .proof-feedbackAttachments{
+    grid-template-columns:1fr;
+  }
+}
+
 .proof-historyScrim{
   position: fixed;
   inset: 0;
@@ -2506,8 +2580,11 @@ html[data-theme="dark"] .proof-techClose{
 }
 
 .proof-actionDock.has-feedback.is-locked{
-  grid-template-columns: minmax(360px, 620px) 1fr;
-  min-height: 106px;
+  width: min(calc(100% - 36px), 860px);
+  grid-template-columns: minmax(0, 620px);
+  justify-content:center;
+  min-height: 0;
+  margin: 4px auto 18px;
 }
 
 html[data-theme="dark"] .proof-actionDock{
@@ -2569,7 +2646,9 @@ html[data-theme="dark"] .proof-actionDock{
 }
 
 .proof-actionDock.is-locked .proof-dockDecision{
+  width: 100%;
   max-width: 620px;
+  justify-self:center;
 }
 
 .proof-dockFeedback{
@@ -2645,17 +2724,20 @@ html[data-theme="dark"] .proof-actionDock{
 }
 
 .proof-feedbackLink{
-  align-self:flex-end;
-  width: fit-content;
+  align-self:stretch;
+  width: 100%;
   border: 1px solid rgba(217,119,6,.18);
   background: rgba(255,255,255,.86);
   color: #9a3412;
-  border-radius: 999px;
-  min-height: 28px;
-  padding: 0 11px;
+  border-radius: 12px;
+  min-height: 40px;
+  padding: 0 14px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
   font-family: inherit;
-  font-size: 11px;
-  font-weight: 760;
+  font-size: 12px;
+  font-weight: 820;
   cursor:pointer;
   white-space: nowrap;
   box-shadow: 0 1px 0 rgba(255,255,255,.72), 0 8px 16px rgba(154,52,18,.06);
@@ -2673,6 +2755,18 @@ html[data-theme="dark"] .proof-actionDock{
   flex-wrap:wrap;
   gap: 5px;
   min-width: 0;
+}
+
+.proof-feedbackMetaLine{
+  margin-top: 5px;
+  color: color-mix(in srgb, #9a3412 74%, var(--muted));
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.proof-dockFeedback.is-reviewed .proof-feedbackMetaLine{
+  color: color-mix(in srgb, #15803d 78%, var(--muted));
 }
 
 .proof-feedbackMetaChip{
@@ -2694,9 +2788,9 @@ html[data-theme="dark"] .proof-actionDock{
   align-items:center;
   gap: 10px;
   min-width: 0;
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
-  padding: 7px 9px;
+  padding: 9px 10px;
   border-radius: 12px;
   border: 1px solid rgba(217,119,6,.22);
   background: rgba(255,255,255,.74);
@@ -2712,6 +2806,11 @@ html[data-theme="dark"] .proof-actionDock{
 
 .proof-dockAck span{
   min-width: 0;
+}
+
+.proof-dockFeedback.is-reviewed .proof-dockAck{
+  border-color: rgba(22,163,74,.18);
+  color: #15803d;
 }
 
 .proof-dockHint{
@@ -4043,7 +4142,7 @@ html[data-theme="dark"] .proof-mobileCard{
   }
 
   .proof-mobileFeedback .proof-feedbackLink{
-    margin-left: 34px;
+    margin-left: 0;
   }
 
   .proof-feedbackMetaChip{
@@ -4434,8 +4533,8 @@ html[data-theme="dark"] .proof-mobileCard{
   }
 
   .proof-feedbackLink{
-    min-height: 26px;
-    padding-inline: 9px;
-    font-size: 10.5px;
+    min-height: 36px;
+    padding-inline: 10px;
+    font-size: 11.5px;
   }
 }

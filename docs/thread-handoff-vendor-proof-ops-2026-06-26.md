@@ -1,15 +1,16 @@
-# Vendor Proof Ops Milestone Handoff: June 26, 2026
+# Vendor Proof Ops Milestone Handoff: June 26-27, 2026
 
-This handoff captures the Vendor Workspace and Proof Approval milestone reached on June 26, 2026.
+This handoff captures the Vendor Workspace and Proof Approval milestone reached on June 26, 2026, plus the June 27 mobile Proof Approval feedback polish.
 
 ## Next Thread Starting Point
 
 Use this document to start the next clean Codex thread. The repository and live AWS app were updated after the proofing milestone:
 
-- Latest pushed commit: `431963f Add vendor proof ops workspace milestone`.
+- Latest pushed milestone commit before June 27 mobile polish: `431963f Add vendor proof ops workspace milestone`.
 - Branch: `main`, pushed to `origin/main`.
-- Live frontend was synced to the production S3 bucket and CloudFront invalidation completed.
+- Live frontend was synced to the production S3 bucket and CloudFront invalidation completed after the milestone.
 - Proofing MVP is working for the current pilot order.
+- June 27 mobile Proof Approval feedback polish should be included in the next live deploy/commit if this document is being read before that deployment.
 - Production/shipping sync has not been validated yet and should be the next major test/development area.
 
 Recommended first prompt for the next thread:
@@ -57,6 +58,10 @@ Do not store test passwords or temporary login credentials in docs.
 - Client-facing proof review remains vendor-neutral.
 - Lift-backed proof comments and external vendor proof comments use the same review/acknowledgment pattern.
 - Proof received metadata displays file receipt information and clean filenames only, not vendor comments.
+- Mobile Proof Approval header layout was tightened so proof sync status and the refresh action have clearer spacing; the refresh action gets its own full-width row at smaller breakpoints.
+- Proof feedback now opens in a centered feedback modal/popover rather than a right-side drawer, with mobile sizing and attachment layout tuned for first-class phone use.
+- The proof feedback gate now prioritizes a full-width "View Feedback" action. The acknowledgement checkbox is hidden until the user opens the feedback modal, and unchecking acknowledgement resets the viewed state.
+- Before acknowledgement, the feedback gate is compact and centered instead of spanning the full action dock. After acknowledgement, the full action dock expands back to show the line note and approval/revision actions.
 - Revised artwork upload stages files before submit, supports cancel/clear, and shows pending action state.
 - Stale proof-line updates trigger a data refresh/retry path instead of blindly sending outdated identifiers.
 - Proof file receipt banners now show proof file received timestamp and clean filename.
@@ -92,6 +97,7 @@ Do not store test passwords or temporary login credentials in docs.
 - External vendor revised-art and replacement proof flow completed successfully after stale-proof refresh handling.
 - Customer approval, revision, and comment flows were exercised across primary/LTL and external vendor lines.
 - External vendor proof upload plus vendor comment appeared to the client as a normal proof feedback workflow, not as a vendor-specific experience.
+- Mobile feedback review was visually checked after the June 27 polish: the compact locked feedback gate, expanded acknowledged action dock, centered feedback modal, and mobile header refresh layout behaved as intended in the local browser.
 
 ## Known Remaining Test Gap
 

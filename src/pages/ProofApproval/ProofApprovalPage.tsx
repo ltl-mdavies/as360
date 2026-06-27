@@ -311,13 +311,14 @@ function formatFeedbackMeta(line: ProofLineMock | undefined) {
   const pieces = [];
   if (summary.commentCount) pieces.push(`${summary.commentCount} comment${summary.commentCount === 1 ? "" : "s"}`);
   if (summary.attachmentCount) pieces.push(`${summary.attachmentCount} attachment${summary.attachmentCount === 1 ? "" : "s"}`);
-  if (summary.latestAt) pieces.push(formatHistoryDate(summary.latestAt));
+  if (summary.latestAt) pieces.push(`Latest ${formatHistoryDate(summary.latestAt)}`);
   return pieces.join(" · ");
 }
 
 function FeedbackGate({
   line,
   acknowledged,
+  hasViewedFeedback,
   disabled,
   mobile = false,
   onOpen,
@@ -325,13 +326,14 @@ function FeedbackGate({
 }: {
   line: ProofLineMock;
   acknowledged: boolean;
+  hasViewedFeedback: boolean;
   disabled?: boolean;
   mobile?: boolean;
   onOpen: () => void;
   onAcknowledge: (checked: boolean) => void;
 }) {
-  const summary = getFeedbackSummary(line);
-  const latestLabel = summary.latestAt ? formatHistoryDate(summary.latestAt) : null;
+  const feedbackMeta = formatFeedbackMeta(line);
+  const shouldShowAcknowledgement = hasViewedFeedback || acknowledged;
 
   return (
     <div className={`proof-dockFeedback ${mobile ? "proof-mobileFeedback" : ""} ${acknowledged ? "is-reviewed" : ""}`}>
@@ -341,37 +343,23 @@ function FeedbackGate({
           <div className="proof-dockFeedbackTitle">
             {acknowledged ? "Feedback reviewed" : "Print feedback requires review"}
           </div>
-          <div className="proof-feedbackMeta" aria-label={formatFeedbackMeta(line)}>
-            {summary.commentCount ? (
-              <span className="proof-feedbackMetaChip">
-                {summary.commentCount} comment{summary.commentCount === 1 ? "" : "s"}
-              </span>
-            ) : null}
-            {summary.attachmentCount ? (
-              <span className="proof-feedbackMetaChip">
-                {summary.attachmentCount} attachment{summary.attachmentCount === 1 ? "" : "s"}
-              </span>
-            ) : null}
-            {latestLabel ? (
-              <span className="proof-feedbackMetaChip">
-                Latest {latestLabel}
-              </span>
-            ) : null}
-          </div>
+          {feedbackMeta ? <div className="proof-feedbackMetaLine">{feedbackMeta}</div> : null}
         </div>
-        <button className="proof-feedbackLink" type="button" onClick={onOpen}>
-          Review feedback
-        </button>
       </div>
-      <label className={`proof-dockAck ${mobile ? "proof-mobileAck" : ""}`}>
-        <input
-          type="checkbox"
-          checked={acknowledged}
-          disabled={disabled}
-          onChange={(event) => onAcknowledge(event.currentTarget.checked)}
-        />
-        <span>I reviewed all print feedback and attachments.</span>
-      </label>
+      <button className="proof-feedbackLink" type="button" onClick={onOpen}>
+        {hasViewedFeedback ? "View Feedback Again" : "View Feedback"}
+      </button>
+      {shouldShowAcknowledgement ? (
+        <label className={`proof-dockAck ${mobile ? "proof-mobileAck" : ""}`}>
+          <input
+            type="checkbox"
+            checked={acknowledged}
+            disabled={disabled}
+            onChange={(event) => onAcknowledge(event.currentTarget.checked)}
+          />
+          <span>I reviewed the feedback and attachments.</span>
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -850,6 +838,7 @@ export default function ProofApprovalPage() {
   const [showRevisionUploader, setShowRevisionUploader] = useState(false);
   const [isRevisionDragActive, setIsRevisionDragActive] = useState(false);
   const [feedbackAcknowledgedByLine, setFeedbackAcknowledgedByLine] = useState<Record<string, boolean>>({});
+  const [feedbackViewedByLine, setFeedbackViewedByLine] = useState<Record<string, boolean>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
   const [feedbackDrawerOpen, setFeedbackDrawerOpen] = useState(false);
   const [feedbackSortOrder, setFeedbackSortOrder] = useState<FeedbackSortOrder>("newest");
@@ -887,6 +876,7 @@ export default function ProofApprovalPage() {
   const selectedStagedRevision = selected ? stagedRevisionByLine[selected.lineItemId] || null : null;
   const hasPrintFeedback = selectedFeedbackSummary.hasFeedback;
   const feedbackAcknowledged = selected ? feedbackAcknowledgedByLine[feedbackAckKey(selected)] === true : false;
+  const feedbackViewed = selected ? feedbackViewedByLine[feedbackAckKey(selected)] === true : false;
   const proofHistory = useMemo(() => buildProofHistory(selected), [selected]);
 
   useEffect(() => {
@@ -1131,6 +1121,10 @@ export default function ProofApprovalPage() {
     return feedbackAcknowledgedByLine[feedbackAckKey(line)] === true;
   }
 
+  function hasLineFeedbackBeenViewed(line: ProofLineMock) {
+    return feedbackViewedByLine[feedbackAckKey(line)] === true;
+  }
+
   function lineRequiresFeedbackAcknowledgement(line: ProofLineMock) {
     return (
       getFeedbackSummary(line).hasFeedback &&
@@ -1370,14 +1364,33 @@ export default function ProofApprovalPage() {
   }
 
   function acknowledgeFeedbackForLine(line: ProofLineMock, acknowledged: boolean) {
+    const key = feedbackAckKey(line);
     setFeedbackAcknowledgedByLine((prev) => ({
       ...prev,
-      [feedbackAckKey(line)]: acknowledged,
+      [key]: acknowledged,
     }));
+    if (!acknowledged) {
+      setFeedbackViewedByLine((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
   }
 
   function clearFeedbackAcknowledgement(line: ProofLineMock | string) {
     setFeedbackAcknowledgedByLine((prev) => {
+      const next = { ...prev };
+      if (typeof line === "string") {
+        Object.keys(next).forEach((key) => {
+          if (key.startsWith(`${line}:`)) delete next[key];
+        });
+      } else {
+        delete next[feedbackAckKey(line)];
+      }
+      return next;
+    });
+    setFeedbackViewedByLine((prev) => {
       const next = { ...prev };
       if (typeof line === "string") {
         Object.keys(next).forEach((key) => {
@@ -1499,6 +1512,10 @@ export default function ProofApprovalPage() {
 
   function openFeedbackDrawer(line: ProofLineMock) {
     setSelectedId(line.lineItemId);
+    setFeedbackViewedByLine((prev) => ({
+      ...prev,
+      [feedbackAckKey(line)]: true,
+    }));
     setFeedbackDrawerOpen(true);
   }
 
@@ -2434,6 +2451,7 @@ export default function ProofApprovalPage() {
                     <FeedbackGate
                       line={l}
                       acknowledged={isLineFeedbackAcknowledged(l)}
+                      hasViewedFeedback={hasLineFeedbackBeenViewed(l)}
                       disabled={!canEditProofs}
                       mobile
                       onOpen={() => openFeedbackDrawer(l)}
@@ -2792,9 +2810,10 @@ export default function ProofApprovalPage() {
                       <FeedbackGate
                         line={selected}
                         acknowledged={feedbackAcknowledged}
+                        hasViewedFeedback={feedbackViewed}
                         disabled={!canEditProofs}
                         mobile
-                        onOpen={() => setFeedbackDrawerOpen(true)}
+                        onOpen={() => openFeedbackDrawer(selected)}
                         onAcknowledge={(checked) => acknowledgeFeedbackForLine(selected, checked)}
                       />
                     ) : selectedIsWaiting ? (
@@ -3091,8 +3110,9 @@ export default function ProofApprovalPage() {
                     <FeedbackGate
                       line={selected}
                       acknowledged={feedbackAcknowledged}
+                      hasViewedFeedback={feedbackViewed}
                       disabled={!canEditProofs}
-                      onOpen={() => setFeedbackDrawerOpen(true)}
+                      onOpen={() => openFeedbackDrawer(selected)}
                       onAcknowledge={(checked) => selected && acknowledgeFeedbackForLine(selected, checked)}
                     />
                   ) : selectedIsWaiting ? (
