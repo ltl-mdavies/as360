@@ -1726,6 +1726,10 @@ html[data-theme="dark"] .proof-techClose{
   margin: -3px 14px 13px;
 }
 
+.proof-mobileProof + .proof-receivedMeta{
+  margin: 12px 14px 13px;
+}
+
 .proof-proofActions{
   margin-top: 0;
   flex: 0 0 auto;
@@ -3939,6 +3943,10 @@ html[data-theme="dark"] .proof-mobileCard{
   .proof-mobileProof{
     min-height: 220px;
   }
+
+  .proof-mobileUpload + .proof-clientUploadMeta{
+    display:none;
+  }
 }
 
 @media (max-width: 520px){
@@ -4032,6 +4040,10 @@ html[data-theme="dark"] .proof-mobileCard{
   .proof-mobileProof{
     min-height: 200px;
     aspect-ratio: 16 / 10;
+  }
+
+  .proof-mobileProof + .proof-receivedMeta{
+    margin: 10px 12px 12px;
   }
 
   .proof-mobileProofFooter{

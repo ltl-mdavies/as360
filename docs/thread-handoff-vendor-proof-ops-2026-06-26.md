@@ -1,6 +1,6 @@
 # Vendor Proof Ops Milestone Handoff: June 26-27, 2026
 
-This handoff captures the Vendor Workspace and Proof Approval milestone reached on June 26, 2026, plus the June 27 mobile Proof Approval feedback polish.
+This handoff captures the Vendor Workspace and Proof Approval milestone reached on June 26, 2026, plus the June 27 mobile Proof Approval feedback and metadata polish.
 
 ## Next Thread Starting Point
 
@@ -10,7 +10,8 @@ Use this document to start the next clean Codex thread. The repository and live 
 - Branch: `main`, pushed to `origin/main`.
 - Live frontend was synced to the production S3 bucket and CloudFront invalidation completed after the milestone.
 - Proofing MVP is working for the current pilot order.
-- June 27 mobile Proof Approval feedback polish should be included in the next live deploy/commit if this document is being read before that deployment.
+- June 27 mobile Proof Approval feedback polish was deployed in `93ca796 Refine proof feedback mobile flow`.
+- June 27 mobile metadata polish hides the redundant client-upload filename card on phone layouts and insets the proof-file receipt banner so mobile proof cards read cleaner.
 - Production/shipping sync has not been validated yet and should be the next major test/development area.
 
 Recommended first prompt for the next thread:
@@ -66,6 +67,8 @@ Do not store test passwords or temporary login credentials in docs.
 - Stale proof-line updates trigger a data refresh/retry path instead of blindly sending outdated identifiers.
 - Proof file receipt banners now show proof file received timestamp and clean filename.
 - Client upload metadata is displayed separately from proof metadata.
+- Mobile proof cards hide the redundant client-upload metadata panel because the filename is already present in the client-upload preview card.
+- Mobile proof-file receipt banners are inset within the proof card instead of sitting directly against the card edges.
 - External vendor proof comments no longer display inside the proof file receipt banner; they route through the feedback gate.
 
 ### Lift Integration
