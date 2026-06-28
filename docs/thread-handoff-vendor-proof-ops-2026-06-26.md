@@ -72,6 +72,7 @@ Do not store test passwords or temporary login credentials in docs.
 - Mobile proof cards hide the redundant client-upload metadata panel because the filename is already present in the client-upload preview card.
 - Mobile proof-file receipt banners are inset within the proof card instead of sitting directly against the card edges.
 - Mobile Proof Approval header counters keep Pending and Revised compact while Approved uses a full-width row, matching the way Creative Assignment promotes Coverage as the primary mobile KPI.
+- Short landscape phone viewports now use the mobile Proof Approval feed instead of the tablet split layout, preventing the proof queue and active proof card from clipping in iPhone landscape.
 - External vendor proof comments no longer display inside the proof file receipt banner; they route through the feedback gate.
 - Shared map workspaces now handle touch pan and pinch zoom directly, so View on Map, Creative Assignment, Inventory Scope, and Venue placement previews keep pin markers at a stable screen size while the map itself zooms.
 

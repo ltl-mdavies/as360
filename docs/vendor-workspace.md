@@ -174,6 +174,7 @@ Current behavior:
 - On mobile Proof Approval cards, the duplicate client-upload filename panel is hidden because the preview card already carries that filename.
 - Mobile proof-file receipt metadata is inset within the card so the timestamp and filename read as supporting metadata rather than an edge-to-edge alert.
 - Mobile Proof Approval header counters keep Pending and Revised compact while Approved uses its own full-width row as the primary proof KPI, matching the Coverage emphasis used in Creative Assignment.
+- Short landscape phone viewports use the mobile Proof Approval feed instead of the tablet split layout so the proof queue and active proof card remain usable in iPhone landscape.
 
 This keeps the proofing experience vendor-neutral while still ensuring comments and attachments are reviewed before approval or revision actions.
 
