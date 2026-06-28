@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  Touch as ReactTouch,
+  TouchEvent as ReactTouchEvent,
+  TouchList as ReactTouchList,
+  WheelEvent as ReactWheelEvent,
+} from "react";
 import "./sharedMapWorkspace.css";
 
 type SharedMapWorkspaceOptions = {
@@ -29,6 +35,8 @@ export function useSharedMapWorkspace({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const touchPanStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const pinchStartRef = useRef<{ distance: number; zoom: number } | null>(null);
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -131,6 +139,8 @@ export function useSharedMapWorkspace({
     if (!interactionLocked) return;
     setIsPanning(false);
     panStartRef.current = null;
+    touchPanStartRef.current = null;
+    pinchStartRef.current = null;
   }, [interactionLocked]);
 
   useEffect(() => {
@@ -150,6 +160,8 @@ export function useSharedMapWorkspace({
     setZoom(1);
     setPan({ x: 0, y: 0 });
     panStartRef.current = null;
+    touchPanStartRef.current = null;
+    pinchStartRef.current = null;
 
     const tryFinalize = () => finalizeLoadedMap();
 
@@ -239,6 +251,74 @@ export function useSharedMapWorkspace({
     panStartRef.current = null;
   }
 
+  function getTouchPoint(touch: ReactTouch) {
+    return { x: touch.clientX, y: touch.clientY };
+  }
+
+  function getTouchDistance(touches: ReactTouchList) {
+    if (touches.length < 2) return 0;
+    const first = getTouchPoint(touches[0]);
+    const second = getTouchPoint(touches[1]);
+    return Math.hypot(second.x - first.x, second.y - first.y);
+  }
+
+  function onTouchStartMap(event: ReactTouchEvent<HTMLDivElement>) {
+    if (!enabled || interactionLocked) return;
+    if ((event.target as HTMLElement | null)?.closest(".pin")) return;
+
+    if (event.touches.length >= 2) {
+      event.preventDefault();
+      setIsPanning(false);
+      touchPanStartRef.current = null;
+      pinchStartRef.current = { distance: getTouchDistance(event.touches), zoom };
+      return;
+    }
+
+    if (event.touches.length === 1) {
+      event.preventDefault();
+      const touch = getTouchPoint(event.touches[0]);
+      setIsPanning(true);
+      touchPanStartRef.current = { x: touch.x, y: touch.y, panX: pan.x, panY: pan.y };
+      pinchStartRef.current = null;
+    }
+  }
+
+  function onTouchMoveMap(event: ReactTouchEvent<HTMLDivElement>) {
+    if (!enabled || interactionLocked) return;
+
+    if (event.touches.length >= 2 && pinchStartRef.current) {
+      event.preventDefault();
+      const distance = getTouchDistance(event.touches);
+      if (distance <= 0 || pinchStartRef.current.distance <= 0) return;
+      const factor = distance / pinchStartRef.current.distance;
+      setZoom(clampMapZoom(pinchStartRef.current.zoom * factor, minZoom, maxZoom));
+      return;
+    }
+
+    if (event.touches.length === 1 && touchPanStartRef.current) {
+      event.preventDefault();
+      const touch = getTouchPoint(event.touches[0]);
+      setPan({
+        x: touchPanStartRef.current.panX + touch.x - touchPanStartRef.current.x,
+        y: touchPanStartRef.current.panY + touch.y - touchPanStartRef.current.y,
+      });
+    }
+  }
+
+  function onTouchEndMap(event: ReactTouchEvent<HTMLDivElement>) {
+    if (event.touches.length === 1) {
+      const touch = getTouchPoint(event.touches[0]);
+      touchPanStartRef.current = { x: touch.x, y: touch.y, panX: pan.x, panY: pan.y };
+      pinchStartRef.current = null;
+      setIsPanning(true);
+      return;
+    }
+
+    setIsPanning(false);
+    touchPanStartRef.current = null;
+    pinchStartRef.current = null;
+  }
+
   function zoomIn() {
     setZoom((current) => clampMapZoom(current * 1.08, minZoom, maxZoom));
   }
@@ -275,6 +355,9 @@ export function useSharedMapWorkspace({
     onMouseDownMap,
     onMouseMoveMap,
     onMouseUpMap,
+    onTouchStartMap,
+    onTouchMoveMap,
+    onTouchEndMap,
     zoomIn,
     zoomOut,
     clientPointToNormalized,

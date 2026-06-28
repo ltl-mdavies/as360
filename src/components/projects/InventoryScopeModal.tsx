@@ -75,6 +75,9 @@ export default function InventoryScopeModal({
     onMouseDownMap,
     onMouseMoveMap,
     onMouseUpMap,
+    onTouchStartMap,
+    onTouchMoveMap,
+    onTouchEndMap,
   } = useSharedMapWorkspace({
     mapSrc: activeMap?.imageUrl ?? null,
     activeKey: activeMapId,
@@ -297,6 +300,10 @@ export default function InventoryScopeModal({
                 onMouseMove={onMouseMoveMap}
                 onMouseUp={onMouseUpMap}
                 onMouseLeave={onMouseUpMap}
+                onTouchStart={onTouchStartMap}
+                onTouchMove={onTouchMoveMap}
+                onTouchEnd={onTouchEndMap}
+                onTouchCancel={onTouchEndMap}
               >
                 <div
                   className="map-transform"

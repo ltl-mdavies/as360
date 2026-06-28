@@ -166,6 +166,7 @@ Capabilities:
 - creative rail with upload, replace, delete, assignment count, and variant details
 - assign mode for selecting locations that match a creative's media variant
 - visual map pin modals with inventory specs, notes, and assignment controls
+- stable-size map pins during desktop zoom and mobile pinch zoom so zooming reveals map detail without obscuring the exact placement point
 - List View row actions for Details, View Map, and Clear
 - Review Allocation workflow before order submission
 - read-only review mode after submission

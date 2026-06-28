@@ -454,6 +454,9 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
     onMouseDownMap,
     onMouseMoveMap,
     onMouseUpMap,
+    onTouchStartMap,
+    onTouchMoveMap,
+    onTouchEndMap,
   } = useSharedMapWorkspace({
     mapSrc: assignView === "map" ? activeMap?.imageUrl : undefined,
     activeKey: `${assignView}:${activeMapId}`,
@@ -543,6 +546,9 @@ useEffect(() => {
     onMouseDownMap: onMouseDownModalMap,
     onMouseMoveMap: onMouseMoveModalMap,
     onMouseUpMap: onMouseUpModalMap,
+    onTouchStartMap: onTouchStartModalMap,
+    onTouchMoveMap: onTouchMoveModalMap,
+    onTouchEndMap: onTouchEndModalMap,
   } = useSharedMapWorkspace({
     mapSrc: mapModalMap?.imageUrl,
     activeKey: `list-map-modal:${mapModalMap?.id || ""}:${mapModalInventoryId || ""}`,
@@ -1804,6 +1810,10 @@ useEffect(() => {
 					  onMouseMove={onMouseMoveMap}
 					  onMouseUp={onMouseUpMap}
 					  onMouseLeave={onMouseUpMap}
+					  onTouchStart={onTouchStartMap}
+					  onTouchMove={onTouchMoveMap}
+					  onTouchEnd={onTouchEndMap}
+					  onTouchCancel={onTouchEndMap}
 					  onClick={() => {
 						if (!isPanning) closePopover();
 					  }}
@@ -2651,6 +2661,10 @@ useEffect(() => {
                 onMouseMove={onMouseMoveModalMap}
                 onMouseUp={onMouseUpModalMap}
                 onMouseLeave={onMouseUpModalMap}
+                onTouchStart={onTouchStartModalMap}
+                onTouchMove={onTouchMoveModalMap}
+                onTouchEnd={onTouchEndModalMap}
+                onTouchCancel={onTouchEndModalMap}
               >
                 <div
                   className="map-transform"

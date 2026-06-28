@@ -202,6 +202,7 @@ Confirmed behaviors:
 - every active inventory item must also have a placed pin
 - drag from rail to map should place the pin
 - replacing a map image must preserve pin coordinates
+- zooming or pinch-zooming a map should reveal more layout detail while keeping the rendered pin size stable, so the pin remains precise and does not cover nearby labels
 
 ### Recommendation
 

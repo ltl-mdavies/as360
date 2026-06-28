@@ -2440,6 +2440,8 @@ html[data-theme="dark"] .pin-pop-selectPill{
   position: relative;
   overflow: hidden;
   cursor: grab;
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .assign-mapCanvas:active{

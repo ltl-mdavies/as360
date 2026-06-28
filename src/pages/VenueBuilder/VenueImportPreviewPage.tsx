@@ -876,6 +876,9 @@ export default function VenueImportPreviewPage() {
     onMouseDownMap,
     onMouseMoveMap,
     onMouseUpMap,
+    onTouchStartMap,
+    onTouchMoveMap,
+    onTouchEndMap,
     clientPointToNormalized,
   } = useSharedMapWorkspace({
     mapSrc: detailTab === "placement" ? selectedRoom?.mapUrl : undefined,
@@ -3515,6 +3518,10 @@ export default function VenueImportPreviewPage() {
                           onMouseMove={onMouseMoveMap}
                           onMouseUp={onMouseUpMap}
                           onMouseLeave={onMouseUpMap}
+                          onTouchStart={onTouchStartMap}
+                          onTouchMove={onTouchMoveMap}
+                          onTouchEnd={onTouchEndMap}
+                          onTouchCancel={onTouchEndMap}
                         >
                           <div
                             className="map-transform"
