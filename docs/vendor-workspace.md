@@ -173,7 +173,7 @@ Current behavior:
 - Before acknowledgement, the feedback gate is compact and centered. After acknowledgement, the full action dock appears with line note and proof action buttons.
 - On mobile Proof Approval cards, the duplicate client-upload filename panel is hidden because the preview card already carries that filename.
 - Mobile proof-file receipt metadata is inset within the card so the timestamp and filename read as supporting metadata rather than an edge-to-edge alert.
-- Mobile Proof Approval header counters use a consistent compact grid so Pending, Revised, and Approved have equal visual weight instead of mixing half-width and full-width statuses.
+- Mobile Proof Approval header counters keep Pending and Revised compact while Approved uses its own full-width row as the primary proof KPI, matching the Coverage emphasis used in Creative Assignment.
 
 This keeps the proofing experience vendor-neutral while still ensuring comments and attachments are reviewed before approval or revision actions.
 

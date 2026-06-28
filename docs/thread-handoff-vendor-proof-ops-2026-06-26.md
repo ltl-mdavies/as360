@@ -12,7 +12,7 @@ Use this document to start the next clean Codex thread. The repository and live 
 - Proofing MVP is working for the current pilot order.
 - June 27 mobile Proof Approval feedback polish was deployed in `93ca796 Refine proof feedback mobile flow`.
 - June 27 mobile metadata polish hides the redundant client-upload filename card on phone layouts and insets the proof-file receipt banner so mobile proof cards read cleaner.
-- June 28 mobile header polish keeps Pending, Revised, and Approved counters in a consistent two-column rhythm so no single counter feels visually promoted by accident.
+- June 28 mobile header polish keeps Pending and Revised compact while Approved uses its own full-width row as the primary Proof Approval KPI.
 - June 28 shared map touch polish keeps map pins visually stable while users pinch-zoom or pan on mobile, matching the desktop Creative Assignment behavior where zoom reveals more map detail without inflating pin size.
 - Production/shipping sync has not been validated yet and should be the next major test/development area.
 
@@ -71,7 +71,7 @@ Do not store test passwords or temporary login credentials in docs.
 - Client upload metadata is displayed separately from proof metadata.
 - Mobile proof cards hide the redundant client-upload metadata panel because the filename is already present in the client-upload preview card.
 - Mobile proof-file receipt banners are inset within the proof card instead of sitting directly against the card edges.
-- Mobile Proof Approval header counters use a consistent compact grid, with Pending and Revised paired before Approved, so the status sequence reads predictably on narrow screens.
+- Mobile Proof Approval header counters keep Pending and Revised compact while Approved uses a full-width row, matching the way Creative Assignment promotes Coverage as the primary mobile KPI.
 - External vendor proof comments no longer display inside the proof file receipt banner; they route through the feedback gate.
 - Shared map workspaces now handle touch pan and pinch zoom directly, so View on Map, Creative Assignment, Inventory Scope, and Venue placement previews keep pin markers at a stable screen size while the map itself zooms.
 

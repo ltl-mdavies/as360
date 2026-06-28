@@ -371,7 +371,7 @@
   }
 
   .proof-commandStatApproved{
-    grid-column:auto;
+    grid-column:1 / -1;
   }
 }
 
