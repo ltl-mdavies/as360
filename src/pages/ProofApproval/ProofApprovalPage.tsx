@@ -2037,6 +2037,13 @@ export default function ProofApprovalPage() {
                 <span className="proof-commandStatValue">{counts.pending}</span>
               </span>
 
+              {counts.revised > 0 ? (
+                <span className="proof-commandStat proof-commandStatRevised">
+                  <span className="proof-commandStatLabel">Revised</span>
+                  <span className="proof-commandStatValue">{counts.revised}</span>
+                </span>
+              ) : null}
+
               {counts.waiting > 0 ? (
                 <span className="proof-commandStat proof-commandStatWaiting">
                   <span className="proof-commandStatLabel">Waiting</span>
@@ -2048,13 +2055,6 @@ export default function ProofApprovalPage() {
                 <span className="proof-commandStatLabel">Approved</span>
                 <span className="proof-commandStatValue">{counts.approved}/{counts.total}</span>
               </span>
-
-              {counts.revised > 0 ? (
-                <span className="proof-commandStat proof-commandStatRevised">
-                  <span className="proof-commandStatLabel">Revised</span>
-                  <span className="proof-commandStatValue">{counts.revised}</span>
-                </span>
-              ) : null}
             </div>
 
             <div className="proof-commandActions">

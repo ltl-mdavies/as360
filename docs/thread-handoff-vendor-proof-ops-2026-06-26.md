@@ -1,6 +1,6 @@
-# Vendor Proof Ops Milestone Handoff: June 26-27, 2026
+# Vendor Proof Ops Milestone Handoff: June 26-28, 2026
 
-This handoff captures the Vendor Workspace and Proof Approval milestone reached on June 26, 2026, plus the June 27 mobile Proof Approval feedback and metadata polish.
+This handoff captures the Vendor Workspace and Proof Approval milestone reached on June 26, 2026, plus the June 27-28 mobile Proof Approval feedback, metadata, and header polish.
 
 ## Next Thread Starting Point
 
@@ -12,6 +12,7 @@ Use this document to start the next clean Codex thread. The repository and live 
 - Proofing MVP is working for the current pilot order.
 - June 27 mobile Proof Approval feedback polish was deployed in `93ca796 Refine proof feedback mobile flow`.
 - June 27 mobile metadata polish hides the redundant client-upload filename card on phone layouts and insets the proof-file receipt banner so mobile proof cards read cleaner.
+- June 28 mobile header polish keeps Pending, Revised, and Approved counters in a consistent two-column rhythm so no single counter feels visually promoted by accident.
 - Production/shipping sync has not been validated yet and should be the next major test/development area.
 
 Recommended first prompt for the next thread:
@@ -69,6 +70,7 @@ Do not store test passwords or temporary login credentials in docs.
 - Client upload metadata is displayed separately from proof metadata.
 - Mobile proof cards hide the redundant client-upload metadata panel because the filename is already present in the client-upload preview card.
 - Mobile proof-file receipt banners are inset within the proof card instead of sitting directly against the card edges.
+- Mobile Proof Approval header counters use a consistent compact grid, with Pending and Revised paired before Approved, so the status sequence reads predictably on narrow screens.
 - External vendor proof comments no longer display inside the proof file receipt banner; they route through the feedback gate.
 
 ### Lift Integration
