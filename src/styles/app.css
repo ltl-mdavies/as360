@@ -26,6 +26,65 @@ body{
 a{ color: inherit; text-decoration: none; }
 
 /* -------------------------------------------------------
+   Mobile pull-to-refresh
+-------------------------------------------------------- */
+.pull-refresh{
+  position: relative;
+  min-height: 100%;
+}
+
+.pull-refreshIndicator{
+  position: fixed;
+  z-index: 15000;
+  top: calc(10px + var(--safe-top));
+  left: 50%;
+  min-height: 38px;
+  transform: translate(-50%, calc(-58px + var(--pullRefreshDistance, 0px)));
+  opacity: 0;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 8px 13px;
+  border: 1px solid color-mix(in srgb, var(--stroke2) 82%, white);
+  border-radius: 999px;
+  background: rgba(255,255,255,.94);
+  color: var(--text);
+  box-shadow: 0 14px 34px rgba(15,23,42,.12), 0 4px 12px rgba(15,23,42,.06);
+  font-size: 12px;
+  font-weight: 820;
+  white-space: nowrap;
+  transition: transform .16s ease, opacity .16s ease;
+}
+
+.pull-refresh.is-active .pull-refreshIndicator{
+  opacity: 1;
+}
+
+.pull-refreshSpinner{
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--primary) 18%, transparent);
+  border-top-color: var(--primary);
+  transform: rotate(0deg);
+}
+
+.pull-refresh.is-refreshing .pull-refreshSpinner{
+  animation: pull-refresh-spin .8s linear infinite;
+}
+
+.pull-refresh.is-done .pull-refreshSpinner{
+  border-color: color-mix(in srgb, var(--brand-green) 78%, white);
+  background: color-mix(in srgb, var(--brand-green) 78%, white);
+}
+
+@keyframes pull-refresh-spin{
+  to{ transform: rotate(360deg); }
+}
+
+/* -------------------------------------------------------
    Typography (single source of truth)
    (the “one notch softer” setting you liked)
 -------------------------------------------------------- */

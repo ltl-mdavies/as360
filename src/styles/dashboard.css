@@ -767,6 +767,7 @@ html[data-theme="dark"] .pm-btn{
   position: absolute;
   top: 38px;
   min-width: 268px;
+  max-width: min(320px, calc(100vw - 32px));
   border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--stroke) 82%, white);
   background: rgba(255,255,255,.94);
@@ -801,6 +802,7 @@ html[data-theme="dark"] .pm-menu{
   align-items:flex-start;
   justify-content:center;
   gap: 3px;
+  overflow-wrap: anywhere;
 }
 
 .pm-itemLabel{
@@ -823,6 +825,7 @@ html[data-theme="dark"] .pm-menu{
 .pm-item:focus-visible{
   outline: none;
   background: rgba(63,110,216,.08);
+  box-shadow: inset 0 0 0 2px rgba(63,110,216,.22);
 }
 
 .pm-item:disabled{
@@ -927,6 +930,16 @@ html[data-theme="dark"] .pm-menu{
 .cp-title{
   font-size: 14px;
   font-weight: 760;
+}
+
+.cp-closeButton{
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 12px;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .cp-sub{
@@ -1967,6 +1980,8 @@ html[data-theme="dark"] .dashboard-projectCard.tone-neutral{
   display:inline-flex;
   align-items:center;
   gap:7px;
+  flex:0 0 auto;
+  max-width:100%;
   border-radius:999px;
   border:1px solid var(--stroke2);
   background:rgba(148,163,184,.08);
@@ -2159,10 +2174,20 @@ html[data-theme="dark"] .dashboard-projectStatusItem{
   gap:10px;
 }
 
+.dashboard-projectActionButtons{
+  display:inline-flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  flex-wrap:wrap;
+  min-width:0;
+}
+
 .dashboard-projectHubLink{
   appearance:none;
   -webkit-appearance:none;
   min-height:34px;
+  min-width:0;
   border-radius:12px;
   border:1px solid color-mix(in srgb,var(--stroke2) 84%,white);
   background:rgba(255,255,255,.86);
@@ -2172,6 +2197,17 @@ html[data-theme="dark"] .dashboard-projectStatusItem{
   font-size:12px;
   font-weight:820;
   cursor:pointer;
+}
+
+.dashboard-projectActions .pm-root{
+  flex: 0 0 auto;
+}
+
+.dashboard-projectOrderMenu{
+  min-height: 34px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 820;
 }
 
 @media (max-width: 900px){
@@ -2420,12 +2456,53 @@ html[data-theme="dark"] .dashboard-projectStatusItem{
 
   .dashboard-projectActions{
     padding-inline:18px 14px;
+    display:grid;
+    grid-template-columns:minmax(92px, max-content) minmax(0, 1fr);
+    align-items:center;
+    column-gap:12px;
+    row-gap:10px;
   }
 
   .dashboard-projectPill{
-    min-width:0;
-    overflow:hidden;
-    text-overflow:ellipsis;
+    justify-self:start;
+    min-width:max-content;
+    max-width:100%;
+    overflow:visible;
+    text-overflow:clip;
+  }
+
+  .dashboard-projectActionButtons{
+    justify-self:end;
+    width:100%;
+    display:grid;
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+    gap:8px;
+  }
+
+  .dashboard-projectHubLink{
+    width:100%;
+    padding-inline:8px;
+    text-align:center;
+  }
+
+  .dashboard-projectActions .pm-root{
+    grid-column:1 / -1;
+    width:100%;
+  }
+
+  .dashboard-projectOrderMenu{
+    width:100%;
+  }
+}
+
+@media (max-width: 370px){
+  .dashboard-projectActions{
+    grid-template-columns:1fr;
+  }
+
+  .dashboard-projectPill,
+  .dashboard-projectActionButtons{
+    justify-self:stretch;
   }
 }
 

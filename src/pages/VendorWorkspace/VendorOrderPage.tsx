@@ -434,6 +434,13 @@ function shippingAddressLines(destination: ApiShippingDestination) {
   ].filter(Boolean);
 }
 
+function liftShippingDestination(line: ApiVendorOrderLine) {
+  const shipping = line.liftShipping;
+  if (!shipping) return "—";
+  const cityLine = [shipping.city, shipping.state, shipping.zip].filter(Boolean).join(", ");
+  return [shipping.locationName, cityLine].filter(Boolean).join(" · ") || "—";
+}
+
 function humanizeEventType(eventType: string) {
   return eventType
     .split(".")
@@ -1466,6 +1473,7 @@ export default function VendorOrderPage() {
                 const proofCommentAttachmentCount = line.proof?.proofCommentAttachmentCount || proofComments.reduce((sum, comment) => sum + comment.attachments.length, 0);
                 const artHistoryItems = buildVendorArtHistory(line);
                 const liftLine = line.proof?.liftLineSnapshot || null;
+                const liftShipping = line.liftShipping || null;
                 const hasCurrentProofFile = Boolean(
                   currentProofVersion?.proofFilename ||
                   currentProofVersion?.proofFullUrl ||
@@ -1518,6 +1526,16 @@ export default function VendorOrderPage() {
                           <span><small>Material</small>{liftLine?.material || "—"}</span>
                           <span><small>Print Size</small>{formatLiftSize(liftLine?.printHeightIn, liftLine?.printWidthIn)}</span>
                           <span><small>Unit #</small>{liftLine?.unitNumber || "—"}</span>
+                        </div>
+                      ) : null}
+
+                      {primaryPrintRoute && liftShipping ? (
+                        <div className="vendor-lift-shipping-reference" aria-label="Lift shipping details">
+                          <span><small>Ship Status</small><strong title={liftShipping.trackerMessage || ""}>{liftShipping.trackerShortMessage || "—"}</strong></span>
+                          <span><small>Method</small>{liftShipping.shipMethod || "—"}</span>
+                          <span><small>Tracking</small><strong title={liftShipping.trackingNumber || ""}>{liftShipping.trackingNumber || "—"}</strong></span>
+                          <span><small>Ship Date</small>{formatDate(liftShipping.actualShipDate)}</span>
+                          <span className="is-wide"><small>Destination</small><strong title={liftShippingDestination(line)}>{liftShippingDestination(line)}</strong></span>
                         </div>
                       ) : null}
 

@@ -1,12 +1,14 @@
 // src/pages/AngieDashboard/AngieDashboardPage.tsx
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRight, Search, SlidersHorizontal, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import AppShell from "../../app/AppShell";
 import Panel from "../../components/common/Panel";
 import DataTable from "../../components/table/DataTable";
+import PopoverMenu from "../../components/common/PopoverMenu";
+import PullToRefresh from "../../components/common/PullToRefresh";
 
 import type { ProjectRollup } from "../../logic/mockRollups";
 import {
@@ -20,6 +22,11 @@ import {
 } from "../../logic/renderingRules";
 import type { Tone } from "../../logic/renderingRules";
 import { buildAngieProjectTableColumns } from "../../logic/tableColumnDefs";
+import {
+  PROJECT_ORDER_LIFECYCLE_ACTIONS,
+  buildProjectOrderActionPath,
+  isProjectOrderLifecycleAction,
+} from "../../logic/orderLifecycleActions";
 
 import CreateProjectModal, {
   type NewProjectDraft,
@@ -88,6 +95,11 @@ type ApiProjectSummary = {
   adspaceOrderNumber?: string;
   extId: string;
   liftOrderId?: string | null;
+  orderLifecycleStatus?: "active" | "on_hold" | "cancelled";
+  orderLifecycleReason?: string | null;
+  orderLifecycleNote?: string | null;
+  orderLifecycleUpdatedAt?: string | null;
+  orderLifecycleUpdatedByName?: string | null;
   artworkDueDate?: string;
   postDate?: string;
   endClientName?: string;
@@ -249,6 +261,11 @@ function mapProjectSummaryToRow(project: ApiProjectSummary): ProjectRollup {
     extId: project.extId,
     poNumber: project.poNumber || "—",
     liftOrderId: project.liftOrderId || null,
+    orderLifecycleStatus: project.orderLifecycleStatus || "active",
+    orderLifecycleReason: project.orderLifecycleReason || null,
+    orderLifecycleNote: project.orderLifecycleNote || null,
+    orderLifecycleUpdatedAt: project.orderLifecycleUpdatedAt || null,
+    orderLifecycleUpdatedByName: project.orderLifecycleUpdatedByName || null,
     dates: {
       artworkDue: project.artworkDueDate || null,
       postDate: project.postDate || null,
@@ -312,29 +329,31 @@ export default function AngieDashboardPage() {
   const [setupOptionsLoading, setSetupOptionsLoading] = useState(false);
   const [setupOptionsLoaded, setSetupOptionsLoaded] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadProjectList() {
+  const loadProjectList = useCallback(
+    async (options: { cancelled?: () => boolean } = {}) => {
       setProjectLoading(true);
       setBootstrapError(false);
       try {
         const projectResponse = await api.request<{ projects: ApiProjectSummary[] }>("/api/projects");
-        if (cancelled) return;
+        if (options.cancelled?.()) return;
         setBackendProjects(projectResponse.projects || []);
       } catch (error) {
         console.error("Failed to load project bootstrap data", error);
-        if (!cancelled) setBootstrapError(true);
+        if (!options.cancelled?.()) setBootstrapError(true);
       } finally {
-        if (!cancelled) setProjectLoading(false);
+        if (!options.cancelled?.()) setProjectLoading(false);
       }
-    }
+    },
+    [api]
+  );
 
-    void loadProjectList();
+  useEffect(() => {
+    let cancelled = false;
+    void loadProjectList({ cancelled: () => cancelled });
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [loadProjectList]);
 
   async function loadProjectSetupOptions() {
     if (setupOptionsLoaded || setupOptionsLoading) return;
@@ -537,6 +556,7 @@ export default function AngieDashboardPage() {
 
   return (
     <AppShell pageClassName="wide">
+      <PullToRefresh onRefresh={() => loadProjectList()} disabled={isCreateOpen}>
       <div className="hero">
         <div className="hero-top">
           <div className="hero-copy">
@@ -837,6 +857,7 @@ export default function AngieDashboardPage() {
           </div>
         ) : null}
       </Panel>
+      </PullToRefresh>
     </AppShell>
   );
 }
@@ -1049,7 +1070,15 @@ function dashboardToneClass(tone?: string | null) {
   return `tone-${tone || "neutral"}`;
 }
 
+function orderLifecycleLabel(status?: string | null) {
+  if (status === "on_hold") return "On Hold";
+  if (status === "cancelled") return "Cancelled";
+  return null;
+}
+
 function getDashboardProjectTone(row: ProjectRollup): Tone {
+  if (row.orderLifecycleStatus === "cancelled") return "danger";
+  if (row.orderLifecycleStatus === "on_hold") return "warning";
   if (isLiftProductionReference(row)) return "success";
 
   if (row.transit.enabled && row.transit.status !== "approved" && row.transit.status !== "not_required") {
@@ -1097,6 +1126,7 @@ function DashboardProjectCard({ row, onNavigate }: DashboardProjectCardProps) {
       : "No transit review";
   const projectMeta = [
     row.projectMode === "internal_sandbox" ? "Sandbox" : null,
+    orderLifecycleLabel(row.orderLifecycleStatus),
     row.adspaceOrderNumber ? `AS360 # ${row.adspaceOrderNumber}` : row.extId,
     row.liftOrderId ? `Lift # ${row.liftOrderId}` : null,
   ].filter(Boolean).join(" · ");
@@ -1108,6 +1138,11 @@ function DashboardProjectCard({ row, onNavigate }: DashboardProjectCardProps) {
   const primaryActionLabel = hasPrimaryAction ? primaryAction.label : "";
   const primaryPath = getProjectActionPath(row, primaryAction.kind);
   const hubPath = `/p/${row.projectId}?mode=customer`;
+  const managePath = `/p/${row.projectId}?mode=customer&panel=details`;
+  const openOrderAction = (action: string) => {
+    if (!isProjectOrderLifecycleAction(action)) return;
+    onNavigate(buildProjectOrderActionPath(row.projectId, action));
+  };
   const smartPath = hasPrimaryAction ? primaryPath : hubPath;
   const statusItems = [
     {
@@ -1181,18 +1216,58 @@ function DashboardProjectCard({ row, onNavigate }: DashboardProjectCardProps) {
           <span className={`dashboard-projectPill ${dashboardToneClass(production.tone)}`}>
             {production.label}
           </span>
-          <button
-            type="button"
-            className="dashboard-projectHubLink"
-            onClick={() => onNavigate(hubPath)}
-          >
-            Open Hub
-          </button>
+          <span className="dashboard-projectActionButtons">
+            <button
+              type="button"
+              className="dashboard-projectHubLink"
+              onClick={() => onNavigate(hubPath)}
+            >
+              Open Hub
+            </button>
+            <button
+              type="button"
+              className="dashboard-projectHubLink"
+              onClick={() => onNavigate(managePath)}
+            >
+              Manage
+            </button>
+            <PopoverMenu
+              buttonLabel="Order actions"
+              buttonClassName="dashboard-projectOrderMenu"
+              ariaLabel={`Order actions for ${row.title}`}
+              items={PROJECT_ORDER_LIFECYCLE_ACTIONS.map((item) => ({
+                label: item.label,
+                action: item.action,
+                description: item.description,
+              }))}
+              onAction={openOrderAction}
+            />
+          </span>
         </div>
       ) : (
         <div className="dashboard-projectActions">
           <span className={`dashboard-projectPill ${dashboardToneClass(production.tone)}`}>
             {production.label}
+          </span>
+          <span className="dashboard-projectActionButtons">
+            <button
+              type="button"
+              className="dashboard-projectHubLink"
+              onClick={() => onNavigate(managePath)}
+            >
+              Manage
+            </button>
+            <PopoverMenu
+              buttonLabel="Order actions"
+              buttonClassName="dashboard-projectOrderMenu"
+              ariaLabel={`Order actions for ${row.title}`}
+              items={PROJECT_ORDER_LIFECYCLE_ACTIONS.map((item) => ({
+                label: item.label,
+                action: item.action,
+                description: item.description,
+              }))}
+              onAction={openOrderAction}
+            />
           </span>
         </div>
       )}

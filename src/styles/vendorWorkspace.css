@@ -992,7 +992,23 @@
   background: var(--vendor-soft);
 }
 
+.vendor-lift-shipping-reference {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.9fr) minmax(120px, 0.9fr) minmax(180px, 1.3fr) minmax(110px, 0.8fr) minmax(220px, 1.5fr);
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, #7c3aed 26%, var(--vendor-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, #7c3aed 9%, var(--vendor-panel));
+}
+
 .vendor-lift-line-reference span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.vendor-lift-shipping-reference span {
   display: grid;
   gap: 2px;
   min-width: 0;
@@ -1006,8 +1022,26 @@
   text-transform: uppercase;
 }
 
+.vendor-lift-shipping-reference small {
+  color: var(--vendor-muted);
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .vendor-lift-line-reference span,
 .vendor-lift-line-reference strong {
+  overflow: hidden;
+  color: var(--vendor-ink);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vendor-lift-shipping-reference span,
+.vendor-lift-shipping-reference strong {
   overflow: hidden;
   color: var(--vendor-ink);
   font-size: 0.76rem;
@@ -1969,6 +2003,7 @@ button.vendor-art-history-thumb {
 
   .vendor-lift-order-snapshot dl,
   .vendor-lift-line-reference,
+  .vendor-lift-shipping-reference,
   .vendor-line-proof-history {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1993,6 +2028,7 @@ button.vendor-art-history-thumb {
   .vendor-line-meta,
   .vendor-lift-order-snapshot dl,
   .vendor-lift-line-reference,
+  .vendor-lift-shipping-reference,
   .vendor-lift-sync-meta,
   .vendor-lift-order-snapshot-head,
   .vendor-state-lower,

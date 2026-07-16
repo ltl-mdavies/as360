@@ -1,5 +1,5 @@
 // src/components/common/PopoverMenu.tsx
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 export type MenuItem = {
   label: string;
@@ -25,6 +25,8 @@ export default function PopoverMenu({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const menuId = useId();
 
   useEffect(() => {
@@ -35,7 +37,10 @@ export default function PopoverMenu({
     }
     function onKey(e: KeyboardEvent) {
       if (!open) return;
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
     }
     document.addEventListener("mousedown", onDocDown);
     document.addEventListener("keydown", onKey);
@@ -45,14 +50,49 @@ export default function PopoverMenu({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    window.requestAnimationFrame(() => {
+      const firstEnabled = itemRefs.current.find((item) => item && !item.disabled);
+      firstEnabled?.focus();
+    });
+  }, [open]);
+
+  function focusMenuItem(nextIndex: number) {
+    const enabledItems = itemRefs.current.filter((item): item is HTMLButtonElement => Boolean(item && !item.disabled));
+    if (enabledItems.length === 0) return;
+    const next = ((nextIndex % enabledItems.length) + enabledItems.length) % enabledItems.length;
+    enabledItems[next]?.focus();
+  }
+
+  function handleMenuKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const enabledItems = itemRefs.current.filter((item): item is HTMLButtonElement => Boolean(item && !item.disabled));
+    const currentIndex = enabledItems.findIndex((item) => item === document.activeElement);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusMenuItem(currentIndex + 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      focusMenuItem(currentIndex - 1);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      focusMenuItem(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      focusMenuItem(enabledItems.length - 1);
+    }
+  }
+
   return (
     <div ref={rootRef} className="pm-root">
       <button
+        ref={buttonRef}
+        type="button"
         className={`pm-btn ${buttonLabel ? "pm-btn-label" : ""} ${buttonClassName}`}
         aria-label={ariaLabel}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={open ? menuId : undefined}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation(); // do not trigger row click
@@ -69,10 +109,15 @@ export default function PopoverMenu({
           className={`pm-menu ${align === "left" ? "pm-left" : "pm-right"}`}
           role="menu"
           onClick={(e) => e.stopPropagation()} // keep clicks inside menu
+          onKeyDown={handleMenuKeyDown}
         >
-          {items.map((it) => (
+          {items.map((it, index) => (
             <button
               key={it.action}
+              ref={(element) => {
+                itemRefs.current[index] = element;
+              }}
+              type="button"
               className="pm-item"
               role="menuitem"
               disabled={!!it.disabled}

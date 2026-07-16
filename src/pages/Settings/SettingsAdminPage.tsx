@@ -67,6 +67,7 @@ type InternalDraftSettings = {
   primaryPrintVendorName: string;
   primaryPrintPlatformLabel: string;
   primaryPrintActiveEnvironment: LiftEnvironmentKey;
+  primaryPrintProductIdentifierMode: LiftProductIdentifierMode;
   primaryPrintEnvironments: Record<LiftEnvironmentKey, LiftEnvironmentDraft>;
   primaryPrintCompanyId: string;
   primaryPrintCreateOrderUsername: string;
@@ -124,6 +125,7 @@ type UserDraft = {
 type NotificationRuleDraft = NotificationRule;
 
 type LiftEnvironmentKey = "prod" | "qa1";
+type LiftProductIdentifierMode = "unit_number" | "product_id";
 
 type LiftEnvironmentDraft = {
   baseUrl: string;
@@ -131,8 +133,10 @@ type LiftEnvironmentDraft = {
   fallbackOrderLookupUrl: string;
   orderUrlResolverUrl: string;
   customerContactListUrl: string;
+  productManagementUrl: string;
   proofEndpointUrlTemplate: string;
   flushSyncUrl: string;
+  shippingReportUrl: string;
   proofUrlResolverUrl: string;
 };
 
@@ -264,9 +268,18 @@ function internalDraftFromSettings(settings: ApiAdminSettings): InternalDraftSet
     primaryPrintVendorName: settings.integrations.primaryPrintVendor.vendorName,
     primaryPrintPlatformLabel: settings.integrations.primaryPrintVendor.platformLabel,
     primaryPrintActiveEnvironment: settings.integrations.primaryPrintVendor.activeEnvironment,
+    primaryPrintProductIdentifierMode: settings.integrations.primaryPrintVendor.productIdentifierMode || "unit_number",
     primaryPrintEnvironments: {
-      prod: { ...settings.integrations.primaryPrintVendor.environments.prod },
-      qa1: { ...settings.integrations.primaryPrintVendor.environments.qa1 },
+      prod: {
+        ...settings.integrations.primaryPrintVendor.environments.prod,
+        productManagementUrl: settings.integrations.primaryPrintVendor.environments.prod.productManagementUrl || "",
+        shippingReportUrl: settings.integrations.primaryPrintVendor.environments.prod.shippingReportUrl || "",
+      },
+      qa1: {
+        ...settings.integrations.primaryPrintVendor.environments.qa1,
+        productManagementUrl: settings.integrations.primaryPrintVendor.environments.qa1.productManagementUrl || "",
+        shippingReportUrl: settings.integrations.primaryPrintVendor.environments.qa1.shippingReportUrl || "",
+      },
     },
     primaryPrintCompanyId: settings.integrations.primaryPrintVendor.companyId,
     primaryPrintCreateOrderUsername: settings.integrations.primaryPrintVendor.createOrderUsername,
@@ -856,21 +869,26 @@ export default function SettingsAdminPage() {
         primaryPrintVendorName: draft.primaryPrintVendorName,
         primaryPrintPlatformLabel: draft.primaryPrintPlatformLabel,
         primaryPrintActiveEnvironment: draft.primaryPrintActiveEnvironment,
+        primaryPrintProductIdentifierMode: draft.primaryPrintProductIdentifierMode,
         primaryPrintProdBaseUrl: draft.primaryPrintEnvironments.prod.baseUrl,
         primaryPrintProdOrderEndpointUrl: draft.primaryPrintEnvironments.prod.orderEndpointUrl,
         primaryPrintProdFallbackOrderLookupUrl: draft.primaryPrintEnvironments.prod.fallbackOrderLookupUrl,
         primaryPrintProdOrderUrlResolverUrl: draft.primaryPrintEnvironments.prod.orderUrlResolverUrl,
         primaryPrintProdCustomerContactListUrl: draft.primaryPrintEnvironments.prod.customerContactListUrl,
+        primaryPrintProdProductManagementUrl: draft.primaryPrintEnvironments.prod.productManagementUrl,
         primaryPrintProdProofEndpointUrlTemplate: draft.primaryPrintEnvironments.prod.proofEndpointUrlTemplate,
         primaryPrintProdFlushSyncUrl: draft.primaryPrintEnvironments.prod.flushSyncUrl,
+        primaryPrintProdShippingReportUrl: draft.primaryPrintEnvironments.prod.shippingReportUrl,
         primaryPrintProdProofUrlResolverUrl: draft.primaryPrintEnvironments.prod.proofUrlResolverUrl,
         primaryPrintQa1BaseUrl: draft.primaryPrintEnvironments.qa1.baseUrl,
         primaryPrintQa1OrderEndpointUrl: draft.primaryPrintEnvironments.qa1.orderEndpointUrl,
         primaryPrintQa1FallbackOrderLookupUrl: draft.primaryPrintEnvironments.qa1.fallbackOrderLookupUrl,
         primaryPrintQa1OrderUrlResolverUrl: draft.primaryPrintEnvironments.qa1.orderUrlResolverUrl,
         primaryPrintQa1CustomerContactListUrl: draft.primaryPrintEnvironments.qa1.customerContactListUrl,
+        primaryPrintQa1ProductManagementUrl: draft.primaryPrintEnvironments.qa1.productManagementUrl,
         primaryPrintQa1ProofEndpointUrlTemplate: draft.primaryPrintEnvironments.qa1.proofEndpointUrlTemplate,
         primaryPrintQa1FlushSyncUrl: draft.primaryPrintEnvironments.qa1.flushSyncUrl,
+        primaryPrintQa1ShippingReportUrl: draft.primaryPrintEnvironments.qa1.shippingReportUrl,
         primaryPrintQa1ProofUrlResolverUrl: draft.primaryPrintEnvironments.qa1.proofUrlResolverUrl,
         primaryPrintCompanyId: draft.primaryPrintCompanyId,
         primaryPrintCreateOrderUsername: draft.primaryPrintCreateOrderUsername,
@@ -1947,6 +1965,20 @@ export default function SettingsAdminPage() {
                           <option value="qa1">QA1</option>
                         </select>
                       </label>
+                      <label className="settings-field">
+                        <span className="settings-fieldLabel">Lift product matching method</span>
+                        <select
+                          className="select settings-input"
+                          value={draft.primaryPrintProductIdentifierMode}
+                          onChange={(e) => patchDraft({ primaryPrintProductIdentifierMode: e.target.value as LiftProductIdentifierMode })}
+                        >
+                          <option value="unit_number">Unit Number - current Lift interface</option>
+                          <option value="product_id">Product ID - use after Lift confirms switch</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="settings-note">
+                      This must match Lift's active import interface configuration. Keep Unit Number until Lift confirms the Adspace interface is changed to Product ID.
                     </div>
                   </div>
                   <div className="settings-note">
@@ -2005,7 +2037,7 @@ export default function SettingsAdminPage() {
                         {draft.primaryPrintActiveEnvironment === "prod" ? "Production endpoints" : "QA1 endpoints"}
                       </div>
                       <div className="settings-subsectionMeta">
-                      These URLs are used for the currently active Lift environment. AS360Orders is the slim order/line read, and AS360ProofReport is the proof URL/status read.
+                      These URLs are used for the currently active Lift environment. AS360Orders is the slim order/line read, ShippingReport is the shipment read, and AS360ProofReport is the proof URL/status read.
                       </div>
                     </div>
                     {activeLiftEnvironmentDraft ? (
@@ -2014,10 +2046,12 @@ export default function SettingsAdminPage() {
                         <label className="settings-field"><span className="settings-fieldLabel">Create order URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.orderEndpointUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { orderEndpointUrl: e.target.value })} placeholder={draft.primaryPrintActiveEnvironment === "prod" ? "https://ltlco.lifterp.com/ords/api/lift/erp/api/create_order" : "http://devcompute/lifterp-qa1/lifterp/liftqa1/erp/api/create_order"} /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">Fallback order lookup URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.fallbackOrderLookupUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { fallbackOrderLookupUrl: e.target.value })} placeholder="Full URL or relative path" /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">AS360Orders / Flush sync URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.flushSyncUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { flushSyncUrl: e.target.value })} placeholder="Full URL or relative path" /></label>
+                        <label className="settings-field"><span className="settings-fieldLabel">ShippingReport URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.shippingReportUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { shippingReportUrl: e.target.value })} placeholder="Optional until shipping sync is validated" /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">Proof endpoint URL template</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.proofEndpointUrlTemplate} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { proofEndpointUrlTemplate: e.target.value })} placeholder="Use %0 for company id and %1 for proofing id" /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">Order URL resolver URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.orderUrlResolverUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { orderUrlResolverUrl: e.target.value })} placeholder="Full URL or relative path" /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">AS360ProofReport URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.proofUrlResolverUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { proofUrlResolverUrl: e.target.value })} placeholder="Full URL or relative path" /></label>
                         <label className="settings-field"><span className="settings-fieldLabel">Customer contact list URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.customerContactListUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { customerContactListUrl: e.target.value })} placeholder="Full URL or relative path" /></label>
+                        <label className="settings-field"><span className="settings-fieldLabel">Product management URL</span><input className="field-input settings-input" value={activeLiftEnvironmentDraft.productManagementUrl} onChange={(e) => patchLiftEnvironment(activeLiftEnvironment, { productManagementUrl: e.target.value })} placeholder="https://ltlco.lifterp.com/ords/api/lift/erp/api/v1/product-management/products" /></label>
                       </div>
                     ) : null}
                   </div>

@@ -1,8 +1,16 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Link2, Search, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../../app/AppShell";
 import { useApiClient } from "../../api/useApiClient";
-import { fetchCustomerSettings, type ApiCustomerVendor, type ApiShippingDestination, type ApiVenueInventoryPreset } from "../../api/projects";
+import {
+  fetchCustomerSettings,
+  fetchLiftProducts,
+  type ApiCustomerVendor,
+  type ApiLiftProduct,
+  type ApiShippingDestination,
+  type ApiVenueInventoryPreset,
+} from "../../api/projects";
 import Panel from "../../components/common/Panel";
 import PageHeader from "../../components/common/PageHeader";
 import InventoryScopeModal from "../../components/projects/InventoryScopeModal";
@@ -36,6 +44,9 @@ type VenueRecord = {
   isActive: boolean;
   documentSourceMode?: "adspace" | "external" | "hybrid";
   documentLibraryUrl: string;
+  photoGalleryUrl?: string;
+  venueDocumentUrl?: string;
+  venueVideoUrl?: string;
   shippingDestinationOverrideEnabled?: boolean;
   shippingDestination?: ShippingDestinationInput;
   updatedAt: string;
@@ -84,8 +95,20 @@ type VariantAppearance = {
   color: string;
   abbreviation?: string;
   unitNumber?: string;
+  liftProductMapping?: LiftProductMapping | null;
   productionRouting?: "primary" | "external";
   externalVendorId?: string;
+};
+type LiftProductMapping = {
+  liftProductId?: number;
+  liftProductName?: string;
+  liftCatalogId?: number;
+  liftCatalogName?: string;
+  liftProductType?: string;
+  liftProductStatus?: string;
+  liftUnitNumber?: string;
+  liftMappedAt?: string;
+  liftMappedByName?: string;
 };
 type LiveVenueVariant = {
   id: string;
@@ -95,6 +118,7 @@ type LiveVenueVariant = {
   color?: string;
   abbreviation?: string;
   unitNumber?: string;
+  liftProductMapping?: LiftProductMapping;
   productionRouting?: "primary" | "external";
   externalVendorId?: string;
 };
@@ -107,6 +131,7 @@ type InventoryRecordOverride = {
   variantLabel?: string;
   mediaType?: string;
   unitNumber?: string;
+  liftProductMapping?: LiftProductMapping | null;
   trimHeight?: number | null;
   trimWidth?: number | null;
   safeHeight?: number | null;
@@ -123,6 +148,28 @@ type InventoryRecordOverride = {
 type VendorPickerState = {
   recordKeys: string[];
 };
+type LiftProductMapperState = {
+  targetType: "variant" | "inventory";
+  variantKey: string;
+  variantId?: string;
+  variantLabel: string;
+  recordKey?: string;
+  inventoryItemId?: string | null;
+  inventoryId?: string;
+  catalogId: string;
+  catalogName: string;
+  productName: string;
+  productId: string;
+  productType: "" | "KIT" | "REGULAR" | "SERVICE";
+  status: "A" | "I";
+  results: ApiLiftProduct[];
+  selectedProduct: ApiLiftProduct | null;
+  selectedUnitNumber: string;
+  loading: boolean;
+  error: string;
+  hasSearched: boolean;
+  hasMore: boolean;
+};
 type PresetEditorState = {
   mode: "create" | "edit";
   preset?: ApiVenueInventoryPreset;
@@ -131,6 +178,11 @@ type PresetEditorState = {
 };
 
 const PROFILE_STORAGE_KEY = "adspace360.venue-import-profiles";
+const KNOWN_LIFT_CATALOGS = [
+  { id: "7146", name: "AS360 Station Dom Master Catalog East" },
+  { id: "7147", name: "AS360 Station Dom Master Catalog West" },
+  { id: "6338", name: "Penn Station Amtrak - AS360" },
+];
 const DEFAULT_PENN_SAMPLE_CSV = `Tenant name,Venue name,Room name,Unit Sku,Ad Space Key,Media,Substrate,Trim Height,Trim Width,Safe Area Height,Safe Area Width,Sq Ft,Location,Finishing,Special Instructions,Addl Info,Active Flag
 Intersection,Penn Station,Amtrak Track Level,2SHEET_46x60_48PT,PS-2-001,2-Sheet,48 PT,46.2,60.2,43,57,,Track Level Bay 1,,, ,Y
 Intersection,Penn Station,Amtrak Track Level,2SHEET_46x60_48PT,PS-2-002,2-Sheet,48 PT,46.2,60.2,43,57,,Track Level Bay 2,,, ,Y
@@ -215,6 +267,53 @@ function shippingDestinationSummary(value?: ShippingDestinationInput | null) {
   const destination = normalizeShippingDestination(value);
   const cityLine = [destination.city, destination.region, destination.postalCode].filter(Boolean).join(", ");
   return [destination.label || destination.company || destination.addressLine1, cityLine].filter(Boolean).join(" · ");
+}
+
+function formatLiftDetailLabel(key: string) {
+  if (/^flexField\d+$/i.test(key)) return key.replace(/^flexField/i, "Flex ");
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatLiftDetailValue(value: string | number | boolean | null | undefined) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+}
+
+function liftProductDetailRows(product: ApiLiftProduct | null) {
+  if (!product) return [];
+  const coreRows: Array<[string, string | number | boolean | null | undefined]> = [
+    ["Product ID", product.productId],
+    ["Product Name", product.productName],
+    ["Catalog ID", product.catalogId],
+    ["Catalog Name", product.catalogName],
+    ["Product Type", product.productType],
+    ["Status", product.status],
+    ["Accounting Item", product.accountingItemCode],
+    ["Parent Product ID", product.parentProductId],
+    ["Description", product.productDescription],
+  ];
+  const detailRows = Object.entries(product.additionalFields || {}).sort(([a], [b]) => {
+    const flexA = a.match(/^flexField(\d+)$/i);
+    const flexB = b.match(/^flexField(\d+)$/i);
+    if (flexA && flexB) return Number(flexA[1]) - Number(flexB[1]);
+    if (flexA) return 1;
+    if (flexB) return -1;
+    return a.localeCompare(b);
+  });
+  return [...coreRows, ...detailRows.map(([key, value]) => [formatLiftDetailLabel(key), value] as const)]
+    .filter(([, value]) => value !== undefined && value !== "");
+}
+
+function knownLiftCatalogValue(catalogId: string, catalogName: string) {
+  const match = KNOWN_LIFT_CATALOGS.find((catalog) =>
+    catalog.id === catalogId.trim() ||
+    catalog.name.toLowerCase() === catalogName.trim().toLowerCase()
+  );
+  return match?.id || "";
 }
 
 function ShippingDestinationFields({
@@ -370,6 +469,7 @@ export default function VenueImportPreviewPage() {
   const [presetSaveError, setPresetSaveError] = useState("");
   const [vendorPicker, setVendorPicker] = useState<VendorPickerState | null>(null);
   const [vendorSearch, setVendorSearch] = useState("");
+  const [liftProductMapper, setLiftProductMapper] = useState<LiftProductMapperState | null>(null);
   const [apiError, setApiError] = useState("");
   const [, setIsVenueDataLoading] = useState(true);
   const [selectedVenueId, setSelectedVenueId] = useState(DEFAULT_VENUES[0]?.id ?? "");
@@ -463,6 +563,9 @@ export default function VenueImportPreviewPage() {
       isActive: Boolean(venue.isActive),
       documentSourceMode: venue.documentSourceMode || (venue.documentLibraryUrl ? "hybrid" : "adspace"),
       documentLibraryUrl: venue.documentLibraryUrl || "",
+      photoGalleryUrl: venue.photoGalleryUrl || "",
+      venueDocumentUrl: venue.venueDocumentUrl || "",
+      venueVideoUrl: venue.venueVideoUrl || "",
       shippingDestinationOverrideEnabled: Boolean(venue.shippingDestinationOverrideEnabled),
       shippingDestination: normalizeShippingDestination(venue.shippingDestination),
       updatedAt: (venue.updatedAt || "").slice(0, 10),
@@ -539,6 +642,7 @@ export default function VenueImportPreviewPage() {
       mediaVariantKey: record.mediaVariantKey,
       variantLabel: record.variantLabel || record.mediaType || record.mediaVariantKey,
       unitNumber: record.unitNumber,
+      liftProductMapping: record.liftProductMapping,
       trimHeight: record.trimHeight ?? null,
       trimWidth: record.trimWidth ?? null,
       safeHeight: record.safeHeight ?? null,
@@ -613,6 +717,7 @@ export default function VenueImportPreviewPage() {
               color: variant.color || variantPalette[0],
               abbreviation: variant.abbreviation || buildVariantAbbreviation(variant.label),
               unitNumber: variant.unitNumber,
+              liftProductMapping: variant.liftProductMapping,
               productionRouting: variant.productionRouting || "primary",
               externalVendorId: variant.externalVendorId,
             };
@@ -1108,6 +1213,7 @@ export default function VenueImportPreviewPage() {
           variantLabel: recordOverride.variantLabel ?? persistedVariant?.label ?? record.variantLabel,
           mediaType: recordOverride.mediaType ?? persistedVariant?.mediaType ?? record.mediaType,
           unitNumber: resolvedUnitNumber,
+          liftProductMapping: recordOverride.liftProductMapping ?? record.liftProductMapping,
           unitNumberSource,
           trimHeight: recordOverride.trimHeight ?? record.trimHeight,
           trimWidth: recordOverride.trimWidth ?? record.trimWidth,
@@ -1692,6 +1798,9 @@ export default function VenueImportPreviewPage() {
         | "marketName"
         | "documentSourceMode"
         | "documentLibraryUrl"
+        | "photoGalleryUrl"
+        | "venueDocumentUrl"
+        | "venueVideoUrl"
         | "shippingDestinationOverrideEnabled"
         | "shippingDestination"
         | "isActive"
@@ -1717,7 +1826,16 @@ export default function VenueImportPreviewPage() {
     patch: Partial<
       Pick<
         VenueRecord,
-        "name" | "marketId" | "documentSourceMode" | "documentLibraryUrl" | "shippingDestinationOverrideEnabled" | "shippingDestination" | "isActive"
+        | "name"
+        | "marketId"
+        | "documentSourceMode"
+        | "documentLibraryUrl"
+        | "photoGalleryUrl"
+        | "venueDocumentUrl"
+        | "venueVideoUrl"
+        | "shippingDestinationOverrideEnabled"
+        | "shippingDestination"
+        | "isActive"
       >
     >
   ) {
@@ -2288,6 +2406,7 @@ export default function VenueImportPreviewPage() {
       color: override?.color || persistedVariant?.color || variantPalette[index % variantPalette.length],
       abbreviation: (override?.abbreviation || persistedVariant?.abbreviation || buildVariantAbbreviation(label)).slice(0, 4).toUpperCase(),
       unitNumber: override?.unitNumber ?? persistedVariant?.unitNumber,
+      liftProductMapping: override?.liftProductMapping || persistedVariant?.liftProductMapping,
       productionRouting: override?.productionRouting || persistedVariant?.productionRouting || "primary",
       externalVendorId: override?.externalVendorId || persistedVariant?.externalVendorId,
     };
@@ -2304,6 +2423,7 @@ export default function VenueImportPreviewPage() {
           color: existing?.color || fallbackColor,
           abbreviation: existing?.abbreviation || buildVariantAbbreviation(label),
           unitNumber: existing?.unitNumber,
+          liftProductMapping: existing?.liftProductMapping,
           productionRouting: existing?.productionRouting || "primary",
           externalVendorId: existing?.externalVendorId,
           ...patch,
@@ -2331,6 +2451,176 @@ export default function VenueImportPreviewPage() {
       setInventorySaveState({ tone: "error", message: "We couldn’t save those variant settings." });
       await loadVenueDetailData(activeVenue.id);
     }
+  }
+
+  function openLiftProductMapper(variant: { key: string; variantId?: string; label: string }, appearance: VariantAppearance) {
+    const mapping = appearance.liftProductMapping || {};
+    setLiftProductMapper({
+      targetType: "variant",
+      variantKey: variant.key,
+      variantId: variant.variantId,
+      variantLabel: variant.label,
+      catalogId: mapping.liftCatalogId == null ? "" : String(mapping.liftCatalogId),
+      catalogName: mapping.liftCatalogName || "",
+      productName: mapping.liftProductName || "",
+      productId: mapping.liftProductId == null ? "" : String(mapping.liftProductId),
+      productType: "",
+      status: "A",
+      results: [],
+      selectedProduct: null,
+      selectedUnitNumber: mapping.liftUnitNumber || appearance.unitNumber || "",
+      loading: false,
+      error: "",
+      hasSearched: false,
+      hasMore: false,
+    });
+  }
+
+  function openInventoryLiftProductMapper(record: any, appearance: VariantAppearance) {
+    const mapping = record.liftProductMapping || appearance.liftProductMapping || {};
+    setLiftProductMapper({
+      targetType: "inventory",
+      variantKey: record.mediaVariantKey,
+      variantLabel: record.variantLabel,
+      recordKey: record.recordKey,
+      inventoryItemId: getBackendInventoryId(record.recordKey),
+      inventoryId: record.inventoryId,
+      catalogId: mapping.liftCatalogId == null ? "" : String(mapping.liftCatalogId),
+      catalogName: mapping.liftCatalogName || "",
+      productName: mapping.liftProductName || "",
+      productId: mapping.liftProductId == null ? "" : String(mapping.liftProductId),
+      productType: "",
+      status: "A",
+      results: [],
+      selectedProduct: null,
+      selectedUnitNumber: mapping.liftUnitNumber || record.unitNumber || appearance.unitNumber || "",
+      loading: false,
+      error: "",
+      hasSearched: false,
+      hasMore: false,
+    });
+  }
+
+  function patchLiftProductMapper(patch: Partial<LiftProductMapperState>) {
+    setLiftProductMapper((current) => current ? { ...current, ...patch } : current);
+  }
+
+  async function runLiftProductSearch() {
+    if (!liftProductMapper) return;
+    const hasFilter = [
+      liftProductMapper.catalogId,
+      liftProductMapper.catalogName,
+      liftProductMapper.productId,
+      liftProductMapper.productName,
+    ].some((value) => value.trim());
+    if (!hasFilter) {
+      patchLiftProductMapper({ error: "Enter a catalog ID/name or product ID/name before searching." });
+      return;
+    }
+
+    patchLiftProductMapper({ loading: true, error: "", hasSearched: true, selectedProduct: null, selectedUnitNumber: "" });
+    try {
+      const response = await fetchLiftProducts(
+        { request },
+        {
+          catalogId: liftProductMapper.catalogId.trim(),
+          catalogName: liftProductMapper.catalogName.trim(),
+          productId: liftProductMapper.productId.trim(),
+          productName: liftProductMapper.productName.trim(),
+          productType: liftProductMapper.productType,
+          status: liftProductMapper.status,
+        }
+      );
+      setLiftProductMapper((current) =>
+        current
+          ? {
+              ...current,
+              results: response.products,
+              hasMore: response.hasMore,
+              loading: false,
+              error: "",
+            }
+          : current
+      );
+    } catch (error) {
+      patchLiftProductMapper({
+        loading: false,
+        error: error instanceof Error ? error.message : "Unable to search Lift products.",
+      });
+    }
+  }
+
+  function selectLiftProduct(product: ApiLiftProduct) {
+    const unitNumbers = Array.from(new Set((product.unitNumbers || []).filter(Boolean)));
+    patchLiftProductMapper({
+      selectedProduct: product,
+      selectedUnitNumber: unitNumbers.length === 1 ? unitNumbers[0] : "",
+      error: "",
+    });
+  }
+
+  async function saveLiftProductMapping() {
+    if (!liftProductMapper?.selectedProduct) return;
+    const product = liftProductMapper.selectedProduct;
+    const selectedUnitNumber = liftProductMapper.selectedUnitNumber.trim();
+    const returnedUnitNumbers = Array.from(new Set((product.unitNumbers || []).filter(Boolean)));
+    if (returnedUnitNumbers.length > 1 && !selectedUnitNumber) {
+      patchLiftProductMapper({ error: "Choose one unit number to import for this mapping." });
+      return;
+    }
+    if (!product.productId) {
+      patchLiftProductMapper({ error: "Lift did not return a product ID for this product." });
+      return;
+    }
+    if (liftProductMapper.targetType === "variant" && !liftProductMapper.variantId) {
+      patchLiftProductMapper({ error: "Save/import this venue inventory before mapping Lift products." });
+      return;
+    }
+    if (liftProductMapper.targetType === "inventory" && !liftProductMapper.inventoryItemId) {
+      patchLiftProductMapper({ error: "Save/import this inventory row before mapping Lift products." });
+      return;
+    }
+    const mapping: LiftProductMapping = {
+      liftProductId: product.productId ?? undefined,
+      liftProductName: product.productName || undefined,
+      liftCatalogId: product.catalogId ?? undefined,
+      liftCatalogName: product.catalogName || undefined,
+      liftProductType: product.productType || undefined,
+      liftProductStatus: product.status || undefined,
+      liftUnitNumber: selectedUnitNumber || undefined,
+    };
+    if (liftProductMapper.targetType === "inventory") {
+      const existingRecord = effectiveRecords.find((record) => record.recordKey === liftProductMapper.recordKey);
+      const nextUnitNumber = selectedUnitNumber || existingRecord?.unitNumber || "";
+      if (!liftProductMapper.recordKey) {
+        patchLiftProductMapper({ error: "This inventory row could not be identified." });
+        return;
+      }
+      updateRecordOverride(liftProductMapper.recordKey, {
+        unitNumber: nextUnitNumber,
+        liftProductMapping: mapping,
+      });
+      await persistInventoryPatch(liftProductMapper.recordKey, {
+        unitNumber: nextUnitNumber,
+        liftProductMapping: mapping,
+      });
+      setLiftProductMapper(null);
+      return;
+    }
+    const existingUnitNumber =
+      variantAppearanceOverrides[liftProductMapper.variantKey]?.unitNumber ??
+      liveVenueVariantByKey.get(liftProductMapper.variantKey)?.unitNumber ??
+      "";
+    const nextUnitNumber = selectedUnitNumber || existingUnitNumber;
+    updateVariantAppearance(liftProductMapper.variantKey, liftProductMapper.variantLabel, {
+      unitNumber: nextUnitNumber,
+      liftProductMapping: mapping,
+    });
+    await persistVariantAppearance(
+      { variantId: liftProductMapper.variantId, label: liftProductMapper.variantLabel },
+      { unitNumber: nextUnitNumber, liftProductMapping: mapping }
+    );
+    setLiftProductMapper(null);
   }
 
   function updateRecordOverride(recordKey: string, patch: Partial<InventoryRecordOverride>) {
@@ -3124,6 +3414,45 @@ export default function VenueImportPreviewPage() {
                         placeholder="https://drive.google.com/..."
                       />
                     </label>
+                    <label className="venue-preview-field">
+                      <span className="venue-preview-fieldLabel">Photo Gallery URL</span>
+                      <input
+                        className="field-input venue-preview-input"
+                        value={activeVenue?.photoGalleryUrl || ""}
+                        onChange={(e) => updateActiveVenue({ photoGalleryUrl: e.target.value })}
+                        onBlur={(e) => {
+                          if (!activeVenue) return;
+                          void persistVenuePatch(activeVenue.id, { photoGalleryUrl: e.target.value });
+                        }}
+                        placeholder="Google Drive folder, Dropbox, AWS, or public image URL"
+                      />
+                    </label>
+                    <label className="venue-preview-field">
+                      <span className="venue-preview-fieldLabel">Venue PDF / Document URL</span>
+                      <input
+                        className="field-input venue-preview-input"
+                        value={activeVenue?.venueDocumentUrl || ""}
+                        onChange={(e) => updateActiveVenue({ venueDocumentUrl: e.target.value })}
+                        onBlur={(e) => {
+                          if (!activeVenue) return;
+                          void persistVenuePatch(activeVenue.id, { venueDocumentUrl: e.target.value });
+                        }}
+                        placeholder="PDF, image, or hosted marketing document URL"
+                      />
+                    </label>
+                    <label className="venue-preview-field">
+                      <span className="venue-preview-fieldLabel">Venue Video URL</span>
+                      <input
+                        className="field-input venue-preview-input"
+                        value={activeVenue?.venueVideoUrl || ""}
+                        onChange={(e) => updateActiveVenue({ venueVideoUrl: e.target.value })}
+                        onBlur={(e) => {
+                          if (!activeVenue) return;
+                          void persistVenuePatch(activeVenue.id, { venueVideoUrl: e.target.value });
+                        }}
+                        placeholder="YouTube, Google Drive video, or hosted video URL"
+                      />
+                    </label>
                     <div className="venue-preview-field venue-preview-fieldSpan2 venue-preview-shippingSection">
                       <div className="venue-preview-inlineEditorHead">
                         <div>
@@ -3757,6 +4086,7 @@ export default function VenueImportPreviewPage() {
                                 <th>Map</th>
                                 <th>Media</th>
                                 <th>Unit #</th>
+                                <th>Product ID</th>
                                 <th>Variant</th>
                                 <th>Vendor</th>
                                 <th>Trim H</th>
@@ -3840,19 +4170,38 @@ export default function VenueImportPreviewPage() {
                                       />
                                     </td>
                                     <td>
-                                      <input
-                                        className="field-input venue-preview-input"
-                                        value={record.unitNumber || ""}
-                                        onChange={(e) => updateRecordOverride(record.recordKey, { unitNumber: e.target.value })}
-                                        onBlur={(e) => void persistInventoryPatch(record.recordKey, { unitNumber: e.target.value })}
-                                        placeholder="Unit number"
-                                        disabled={!inventoryEditMode}
-                                      />
+                                      <div className="venue-preview-unitMap venue-preview-unitMap-compact">
+                                        <input
+                                          className="field-input venue-preview-input"
+                                          value={record.unitNumber || ""}
+                                          onChange={(e) => updateRecordOverride(record.recordKey, { unitNumber: e.target.value })}
+                                          onBlur={(e) => void persistInventoryPatch(record.recordKey, { unitNumber: e.target.value })}
+                                          placeholder="Unit number"
+                                          disabled={!inventoryEditMode}
+                                        />
+                                        <button
+                                          className="btn btn-ghost btn-soft venue-preview-mapProductBtn"
+                                          type="button"
+                                          onClick={() => openInventoryLiftProductMapper(record, appearance)}
+                                        >
+                                          <Link2 size={15} /> Map Product
+                                        </button>
+                                      </div>
                                       {record.unitNumberSource === "variant" ? (
                                         <div className="venue-preview-cellMeta venue-preview-cellMeta-inline">
                                           <span className="venue-preview-inlineBadge">Inherited</span>
                                         </div>
                                       ) : null}
+                                    </td>
+                                    <td className="venue-preview-cellMeta">
+                                      {record.liftProductMapping?.liftProductId || appearance.liftProductMapping?.liftProductId ? (
+                                        <div className="venue-preview-productIdStack">
+                                          <span className="venue-preview-productIdPill">
+                                            {record.liftProductMapping?.liftProductId || appearance.liftProductMapping?.liftProductId}
+                                          </span>
+                                          <small>{record.liftProductMapping?.liftProductId ? "Row" : "Inherited"}</small>
+                                        </div>
+                                      ) : "—"}
                                     </td>
                                     <td>
                                       <div className="venue-preview-variantCell">
@@ -4019,6 +4368,7 @@ export default function VenueImportPreviewPage() {
                           <th>Variant</th>
                           <th>Count</th>
                           <th>Unit Mapping</th>
+                          <th>Product ID</th>
                           <th>Color</th>
                           <th>Abbrev.</th>
                           <th>Routing</th>
@@ -4045,14 +4395,46 @@ export default function VenueImportPreviewPage() {
                               </td>
                               <td className="venue-preview-cellStrong">{variant.total}</td>
                               <td>
-                                <input
-                                  className="field-input venue-preview-input"
-                                  value={appearance.unitNumber || ""}
-                                  onChange={(e) => updateVariantAppearance(variant.key, variant.label, { unitNumber: e.target.value })}
-                                  onBlur={(e) => void persistVariantAppearance(variant, { unitNumber: e.target.value })}
-                                  placeholder="Applies to all matching inventoryIDs"
-                                  disabled={!inventoryEditMode}
-                                />
+                                <div className="venue-preview-unitMap">
+                                  <input
+                                    className="field-input venue-preview-input"
+                                    value={appearance.unitNumber || ""}
+                                    onChange={(e) => updateVariantAppearance(variant.key, variant.label, { unitNumber: e.target.value })}
+                                    onBlur={(e) => {
+                                      const nextMapping = appearance.liftProductMapping
+                                        ? { ...appearance.liftProductMapping, liftUnitNumber: e.target.value || undefined }
+                                        : undefined;
+                                      const manualPatch: Partial<VariantAppearance> = nextMapping
+                                        ? { unitNumber: e.target.value, liftProductMapping: nextMapping }
+                                        : { unitNumber: e.target.value };
+                                      void persistVariantAppearance(variant, manualPatch);
+                                    }}
+                                    placeholder="Applies to all matching inventoryIDs"
+                                    disabled={!inventoryEditMode}
+                                  />
+                                  <button
+                                    className="btn btn-ghost btn-soft venue-preview-mapProductBtn"
+                                    type="button"
+                                    onClick={() => openLiftProductMapper(variant, appearance)}
+                                  >
+                                    <Link2 size={15} /> Map Product
+                                  </button>
+                                  {appearance.liftProductMapping ? (
+                                    <div className="venue-preview-liftMapMeta">
+                                      <span>Lift</span>
+                                      <strong>{appearance.liftProductMapping.liftProductName || `Product ${appearance.liftProductMapping.liftProductId || ""}`}</strong>
+                                      {appearance.liftProductMapping.liftCatalogName ? <em>{appearance.liftProductMapping.liftCatalogName}</em> : null}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className="venue-preview-cellMeta">
+                                {appearance.liftProductMapping?.liftProductId ? (
+                                  <div className="venue-preview-productIdStack">
+                                    <span className="venue-preview-productIdPill">{appearance.liftProductMapping.liftProductId}</span>
+                                    {appearance.liftProductMapping.liftProductStatus ? <small>Status {appearance.liftProductMapping.liftProductStatus}</small> : null}
+                                  </div>
+                                ) : "—"}
                               </td>
                               <td>
                                 <input
@@ -4262,6 +4644,293 @@ export default function VenueImportPreviewPage() {
                     ))}
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {liftProductMapper ? (
+          <div className="venue-preview-modalScrim" onClick={() => setLiftProductMapper(null)}>
+            <div
+              className="venue-preview-modal venue-preview-modal-liftProduct"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="lift-product-map-title"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="venue-preview-modalHead">
+                <div>
+                  <div className="venue-preview-sectionEyebrow">Lift Catalog</div>
+                  <div className="venue-preview-sectionTitle" id="lift-product-map-title">Map Product</div>
+                  <div className="venue-preview-sectionSub">
+                    {liftProductMapper.targetType === "inventory"
+                      ? `${liftProductMapper.inventoryId || "This inventory item"} will store the selected Lift product ID and, when available, one unit number.`
+                      : `${liftProductMapper.variantLabel} will store the selected Lift product ID and, when available, one unit number for matching inventory.`}
+                  </div>
+                </div>
+                <button className="btn btn-ghost btn-soft" type="button" onClick={() => setLiftProductMapper(null)}>
+                  <X size={16} /> Close
+                </button>
+              </div>
+
+              <div className="venue-preview-modalBody">
+                {!inventoryEditMode ? (
+                  <div className="venue-preview-alert venue-preview-alert-warning">
+                    Inventory is locked. You can search Lift products, but unlock inventory before saving this mapping.
+                  </div>
+                ) : null}
+
+                <div className="venue-preview-liftFilterPanel">
+                  <div className="venue-preview-liftFilterSection is-primary">
+                    <div>
+                      <div className="venue-preview-title">Catalog Scope</div>
+                      <div className="venue-preview-sub">Start here to narrow Lift’s product catalog.</div>
+                    </div>
+                    <label className="venue-preview-liftField venue-preview-liftField-wide">
+                      <span>Known Catalog</span>
+                      <select
+                        className="select"
+                        value={knownLiftCatalogValue(liftProductMapper.catalogId, liftProductMapper.catalogName)}
+                        onChange={(e) => {
+                          const catalog = KNOWN_LIFT_CATALOGS.find((item) => item.id === e.target.value);
+                          patchLiftProductMapper({
+                            catalogId: catalog?.id || "",
+                            catalogName: catalog?.name || "",
+                            results: [],
+                            selectedProduct: null,
+                            selectedUnitNumber: "",
+                            hasSearched: false,
+                            hasMore: false,
+                            error: "",
+                          });
+                        }}
+                      >
+                        <option value="">Manual catalog</option>
+                        {KNOWN_LIFT_CATALOGS.map((catalog) => (
+                          <option key={catalog.id} value={catalog.id}>
+                            {catalog.name} · {catalog.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="venue-preview-liftFilterGrid">
+                      <label className="venue-preview-liftField">
+                        <span>Catalog ID</span>
+                        <input
+                          className="field-input venue-preview-input"
+                          value={liftProductMapper.catalogId}
+                          onChange={(e) => patchLiftProductMapper({ catalogId: e.target.value })}
+                          placeholder="7146"
+                        />
+                      </label>
+                      <label className="venue-preview-liftField">
+                        <span>Catalog Name</span>
+                        <input
+                          className="field-input venue-preview-input"
+                          value={liftProductMapper.catalogName}
+                          onChange={(e) => patchLiftProductMapper({ catalogName: e.target.value })}
+                          placeholder="Exact catalog name"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="venue-preview-liftFilterSection">
+                    <div>
+                      <div className="venue-preview-title">Product Filters</div>
+                      <div className="venue-preview-sub">Optional exact-match filters for faster lookup.</div>
+                    </div>
+                    <div className="venue-preview-liftFilterGrid">
+                      <label className="venue-preview-liftField">
+                        <span>Product ID</span>
+                        <input
+                          className="field-input venue-preview-input"
+                          value={liftProductMapper.productId}
+                          onChange={(e) => patchLiftProductMapper({ productId: e.target.value })}
+                          placeholder="Optional"
+                        />
+                      </label>
+                      <label className="venue-preview-liftField">
+                        <span>Product Name</span>
+                        <input
+                          className="field-input venue-preview-input"
+                          value={liftProductMapper.productName}
+                          onChange={(e) => patchLiftProductMapper({ productName: e.target.value })}
+                          placeholder="Optional exact name"
+                        />
+                      </label>
+                      <label className="venue-preview-liftField">
+                        <span>Product Type</span>
+                        <select
+                          className="select"
+                          value={liftProductMapper.productType}
+                          onChange={(e) => patchLiftProductMapper({ productType: e.target.value as LiftProductMapperState["productType"] })}
+                        >
+                          <option value="">All types</option>
+                          <option value="REGULAR">Regular</option>
+                          <option value="KIT">Kit</option>
+                          <option value="SERVICE">Service</option>
+                        </select>
+                      </label>
+                      <label className="venue-preview-liftField">
+                        <span>Status</span>
+                        <select
+                          className="select"
+                          value={liftProductMapper.status}
+                          onChange={(e) => patchLiftProductMapper({ status: e.target.value as "A" | "I" })}
+                        >
+                          <option value="A">Active</option>
+                          <option value="I">Inactive</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="venue-preview-liftSearchActions">
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    onClick={() => void runLiftProductSearch()}
+                    disabled={liftProductMapper.loading}
+                  >
+                    <Search size={16} /> {liftProductMapper.loading ? "Searching..." : "Search Lift Products"}
+                  </button>
+                  {liftProductMapper.hasSearched ? (
+                    <span className="venue-preview-resultCount">
+                      <strong>{liftProductMapper.results.length}</strong> result{liftProductMapper.results.length === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                  {liftProductMapper.hasMore ? (
+                    <span className="venue-preview-cellMeta">Showing first 250 products. Narrow the catalog or product filter for more precision.</span>
+                  ) : null}
+                </div>
+
+                {liftProductMapper.error ? (
+                  <div className="venue-preview-alert venue-preview-alert-danger">{liftProductMapper.error}</div>
+                ) : null}
+
+                <div className="venue-preview-liftBrowser">
+                  <div className="venue-preview-liftResultsPane">
+                    <div className="venue-preview-liftPaneHead">
+                      <div>
+                        <div className="venue-preview-title">Products</div>
+                        <div className="venue-preview-sub">
+                          {liftProductMapper.hasSearched
+                            ? `${liftProductMapper.results.length} returned from Lift`
+                            : "Search a catalog to load products."}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="venue-preview-liftResults">
+                      {!liftProductMapper.hasSearched ? (
+                        <div className="venue-preview-empty">Start with a Lift catalog ID or catalog name, then search for the matching product.</div>
+                      ) : liftProductMapper.loading ? (
+                        <div className="venue-preview-empty">Searching Lift products...</div>
+                      ) : !liftProductMapper.results.length ? (
+                        <div className="venue-preview-empty">No Lift products matched these filters.</div>
+                      ) : (
+                        liftProductMapper.results.map((product) => {
+                          const isSelected = liftProductMapper.selectedProduct?.productId === product.productId;
+                          const unitNumbers = product.unitNumbers || [];
+                          const unitLabel = unitNumbers.length
+                            ? unitNumbers.join(", ")
+                            : "No unit numbers returned";
+                          return (
+                            <button
+                              key={`${product.productId || product.productName}-${product.catalogId || product.catalogName}`}
+                              className={`venue-preview-liftProductRow${isSelected ? " is-selected" : ""}`}
+                              type="button"
+                              onClick={() => selectLiftProduct(product)}
+                            >
+                              <span>
+                                <strong>{product.productName || `Product ${product.productId || ""}`}</strong>
+                                <small>
+                                  {[product.productId ? `ID ${product.productId}` : "", product.catalogName || (product.catalogId ? `Catalog ${product.catalogId}` : ""), product.productType, product.status ? `Status ${product.status}` : ""].filter(Boolean).join(" · ")}
+                                </small>
+                              </span>
+                              <span className={unitNumbers.length ? "venue-preview-unitBadge" : "venue-preview-unitBadge is-empty"}>
+                                {unitLabel}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  <aside className="venue-preview-liftDetailRail" aria-label="Selected Lift product details">
+                    {!liftProductMapper.selectedProduct ? (
+                      <div className="venue-preview-liftDetailEmpty">
+                        <div className="venue-preview-title">Product Details</div>
+                        <div className="venue-preview-sub">Select a product to inspect payload fields and choose the unit number to import.</div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="venue-preview-liftDetailHead">
+                          <div>
+                            <div className="venue-preview-title">{liftProductMapper.selectedProduct.productName || "Lift Product"}</div>
+                            <div className="venue-preview-sub">
+                              {[liftProductMapper.selectedProduct.productId ? `ID ${liftProductMapper.selectedProduct.productId}` : "", liftProductMapper.selectedProduct.catalogName].filter(Boolean).join(" · ")}
+                            </div>
+                          </div>
+                          <span className="venue-preview-status is-neutral">{liftProductMapper.selectedProduct.status || "—"}</span>
+                        </div>
+
+                        {(liftProductMapper.selectedProduct.unitNumbers || []).length ? (
+                          <label className="venue-preview-liftField venue-preview-unitSelect">
+                            <span>Unit number to import</span>
+                            <select
+                              className="select"
+                              value={liftProductMapper.selectedUnitNumber}
+                              onChange={(e) => patchLiftProductMapper({ selectedUnitNumber: e.target.value })}
+                            >
+                              <option value="">Choose one unit number</option>
+                              {liftProductMapper.selectedProduct.unitNumbers.map((unitNumber) => (
+                                <option key={unitNumber} value={unitNumber}>{unitNumber}</option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : (
+                          <div className="venue-preview-alert venue-preview-alert-warning">
+                            Lift returned this product without unit numbers. You can still save the Product ID mapping for the future Product ID interface.
+                          </div>
+                        )}
+
+                        <dl className="venue-preview-liftDetailsList">
+                          {liftProductDetailRows(liftProductMapper.selectedProduct).map(([label, value]) => (
+                            <div key={label} className="venue-preview-liftDetailRow">
+                              <dt>{label}</dt>
+                              <dd>{formatLiftDetailValue(value)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </>
+                    )}
+                  </aside>
+                </div>
+              </div>
+
+              <div className="venue-preview-modalFoot">
+                <span className="venue-preview-cellMeta">Product ID is stored for the future Lift interface. Unit Number remains available for today’s Lift setup.</span>
+                <div className="venue-preview-actions">
+                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => setLiftProductMapper(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    onClick={() => void saveLiftProductMapping()}
+                    disabled={
+                      !inventoryEditMode ||
+                      !liftProductMapper.selectedProduct ||
+                      !liftProductMapper.selectedProduct.productId ||
+                      ((liftProductMapper.selectedProduct.unitNumbers || []).length > 1 && !liftProductMapper.selectedUnitNumber.trim())
+                    }
+                  >
+                    Save Mapping
+                  </button>
+                </div>
               </div>
             </div>
           </div>

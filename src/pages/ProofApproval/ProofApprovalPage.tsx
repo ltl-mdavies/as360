@@ -24,6 +24,7 @@ import AppShell from "../../app/AppShell";
 import Panel from "../../components/common/Panel";
 import PageHeader from "../../components/common/PageHeader";
 import Lightbox from "../../components/common/Lightbox";
+import PullToRefresh from "../../components/common/PullToRefresh";
 import { WorkspacePresenceCluster } from "../../components/realtime/WorkspacePresenceCluster";
 import { ShareAccessDenied, useShareAccess } from "../../components/share/ShareAccess";
 import { getRollupById } from "../../logic/mockRollups";
@@ -878,6 +879,21 @@ export default function ProofApprovalPage() {
   const feedbackAcknowledged = selected ? feedbackAcknowledgedByLine[feedbackAckKey(selected)] === true : false;
   const feedbackViewed = selected ? feedbackViewedByLine[feedbackAckKey(selected)] === true : false;
   const proofHistory = useMemo(() => buildProofHistory(selected), [selected]);
+  const proofPullRefreshDisabled =
+    historyOpen ||
+    feedbackDrawerOpen ||
+    Boolean(feedbackLightbox) ||
+    isRevisionDragActive ||
+    showRevisionUploader ||
+    Boolean(pendingProofAction) ||
+    Object.keys(stagedRevisionByLine).length > 0 ||
+    revisionJobs.some((job) => job.status === "processing");
+  const refreshProofApproval = useCallback(async () => {
+    setSyncWarning(null);
+    setBackgroundSyncMessage(null);
+    setLoadError(null);
+    await syncProofsSilently();
+  }, [syncProofsSilently]);
 
   useEffect(() => {
     stagedRevisionRef.current = stagedRevisionByLine;
@@ -2008,6 +2024,7 @@ export default function ProofApprovalPage() {
 
   return (
     <AppShell pageClassName="wide" projectTitle={projectTitle}>
+      <PullToRefresh onRefresh={refreshProofApproval} disabled={proofPullRefreshDisabled}>
       <div className={`proof-workspace ${useProofCommandHeader ? "is-command-header" : "is-classic-header"}`}>
         {useProofCommandHeader ? (
           <section className="proof-commandHeader" aria-label="Proof approval workspace header">
@@ -3524,6 +3541,7 @@ export default function ProofApprovalPage() {
         </div>
       ) : null}
       {shareAccess.identityModal()}
+      </PullToRefresh>
     </AppShell>
   );
 }

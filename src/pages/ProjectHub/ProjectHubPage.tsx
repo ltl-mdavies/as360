@@ -1,10 +1,12 @@
 // src/pages/ProjectHub/ProjectHubPage.tsx
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ListChecks } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Images, ListChecks, Video } from "lucide-react";
 import AppShell from "../../app/AppShell";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import Panel from "../../components/common/Panel";
 import PageHeader from "../../components/common/PageHeader";
+import PopoverMenu from "../../components/common/PopoverMenu";
+import PullToRefresh from "../../components/common/PullToRefresh";
 import { ShareAccessDenied, ShareAccessModal, useShareAccess } from "../../components/share/ShareAccess";
 import "../../styles/hub.css";
 
@@ -14,7 +16,7 @@ import { isDemoProjectRoute } from "../../logic/projectMode";
 
 import InventoryScopeModal from "../../components/projects/InventoryScopeModal";
 import ReviewAllocationModal from "../../components/reviewAllocation/ReviewAllocationModal";
-import EditProjectDetailsModal, { type ProjectDetailsDraft } from "../../components/projects/EditProjectDetailsModal";
+import EditProjectDetailsModal, { type ProjectDetailsDraft, type ProjectDetailsHealthAction } from "../../components/projects/EditProjectDetailsModal";
 import { useApiClient } from "../../api/useApiClient";
 import {
   fetchProjectActivity,
@@ -41,6 +43,11 @@ import { demoStore, useDemoStore } from "../../domain/store/demoStore";
 import { useDemoProjectContext } from "../../domain/selectors/useDemoProjectContext";
 import { toLegacyInventory, toLegacyCreatives } from "../../domain/adapters/uiShapes";
 import { triggerBrowserDownload } from "../../logic/downloads";
+import {
+  PROJECT_ORDER_LIFECYCLE_ACTIONS,
+  isProjectOrderLifecycleAction,
+  type ProjectOrderLifecycleAction,
+} from "../../logic/orderLifecycleActions";
 
 import {
   getEndClientPrimaryActionCard,
@@ -74,6 +81,23 @@ function externalRepoLabel(url?: string | null) {
   if (normalized.includes("drive.google.com")) return "Google Drive";
   if (normalized.includes("sharepoint.com") || normalized.includes("onedrive")) return "Shared Docs";
   return "External Docs";
+}
+
+function orderLifecycleLabel(status?: string | null) {
+  if (status === "on_hold") return "On Hold";
+  if (status === "cancelled") return "Cancelled";
+  return "Active";
+}
+
+function orderLifecycleTone(status?: string | null): "neutral" | "warning" | "danger" {
+  if (status === "cancelled") return "danger";
+  if (status === "on_hold") return "warning";
+  return "neutral";
+}
+
+function normalizeProjectDetailsHealthAction(value?: string | null): ProjectDetailsHealthAction | null {
+  if (value && isProjectOrderLifecycleAction(value)) return value;
+  return null;
 }
 
 async function copyText(text: string) {
@@ -205,7 +229,7 @@ function buildDemoStepperModel(ctx: any): HubStepperModel {
   };
 }
 
-type HubTone = "primary" | "warning" | "success" | "danger" | "neutral";
+type HubTone = "primary" | "warning" | "success" | "danger" | "neutral" | "documents" | "transit" | "support";
 type HubPrimaryBannerTone = HubTone | "info";
 type HubPrimaryBannerIconName = "upload" | "assign" | "submit" | "proof" | "transit" | "production" | "complete" | "next";
 
@@ -616,7 +640,7 @@ export default function ProjectHubPage() {
   const api = useApiClient();
   
 
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const mode = searchParams.get("mode");
   const modeSuffix = mode === "customer" ? "?mode=customer" : "";
   const isCustomerMode = mode === "customer";
@@ -733,6 +757,21 @@ export default function ProjectHubPage() {
   const [liftOrderUrlLoading, setLiftOrderUrlLoading] = useState(false);
   const [creativePackageGenerating, setCreativePackageGenerating] = useState(false);
   const [workspaceReloadKey, setWorkspaceReloadKey] = useState(0);
+  const [isEditOpen, setEditOpen] = useState(false);
+  const [editHealthAction, setEditHealthAction] = useState<ProjectDetailsHealthAction | null>(null);
+
+  useEffect(() => {
+    if (searchParams.get("panel") !== "details") return;
+    if (shareAccess.isShareMode || isDemo) return;
+
+    const requestedHealthAction = normalizeProjectDetailsHealthAction(searchParams.get("healthAction"));
+    setEditHealthAction(requestedHealthAction);
+    setEditOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("panel");
+    next.delete("healthAction");
+    setSearchParams(next, { replace: true });
+  }, [isDemo, searchParams, setSearchParams, shareAccess.isShareMode]);
 
   const loadProjectActivity = useCallback(async () => {
     if (!projectId || isDemo || shareAccess.isShareMode || shareAccess.isResolving || !isCustomerMode) return;
@@ -764,15 +803,14 @@ export default function ProjectHubPage() {
     }
   }, [api, isDemo, loadProjectActivity, projectId, shareAccess.isShareMode]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadWorkspace() {
+  const loadHubWorkspace = useCallback(
+    async (options: { cancelled?: () => boolean; force?: boolean } = {}) => {
       if (!projectId || isDemo || shareAccess.isResolving) return;
       try {
         setProjectLoading(true);
-        const cached = peekProjectWorkspaceCache(projectId, shareAccess.isShareMode);
-        if (cached && !cancelled) {
+        if (options.force) invalidateProjectWorkspaceCache(projectId, shareAccess.isShareMode);
+        const cached = options.force ? null : peekProjectWorkspaceCache(projectId, shareAccess.isShareMode);
+        if (cached && !options.cancelled?.()) {
           setBackendProject(cached.project);
           setIncludedIds(cached.scope?.includedIds || []);
           setProjectScopeMeta({
@@ -791,7 +829,7 @@ export default function ProjectHubPage() {
         const response = await (shareAccess.isShareMode
           ? fetchProjectWorkspace(api, projectId, true)
           : fetchProjectHubBootstrap(api, projectId));
-        if (cancelled) return;
+        if (options.cancelled?.()) return;
         setBackendProject(response.project);
         setIncludedIds(response.scope?.includedIds || []);
         setProjectScopeMeta({
@@ -808,25 +846,32 @@ export default function ProjectHubPage() {
         });
         if (!shareAccess.isShareMode) {
           const bootstrapResponse = response as Awaited<ReturnType<typeof fetchProjectHubBootstrap>>;
-          setViewerCanManageLiftOrder(bootstrapResponse.viewer?.isPlatformAdmin === true);
+          setViewerCanManageLiftOrder(
+            bootstrapResponse.viewer?.isPlatformAdmin === true ||
+              (bootstrapResponse.viewer?.role === "customer_admin" && bootstrapResponse.project.projectMode !== "internal_sandbox")
+          );
           setBackendTransit(bootstrapResponse.transit);
           setProjectActivity(bootstrapResponse.events || []);
         } else {
           setViewerCanManageLiftOrder(false);
         }
       } catch (error) {
-        if (cancelled) return;
+        if (options.cancelled?.()) return;
         console.error("Failed to load project workspace for review allocation", error);
       } finally {
-        if (!cancelled) setProjectLoading(false);
+        if (!options.cancelled?.()) setProjectLoading(false);
       }
-    }
+    },
+    [api, isDemo, projectId, shareAccess.isResolving, shareAccess.isShareMode]
+  );
 
-    void loadWorkspace();
+  useEffect(() => {
+    let cancelled = false;
+    void loadHubWorkspace({ cancelled: () => cancelled });
     return () => {
       cancelled = true;
     };
-  }, [api, isDemo, projectId, shareAccess.isResolving, shareAccess.isShareMode, workspaceReloadKey]);
+  }, [loadHubWorkspace, workspaceReloadKey]);
 
   useEffect(() => {
     if (shareAccess.isShareMode) void loadProjectActivity();
@@ -877,6 +922,11 @@ export default function ProjectHubPage() {
         extId: backendProject.extId,
         poNumber: backendProject.poNumber || "—",
         liftOrderId: backendProject.liftOrderId || null,
+        orderLifecycleStatus: backendProject.orderLifecycleStatus || "active",
+        orderLifecycleReason: backendProject.orderLifecycleReason || null,
+        orderLifecycleNote: backendProject.orderLifecycleNote || null,
+        orderLifecycleUpdatedAt: backendProject.orderLifecycleUpdatedAt || null,
+        orderLifecycleUpdatedByName: backendProject.orderLifecycleUpdatedByName || null,
         dates: {
           artworkDue: backendProject.artworkDueDate || null,
           postDate: backendProject.postDate || null,
@@ -974,6 +1024,9 @@ export default function ProjectHubPage() {
           venueName: localProjectDetails.venueName || baseRollup.venueName,
           poNumber: localProjectDetails.poNumber ?? baseRollup.poNumber,
           liftOrderId: localProjectDetails.liftOrderId ?? baseRollup.liftOrderId,
+          orderLifecycleStatus: localProjectDetails.orderLifecycleStatus ?? baseRollup.orderLifecycleStatus,
+          orderLifecycleReason: localProjectDetails.orderLifecycleReason ?? baseRollup.orderLifecycleReason,
+          orderLifecycleNote: localProjectDetails.orderLifecycleNote ?? baseRollup.orderLifecycleNote,
           endClientName: localProjectDetails.endClientName ?? baseRollup.endClientName,
           dates: {
             ...baseRollup.dates,
@@ -987,7 +1040,6 @@ export default function ProjectHubPage() {
   // UI state
   const [isReviewOpen, setReviewOpen] = useState(false);
   const [isScopeOpen, setScopeOpen] = useState(false);
-  const [isEditOpen, setEditOpen] = useState(false);
   const [isShareAccessOpen, setShareAccessOpen] = useState(false);
 
   const [includedIds, setIncludedIds] = useState<string[]>([]);
@@ -1112,7 +1164,24 @@ const showExternalDocsAction = Boolean(
   externalDocumentUrl && (documentSourceMode === "external" || documentSourceMode === "hybrid")
 );
 const externalDocsLabel = externalRepoLabel(externalDocumentUrl);
+const venueMediaLinks = [
+  backendProject?.photoGalleryUrl ? { key: "photos", label: "Photos", icon: Images } : null,
+  backendProject?.venueDocumentUrl ? { key: "document", label: "Venue Doc", icon: FileText } : null,
+  backendProject?.venueVideoUrl ? { key: "video", label: "Video", icon: Video } : null,
+].filter((item): item is { key: string; label: string; icon: typeof Images } => Boolean(item));
+const buildDocumentsPath = (media?: string) => {
+  if (!rollup) return "";
+  const base = `/p/${rollup.projectId}/docs${modeSuffix}`;
+  if (!media) return base;
+  return `${base}${base.includes("?") ? "&" : "?"}media=${encodeURIComponent(media)}`;
+};
 const demoNavState = isDemo ? { state: { demo: true } } : undefined;
+const documentsMediaNavState = {
+  state: {
+    ...(isDemo ? { demo: true } : {}),
+    modalReturnTo: `${location.pathname}${location.search}`,
+  },
+};
 const artworkWorkspaceLoading = !isDemo && !backendWorkspace;
 const artworkCreatives = isDemo ? demoCreativesLegacy : (backendWorkspace?.creatives || []);
 const artworkInventory = isDemo ? demoInventoryLegacy : (backendWorkspace?.inventory || []);
@@ -1322,6 +1391,20 @@ const currentVenueOption =
     window.open(`/p/${allocationReportProjectId}/allocation-report?print=1`, "_blank");
   }, [allocationReportProjectId]);
 
+  const refreshHub = useCallback(async () => {
+    if (!projectId || isDemo || shareAccess.isResolving) return;
+    await loadHubWorkspace({ force: true });
+    await loadProjectActivity();
+    if (shareAccess.isShareMode) {
+      try {
+        const response = await fetchProjectTransit(api, projectId, true);
+        setBackendTransit(response.transit);
+      } catch (error) {
+        console.warn("Pull refresh could not update transit detail", error);
+      }
+    }
+  }, [api, isDemo, loadHubWorkspace, loadProjectActivity, projectId, shareAccess.isResolving, shareAccess.isShareMode]);
+
   if (!rollup || !stepper || !primaryBanner) {
     if (!isDemo && projectLoading) {
       return (
@@ -1465,6 +1548,11 @@ const currentVenueOption =
   const goProofs = () => resolvedProjectId && navigate(shareAccess.buildProjectUrl(`/p/${resolvedProjectId}/proofs${modeSuffix}`), demoNavState as any);
   const goTransit = () => resolvedProjectId && navigate(shareAccess.buildProjectUrl(`/p/${resolvedProjectId}/transit${modeSuffix}`), demoNavState as any);
   const goAllocationOverride = () => resolvedProjectId && navigate(`/p/${resolvedProjectId}/allocation-override`, demoNavState as any);
+  const canShowOrderActions = !shareAccess.isShareMode && !isDemo && (viewerCanManageLiftOrder || isCustomerMode);
+  const openProjectOrderAction = (action: ProjectOrderLifecycleAction) => {
+    setEditHealthAction(action);
+    setEditOpen(true);
+  };
   const openLiftOrder = async () => {
     if (!rollup.projectId) return;
     const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
@@ -1626,6 +1714,10 @@ const currentVenueOption =
 
   return (
     <AppShell pageClassName="wide" projectTitle={rollup.title}>
+      <PullToRefresh
+        onRefresh={refreshHub}
+        disabled={isEditOpen || isReviewOpen || isScopeOpen || isShareAccessOpen}
+      >
       <div className="hub-mobileOnly">
         <div className="hub-mobileShell">
           <HubMobileProjectHeader
@@ -1635,6 +1727,9 @@ const currentVenueOption =
               ...(isSandboxProject ? [{ label: "Internal Sandbox", tone: "warning" as const }] : []),
               { label: venueMarket, tone: "success" },
               { label: venueName, tone: "neutral" },
+              ...(rollup.orderLifecycleStatus && rollup.orderLifecycleStatus !== "active"
+                ? [{ label: orderLifecycleLabel(rollup.orderLifecycleStatus), tone: orderLifecycleTone(rollup.orderLifecycleStatus) }]
+                : []),
               ...(rollup.liftOrderId ? [{ label: `Lift ${rollup.liftOrderId}`, tone: "neutral" as const }] : []),
               ...(isSandboxProject && rollup.sourceCustomerName ? [{ label: `Source ${rollup.sourceCustomerName}`, tone: "neutral" as const }] : []),
             ]}
@@ -1656,13 +1751,31 @@ const currentVenueOption =
                     Allocation
                   </button>
                 ) : null}
+                {canShowOrderActions ? (
+                  <PopoverMenu
+                    buttonLabel="Order actions"
+                    buttonClassName="hub-headerActionMenu"
+                    ariaLabel="Order actions"
+                    items={PROJECT_ORDER_LIFECYCLE_ACTIONS.map((item) => ({
+                      label: item.label,
+                      action: item.action,
+                      description: item.description,
+                    }))}
+                    onAction={(action) => {
+                      if (isProjectOrderLifecycleAction(action)) openProjectOrderAction(action);
+                    }}
+                  />
+                ) : null}
                 {isCustomerMode && !isSandboxProject ? (
                   <button className="btn btn-ghost btn-soft" type="button" onClick={() => setShareAccessOpen(true)}>
                     Share
                   </button>
                 ) : null}
                 {!shareAccess.isShareMode ? (
-                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => setEditOpen(true)}>
+                <button className="btn btn-ghost btn-soft" type="button" onClick={() => {
+                  setEditHealthAction(null);
+                  setEditOpen(true);
+                }}>
                     Edit Details
                   </button>
                 ) : null}
@@ -1797,7 +1910,7 @@ const currentVenueOption =
               <HubMobileWorkflowCard
                 title="Transit Approval"
                 meta={transitStatusText}
-                tone={transitStatusTone}
+                tone="transit"
                 badge={transitAcceptanceText}
                 metrics={[
                   { label: "Acceptance", value: transitAcceptanceText, tone: transitStatusTone },
@@ -1820,15 +1933,29 @@ const currentVenueOption =
             <HubMobileWorkflowCard
               title="Document Repository"
               meta={showExternalDocsAction ? `Adspace + ${externalDocsLabel}` : "Specs, templates, and instructions"}
-              tone="neutral"
+              tone="documents"
               metrics={[
                 { label: "Source", value: documentSourceMode === "external" ? "External" : documentSourceMode === "hybrid" ? "Hybrid" : "Adspace" },
               ]}
               actions={
                 <>
-                  <button className="btn btn-primary" type="button" onClick={() => navigate(shareAccess.buildProjectUrl(`/p/${rollup.projectId}/docs${modeSuffix}`), demoNavState as any)}>
+                  <button className="btn btn-primary" type="button" onClick={() => navigate(shareAccess.buildProjectUrl(buildDocumentsPath()), demoNavState as any)}>
                     Open Documents
                   </button>
+                  {venueMediaLinks.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.key}
+                        className="btn btn-ghost btn-soft"
+                        type="button"
+                        onClick={() => navigate(shareAccess.buildProjectUrl(buildDocumentsPath(item.key)), documentsMediaNavState as any)}
+                      >
+                        <Icon size={16} aria-hidden="true" />
+                        {item.label}
+                      </button>
+                    );
+                  })}
                   {showExternalDocsAction ? (
                     <a className="btn btn-ghost btn-soft" href={externalDocumentUrl} target="_blank" rel="noreferrer">
                       Open {externalDocsLabel}
@@ -1841,7 +1968,7 @@ const currentVenueOption =
             <HubMobileWorkflowCard
               title="Support"
               meta="Contact us if you need help"
-              tone="neutral"
+              tone="support"
               metrics={[
                 { label: "Email", value: "support@ltlco.com" },
                 { label: "Phone", value: "(502) 555-0123" },
@@ -1890,6 +2017,11 @@ const currentVenueOption =
             {isSandboxProject ? <span className="hub-chip tone-warning">Internal Sandbox</span> : null}
             <span className="hub-chip tone-info">{venueMarket}</span>
             <span className="hub-chip tone-neutral">{venueName}</span>
+            {rollup.orderLifecycleStatus && rollup.orderLifecycleStatus !== "active" ? (
+              <span className={`hub-chip tone-${orderLifecycleTone(rollup.orderLifecycleStatus)}`}>
+                {orderLifecycleLabel(rollup.orderLifecycleStatus)}
+              </span>
+            ) : null}
             {rollup.liftOrderId ? (
               <span className="hub-chip tone-neutral">Lift {rollup.liftOrderId}</span>
             ) : null}
@@ -1939,6 +2071,22 @@ const currentVenueOption =
               </button>
             )}
 
+            {canShowOrderActions ? (
+              <PopoverMenu
+                buttonLabel="Order actions"
+                buttonClassName="hub-headerAction hub-headerAction-lg hub-headerActionMenu"
+                ariaLabel="Order actions"
+                items={PROJECT_ORDER_LIFECYCLE_ACTIONS.map((item) => ({
+                  label: item.label,
+                  action: item.action,
+                  description: item.description,
+                }))}
+                onAction={(action) => {
+                  if (isProjectOrderLifecycleAction(action)) openProjectOrderAction(action);
+                }}
+              />
+            ) : null}
+
             {isCustomerMode && !isSandboxProject && (
               <button
                 className="btn btn-ghost btn-soft btn-lg hub-headerAction hub-headerAction-lg"
@@ -1953,7 +2101,10 @@ const currentVenueOption =
               <button
                 className="btn btn-ghost btn-soft btn-lg hub-headerAction hub-headerAction-lg"
                 type="button"
-                onClick={() => setEditOpen(true)}
+                onClick={() => {
+                  setEditHealthAction(null);
+                  setEditOpen(true);
+                }}
                 title="Edit project details (stub)"
               >
                 Edit Project Details
@@ -2315,7 +2466,7 @@ const currentVenueOption =
 
         {/* Transit Approval (customer-only) */}
         {showTransitCard && (
-          <Panel className={`hub-card hub-card-tone-${transitStatusTone}`}>
+          <Panel className="hub-card hub-card-tone-transit">
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Transit Approval</div>
@@ -2400,7 +2551,7 @@ const currentVenueOption =
         </div>
 
         <div className="hub-secondaryGrid">
-          <Panel className="hub-card hub-card-tone-info">
+          <Panel className="hub-card hub-card-tone-documents">
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Document Repository</div>
@@ -2418,9 +2569,23 @@ const currentVenueOption =
                     : "Access helpful reference files, generated order records, package snapshots, and project instructions."}
               </div>
               <div className="hub-cardActions">
-                <button className="btn btn-primary btn-wide" type="button" onClick={() => navigate(shareAccess.buildProjectUrl(`/p/${rollup.projectId}/docs${modeSuffix}`), demoNavState as any)}>
+                <button className="btn btn-primary btn-wide" type="button" onClick={() => navigate(shareAccess.buildProjectUrl(buildDocumentsPath()), demoNavState as any)}>
                   Open Documents
                 </button>
+                {venueMediaLinks.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.key}
+                      className="btn btn-ghost btn-soft btn-wide"
+                      type="button"
+                      onClick={() => navigate(shareAccess.buildProjectUrl(buildDocumentsPath(item.key)), documentsMediaNavState as any)}
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                      {item.label}
+                    </button>
+                  );
+                })}
                 {showExternalDocsAction ? (
                   <a className="btn btn-ghost btn-soft btn-wide" href={externalDocumentUrl} target="_blank" rel="noreferrer">
                     Open {externalDocsLabel}
@@ -2430,7 +2595,7 @@ const currentVenueOption =
             </div>
           </Panel>
 
-          <Panel className="hub-card hub-card-tone-neutral">
+          <Panel className="hub-card hub-card-tone-support">
             <div className="hub-cardHeader">
               <div>
                 <div className="hub-cardTitle">Support</div>
@@ -2694,7 +2859,10 @@ const currentVenueOption =
 
       <EditProjectDetailsModal
         isOpen={isEditOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => {
+          setEditOpen(false);
+          setEditHealthAction(null);
+        }}
         initial={{
           title: rollup.title,
           market: venueMarket,
@@ -2706,12 +2874,17 @@ const currentVenueOption =
           endClientName: backendProject?.endClientName ?? rollup.endClientName ?? undefined,
           contractNumber: backendProject?.contractNumber ?? undefined,
           liftOrderId: backendProject?.liftOrderId ?? rollup.liftOrderId ?? undefined,
+          orderLifecycleStatus: backendProject?.orderLifecycleStatus ?? rollup.orderLifecycleStatus ?? "active",
+          orderLifecycleReason: backendProject?.orderLifecycleReason ?? rollup.orderLifecycleReason ?? "",
+          orderLifecycleNote: backendProject?.orderLifecycleNote ?? rollup.orderLifecycleNote ?? "",
           inventoryPresetId: projectScopeMeta.presetId || "full_venue",
           inventoryPresetName: projectScopeMeta.presetName || "Full Venue",
         }}
         venues={editVenueOptions}
         isVenueLocked={isProjectVenueLocked}
         canManageLiftOrder={viewerCanManageLiftOrder}
+        canManageOrderDisposition={!shareAccess.isShareMode && !isDemo}
+        initialHealthAction={editHealthAction}
         inventoryPresets={scopeVenuePresets}
         isInventoryScopeLocked={Boolean(rollup.liftOrderId)}
         onSave={(draft) => {
@@ -2740,6 +2913,9 @@ const currentVenueOption =
                   poNumber: draft.poNumber,
                   endClientName: draft.endClientName,
                   contractNumber: draft.contractNumber,
+                  orderLifecycleStatus: draft.orderLifecycleStatus,
+                  orderLifecycleReason: draft.orderLifecycleReason,
+                  orderLifecycleNote: draft.orderLifecycleNote,
                   ...(!rollup.liftOrderId ? { inventoryPresetId: draft.inventoryPresetId || "full_venue" } : {}),
                   ...(viewerCanManageLiftOrder
                     ? {
@@ -2786,6 +2962,7 @@ const currentVenueOption =
           })();
         }}
       />
+      </PullToRefresh>
     </AppShell>
   );
 }

@@ -1041,7 +1041,7 @@ html[data-theme="dark"] .review-note-textarea{
 .review-previewValidationGrid{
   margin-top: 14px;
   display:grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
 }
 
@@ -1071,6 +1071,14 @@ html[data-theme="dark"] .review-note-textarea{
   letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.review-previewValidationCard small{
+  display:block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .review-previewAlert{
@@ -1207,6 +1215,47 @@ html[data-theme="dark"] .review-note-textarea{
   font-size: 14px;
   font-weight: 800;
   color: var(--text);
+}
+
+.review-previewIdentifierGrid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.review-previewIdentifierGrid span{
+  border: 1px solid var(--stroke2);
+  border-radius: 12px;
+  background: rgba(255,255,255,.72);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.review-previewIdentifierGrid span.is-active{
+  border-color: rgba(63,110,216,.24);
+  background: rgba(63,110,216,.08);
+}
+
+.review-previewIdentifierGrid small,
+.review-previewIdentifierGrid strong{
+  display:block;
+  min-width: 0;
+}
+
+.review-previewIdentifierGrid small{
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.review-previewIdentifierGrid strong{
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+  overflow-wrap:anywhere;
 }
 
 .review-previewLineMeta{

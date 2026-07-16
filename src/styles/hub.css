@@ -121,6 +121,109 @@
   box-shadow: 0 0 0 3px rgba(63,110,216,.14);
 }
 
+.hub-pageHeader .pm-root,
+.hub-mobileShell .pm-root{
+  position: relative;
+}
+
+.hub-pageHeader .pm-btn,
+.hub-mobileShell .pm-btn{
+  min-height: 38px;
+  border: 1px solid var(--line, var(--stroke));
+  border-radius: 14px;
+  background: rgba(255,255,255,.78);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+.hub-pageHeader .pm-btn[aria-expanded="true"],
+.hub-mobileShell .pm-btn[aria-expanded="true"]{
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--line) 66%);
+  background: color-mix(in srgb, #edf4ff 76%, white 24%);
+}
+
+.hub-pageHeader .pm-btn-caret,
+.hub-mobileShell .pm-btn-caret{
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.hub-pageHeader .pm-menu,
+.hub-mobileShell .pm-menu{
+  position: absolute;
+  top: calc(100% + 6px);
+  min-width: 268px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--stroke) 82%, white);
+  border-radius: 18px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 20px 48px rgba(15,23,42,.12), 0 4px 14px rgba(15,23,42,.05);
+  z-index: 80;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.hub-pageHeader .pm-right,
+.hub-mobileShell .pm-right{
+  right: 0;
+}
+
+.hub-pageHeader .pm-left,
+.hub-mobileShell .pm-left{
+  left: 0;
+}
+
+.hub-pageHeader .pm-item,
+.hub-mobileShell .pm-item{
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+  padding: 10px 11px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.hub-pageHeader .pm-item:hover,
+.hub-mobileShell .pm-item:hover{
+  background: color-mix(in srgb, #edf4ff 76%, transparent);
+}
+
+.hub-pageHeader .pm-item:focus-visible,
+.hub-mobileShell .pm-item:focus-visible{
+  outline: none;
+  background: color-mix(in srgb, #edf4ff 82%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.hub-pageHeader .pm-itemLabel,
+.hub-mobileShell .pm-itemLabel{
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.hub-pageHeader .pm-itemDescription,
+.hub-mobileShell .pm-itemDescription{
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .hub-meta2 .hub-chip{
   transform: translateY(-1px);
 }
@@ -532,6 +635,18 @@ html[data-theme="dark"] .hub-banner{ background: rgba(15,20,34,.55); }
 
 .hub-card-tone-neutral{
   --hub-card-tone: color-mix(in srgb, var(--muted) 48%, white);
+}
+
+.hub-card-tone-documents{
+  --hub-card-tone: #d6a100;
+}
+
+.hub-card-tone-transit{
+  --hub-card-tone: #0891b2;
+}
+
+.hub-card-tone-support{
+  --hub-card-tone: #8b5cf6;
 }
 
 .hub-card:hover{
@@ -1447,6 +1562,27 @@ html[data-theme="dark"] .hub-chip:not(.tone-success):not(.tone-warning):not(.ton
   --hub-mobile-tone-bg: color-mix(in srgb, #f8fafc 78%, white);
   --hub-mobile-tone-border: color-mix(in srgb, var(--stroke2) 84%, white);
   --hub-mobile-tone-text: color-mix(in srgb, var(--muted) 72%, var(--text));
+}
+
+.hub-mobileTone-documents{
+  --hub-mobile-tone: #d6a100;
+  --hub-mobile-tone-bg: color-mix(in srgb, #d6a100 11%, white);
+  --hub-mobile-tone-border: color-mix(in srgb, #d6a100 26%, white);
+  --hub-mobile-tone-text: color-mix(in srgb, #b47f00 82%, var(--text));
+}
+
+.hub-mobileTone-transit{
+  --hub-mobile-tone: #0891b2;
+  --hub-mobile-tone-bg: color-mix(in srgb, #0891b2 10%, white);
+  --hub-mobile-tone-border: color-mix(in srgb, #0891b2 26%, white);
+  --hub-mobile-tone-text: color-mix(in srgb, #0891b2 80%, var(--text));
+}
+
+.hub-mobileTone-support{
+  --hub-mobile-tone: #8b5cf6;
+  --hub-mobile-tone-bg: color-mix(in srgb, #8b5cf6 9%, white);
+  --hub-mobile-tone-border: color-mix(in srgb, #8b5cf6 24%, white);
+  --hub-mobile-tone-text: color-mix(in srgb, #8b5cf6 78%, var(--text));
 }
 
 @media (max-width: 860px){

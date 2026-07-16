@@ -7,6 +7,7 @@ Adspace treats Lift as the source of truth once an order has been submitted and 
 Current production-facing Lift sync uses two different data shapes:
 
 - `AS360Orders` provides order header, order status, order step, line number, order line id, line step, product name, material, print size, quantity, and other production reference data.
+- `ShippingReport` is the candidate source for shipment-level read data. It should be validated per order before it drives app state.
 - `AS360ProofReport` provides proof attachment/proof line state, proof URLs, proof approval metadata, proof comments/attachments, and detailed report attachments.
 
 Vendor Workspace uses the route metadata on each Adspace proof line to decide which fields are relevant:
@@ -59,6 +60,39 @@ Observed failure modes:
 - Project Hub: in-production jobs point to `Open Proof Reference`; completed jobs show the final Complete step and use reference/archive messaging.
 - Proof Approval: approved proof packets remain visible for reference, with messaging focused on proof approval, current production state, or Lift completion.
 - Vendor Workspace: primary/LTL order pages should show a compact Lift Order Data section sourced from `AS360Orders` and line-level Lift details sourced from the matching Lift order line. External vendor pages should omit Lift-specific language.
+
+## ShippingReport v1 audit map
+
+The first shipping-sync slice should remain read-only. It should validate endpoint availability and row shape before writing line status or showing carrier/tracking as authoritative.
+
+Expected normalized fields:
+
+- `orderNumber`: Lift order number, usually from `ORDER_NUMBER`, `ORDER_ID`, or `LIFT_ORDER_NUMBER`.
+- `orderLineId`: Lift order line id, usually from `ORDER_LINE_ID` or `LINE_ID`.
+- `lineNumber`: visible line number, usually from `LINE_NUMBER` or `ORDER_LINE_NUMBER`.
+- `shippingStatus`: shipment/tracker status, usually from `TRACKER_SHORT_MESSAGE`, `SHIPPING_STATUS`, `SHIPMENT_STATUS`, or `STATUS`.
+- `carrier`: carrier or ship-via label, usually from `SHIP_METHOD`, `CARRIER`, `CARRIER_NAME`, or `SHIP_VIA`.
+- `trackingNumber`: tracking/pro number, usually from `TRACKING_NUMBER`, `TRACKING_NO`, or `PRO_NUMBER`.
+- `shippedDate`: ship date, usually from `ACTUAL_SHIP_DATE`, `SHIPPED_DATE`, or `SHIP_DATE`.
+- `destinationName`: ship-to destination, usually from `LOCATION_NAME`.
+
+Validation rules:
+
+- Match rows by `ORDER_LINE_ID` first, then `LINE_NUMBER`.
+- Empty ShippingReport rows are not an error before shipment activity exists.
+- Missing tracking data should not block proof approval or production release.
+- ShippingReport data must not mutate customer proof state, Transit Approval state, or external vendor manual shipment state.
+- Primary/LTL Vendor Workspace can show ShippingReport carrier/tracking as read-only once the row shape is validated.
+- Admin Health should emit project-level warnings, not line-level noise, when ShippingReport shows shipment activity but Adspace transit is not approved.
+- Admin Health should emit a separate warning when ShippingReport rows cannot be mapped to Adspace proof lines by Lift `ORDER_LINE_ID`.
+- Health snapshot ShippingReport refreshes should stay read-only and should not create workflow-error records on every dashboard refresh.
+
+Observed validation on 2026-07-07:
+
+- Reference shipped Lift order `A0223449` returns from `AS360Orders` as `ORDER_STATUS: Invoiced`, `HEADER_STEP_NUMBER: 18`, with 64 order lines.
+- `ShippingReport/N?offset=0&p1=A0223449&p2=` returns shipped rows keyed by `ORDER_LINE_ID`.
+- `ShippingReport/N?offset=0&p1=A0223449&p2=9484204` returns the single line shipment row for Lift line id `9484204`.
+- `A0223449` sample values: `TRACKING_NUMBER: 1Z60V157P295819850`, `TRACKER_SHORT_MESSAGE: Delivered`, `SHIP_METHOD: UPS Ground`, `LOCATION_NAME: Intersection (Philadelphia Warehouse)`, `ACTUAL_SHIP_DATE: 2026-06-22`.
 
 ## Open notes
 

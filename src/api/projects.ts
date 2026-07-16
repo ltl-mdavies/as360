@@ -20,6 +20,9 @@ export type ApiProjectWorkspaceResponse = {
     venueName: string;
     documentSourceMode?: "adspace" | "external" | "hybrid";
     documentLibraryUrl?: string;
+    photoGalleryUrl?: string;
+    venueDocumentUrl?: string;
+    venueVideoUrl?: string;
     title: string;
     poNumber?: string;
     adspaceOrderNumber?: string;
@@ -33,6 +36,11 @@ export type ApiProjectWorkspaceResponse = {
     orderSubmittedAt?: string | null;
     orderSubmittedByName?: string | null;
     orderSubmissionNote?: string | null;
+    orderLifecycleStatus?: "active" | "on_hold" | "cancelled";
+    orderLifecycleReason?: string | null;
+    orderLifecycleNote?: string | null;
+    orderLifecycleUpdatedAt?: string | null;
+    orderLifecycleUpdatedByName?: string | null;
     productionReleasedAt?: string | null;
     productionReleasedByName?: string | null;
     productionReleaseNote?: string | null;
@@ -188,6 +196,7 @@ export type ApiProjectProofLineResponse = {
   liftProofingId?: number | null;
   mediaVariantKey: string;
   mediaVariantLabel?: string;
+  liftProductId?: number | null;
   liftProductName?: string | null;
   productionRoute?: "primary_print_vendor" | "external_vendor";
   vendorAccountId?: string | null;
@@ -255,6 +264,23 @@ export type ApiLiftLineSnapshot = {
   lineStepNumber?: number | null;
   printHeightIn?: number | null;
   printWidthIn?: number | null;
+};
+
+export type ApiLiftShippingSnapshot = {
+  orderNumber?: string | null;
+  orderLineId?: number | null;
+  trackingNumber?: string | null;
+  trackerMessage?: string | null;
+  trackerShortMessage?: string | null;
+  shipMethod?: string | null;
+  locationName?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  addressLine3?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | number | null;
+  actualShipDate?: string | null;
 };
 
 export type ApiProjectProofTechnicalReport = {
@@ -473,6 +499,8 @@ export type ApiLiftPayloadPreviewLine = {
   lineNumber: number;
   mediaVariantLabel: string;
   filename: string;
+  productIdentifier?: string;
+  productId?: number | null;
   unitNumber: string;
   quantity: number;
   assignedLocations: string[];
@@ -483,6 +511,7 @@ export type ApiLiftPayloadPreviewLine = {
 };
 
 export type ApiLiftPayloadPreview = {
+  productIdentifierMode?: "unit_number" | "product_id";
   payload: {
     ext_id: string;
     po_number: string;
@@ -492,6 +521,8 @@ export type ApiLiftPayloadPreview = {
     order_note?: string;
     product_data: Array<Array<{
       productSku: string;
+      product_id?: number;
+      unit_number?: string;
       productCategory: "Art";
       productQty: number;
       file_name: string;
@@ -560,6 +591,7 @@ export type ApiAdminSettings = {
       vendorName: string;
       platformLabel: string;
       activeEnvironment: "prod" | "qa1";
+      productIdentifierMode: "unit_number" | "product_id";
       environments: {
         prod: ApiLiftEnvironmentConfig;
         qa1: ApiLiftEnvironmentConfig;
@@ -583,9 +615,36 @@ export type ApiLiftEnvironmentConfig = {
   fallbackOrderLookupUrl: string;
   orderUrlResolverUrl: string;
   customerContactListUrl: string;
+  productManagementUrl: string;
   proofEndpointUrlTemplate: string;
   flushSyncUrl: string;
+  shippingReportUrl: string;
   proofUrlResolverUrl: string;
+};
+
+export type ApiLiftProduct = {
+  productId: number | null;
+  productName: string;
+  catalogId: number | null;
+  catalogName: string;
+  unitNumbers: string[];
+  status: string;
+  productType: string;
+  parentProductId: number | null;
+  accountingItemCode: string;
+  productDescription: string;
+  additionalFields: Record<string, string | number | boolean | null>;
+  components: ApiLiftProduct[];
+};
+
+export type ApiLiftProductLookupResponse = {
+  products: ApiLiftProduct[];
+  catalogs: Array<{ catalogId: number | null; catalogName: string }>;
+  query: Record<string, string>;
+  activeEnvironment: "prod" | "qa1";
+  durationMs: number;
+  urlHost: string | null;
+  hasMore: boolean;
 };
 
 export type NotificationEventType =
@@ -812,6 +871,164 @@ export type ApiRecentWorkflowIssue = {
   isDrill?: boolean;
 };
 
+export type ApiAdminHealthStatus = "good" | "watch" | "degraded" | "blocked";
+export type ApiAdminHealthSeverity = "info" | "warning" | "error" | "blocked";
+export type ApiAdminHealthIncidentStatus = "active" | "acknowledged" | "resolved" | "suppressed";
+export type ApiAdminHealthIncidentActionHistoryItem = {
+  action: string;
+  actorName: string;
+  at: string;
+  reason?: string;
+  note?: string;
+  verificationStatus?: "cleared" | "active" | "not_checked";
+};
+export type ApiAdminHealthRunbookSafety = "read_only" | "guarded_write" | "external_review";
+export type ApiAdminHealthSystemId =
+  | "app_api"
+  | "aws_foundation"
+  | "lift"
+  | "customer_access"
+  | "customer_data"
+  | "proof_ops"
+  | "vendor_ops"
+  | "notifications"
+  | "realtime";
+
+export type ApiAdminHealthIssue = {
+  id: string;
+  systemId: ApiAdminHealthSystemId;
+  severity: ApiAdminHealthSeverity;
+  title: string;
+  message: string;
+  scope?: {
+    customerId?: string;
+    customerName?: string;
+    projectId?: string;
+    projectTitle?: string;
+    orderName?: string;
+    orderNumber?: string;
+    liftOrderId?: string;
+    vendorAccountId?: string;
+    vendorName?: string;
+    orderId?: string;
+    lineNumber?: number;
+    filename?: string;
+  };
+  detectedAt: string;
+  source: string;
+  recommendedAction: string;
+  runbookActionId?: string;
+  dependency?: {
+    issueId: string;
+    title: string;
+    message: string;
+  };
+  incident?: {
+    id: string;
+    fingerprint: string;
+    status: ApiAdminHealthIncidentStatus;
+    firstSeenAt: string;
+    lastSeenAt: string;
+    lastCheckedAt: string;
+    occurrenceCount: number;
+    acknowledgedBy?: string;
+    acknowledgedAt?: string;
+    resolvedAt?: string;
+    suppressedUntil?: string;
+    lastOperatorAction?: string;
+    lastOperatorActionAt?: string;
+    lastOperatorName?: string;
+    lastOperatorReason?: string;
+    lastOperatorNote?: string;
+    lastVerificationStatus?: "cleared" | "active" | "not_checked";
+    actionHistory?: ApiAdminHealthIncidentActionHistoryItem[];
+  };
+  incidentPacket: {
+    systemId: ApiAdminHealthSystemId;
+    severity: ApiAdminHealthSeverity;
+    evidence: Record<string, unknown>;
+    relatedEvents: string[];
+    allowedRunbookIds: string[];
+  };
+};
+
+export type ApiAdminHealthRunbook = {
+  id: string;
+  systemId: ApiAdminHealthSystemId;
+  label: string;
+  safety: ApiAdminHealthRunbookSafety;
+  summary: string;
+  operatorSteps: string[];
+  actionLabel?: string;
+  appPath?: string;
+  evidenceHints: string[];
+};
+
+export type ApiAdminHealthIncident = {
+  id: string;
+  fingerprint: string;
+  systemId: ApiAdminHealthSystemId;
+  severity: ApiAdminHealthSeverity;
+  status: ApiAdminHealthIncidentStatus;
+  title: string;
+  message: string;
+  source: string;
+  scope?: ApiAdminHealthIssue["scope"];
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastCheckedAt: string;
+  occurrenceCount: number;
+  acknowledgedBy?: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+  suppressedUntil?: string;
+  lastOperatorAction?: string;
+  lastOperatorActionAt?: string;
+  lastOperatorName?: string;
+  lastOperatorReason?: string;
+  lastOperatorNote?: string;
+  lastVerificationStatus?: "cleared" | "active" | "not_checked";
+  actionHistory?: ApiAdminHealthIncidentActionHistoryItem[];
+};
+
+export type ApiAdminHealthSystem = {
+  id: ApiAdminHealthSystemId;
+  label: string;
+  status: ApiAdminHealthStatus;
+  lastCheckedAt: string;
+  issueCount: number;
+  summary: string;
+  details: Record<string, unknown>;
+};
+
+export type ApiAdminHealthSnapshot = {
+  overallStatus: ApiAdminHealthStatus;
+  checkedAt: string;
+  systems: ApiAdminHealthSystem[];
+  issues: ApiAdminHealthIssue[];
+  runbooks?: ApiAdminHealthRunbook[];
+  recentIncidents: ApiAdminHealthIncident[];
+  incidentSummary: {
+    active: number;
+    acknowledged: number;
+    suppressed: number;
+    resolvedRecently: number;
+    newIncidents: number;
+    recurring: number;
+  };
+  summaryCounts: {
+    systemsGood: number;
+    systemsWatch: number;
+    systemsDegraded: number;
+    systemsBlocked: number;
+    activeIssues: number;
+    warnings: number;
+    errors: number;
+    blocked: number;
+  };
+  nextRecommendedChecks: string[];
+};
+
 export type ApiLiftSmokeEndpointResult = {
   label: string;
   configured: boolean;
@@ -837,6 +1054,7 @@ export type ApiLiftReadinessSmokeResponse = {
     orderSync: ApiLiftSmokeEndpointResult;
     proofReport: ApiLiftSmokeEndpointResult;
     orderUrl: ApiLiftSmokeEndpointResult;
+    shippingReport: ApiLiftSmokeEndpointResult;
   };
 };
 
@@ -1047,6 +1265,29 @@ export async function fetchVenueDetail(api: ApiClientLike, venueId: string) {
 export async function fetchVenueInventoryPresets(api: ApiClientLike, venueId: string) {
   const response = await fetchVenueDetail(api, venueId);
   return response.presets || [];
+}
+
+export async function fetchLiftProducts(
+  api: ApiClientLike,
+  filters: {
+    catalogId?: string;
+    catalogName?: string;
+    productId?: string;
+    productName?: string;
+    accountingItemCode?: string;
+    parentProductId?: string;
+    productType?: "KIT" | "REGULAR" | "SERVICE" | "";
+    status?: "A" | "I";
+    fetchSize?: number;
+    fetchOffset?: number;
+  }
+) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === "") continue;
+    params.set(key, String(value));
+  }
+  return api.request<ApiLiftProductLookupResponse>(`/api/admin/lift/products?${params.toString()}`);
 }
 
 export async function createVenueInventoryPreset(
@@ -1569,6 +1810,22 @@ export async function fetchRecentWorkflowIssues(api: ApiClientLike, limit = 10) 
   return api.request<{ issues: ApiRecentWorkflowIssue[] }>(`/api/admin/settings?recentWorkflowErrors=${encodeURIComponent(String(limit))}`);
 }
 
+export async function fetchAdminHealthSnapshot(api: ApiClientLike) {
+  return api.request<ApiAdminHealthSnapshot>("/api/admin/health");
+}
+
+export async function updateAdminHealthIncident(
+  api: ApiClientLike,
+  incidentId: string,
+  action: "acknowledge" | "resolve" | "suppress" | "reopen",
+  options: { note?: string; reason?: string; verificationStatus?: "cleared" | "active" | "not_checked"; hours?: number } = {}
+) {
+  return api.request<{ incident: ApiAdminHealthIncident }>(`/api/admin/health/incidents/${encodeURIComponent(incidentId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action, ...options }),
+  });
+}
+
 export async function runLiftReadinessSmokeTest(api: ApiClientLike, orderNumber: string) {
   return api.request<ApiLiftReadinessSmokeResponse>(
     `/api/admin/settings?liftSmokeOrder=${encodeURIComponent(orderNumber)}`
@@ -1941,6 +2198,7 @@ export type ApiVendorOrderLine = {
     vendorNote?: string | null;
     sizeBytes?: number | null;
   } | null;
+  liftShipping?: ApiLiftShippingSnapshot | null;
   productionStatus: ApiVendorProductionStatus;
   baselineProductionStatus: ApiVendorProductionStatus;
   workflow: ApiVendorWorkflowState & {

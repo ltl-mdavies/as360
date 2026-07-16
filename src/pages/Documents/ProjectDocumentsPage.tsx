@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { ExternalLink, FileText, Images, Video, X } from "lucide-react";
 import AppShell from "../../app/AppShell";
 import PageHeader from "../../components/common/PageHeader";
 import Panel from "../../components/common/Panel";
@@ -29,6 +30,18 @@ type PendingDocument = {
 };
 
 type DocumentSourceMode = "adspace" | "external" | "hybrid";
+type VenueMediaKind = "photos" | "document" | "video";
+type VenueMediaItem = {
+  kind: VenueMediaKind;
+  label: string;
+  description: string;
+  url: string;
+};
+
+type VenueMediaModalState = VenueMediaItem & {
+  renderMode: "drive-folder" | "image" | "video" | "embed";
+  embedUrl: string;
+};
 
 const categoryLabels: Record<ApiProjectDocument["category"], string> = {
   project_document: "Project Document",
@@ -117,6 +130,91 @@ function externalRepoLabel(url: string) {
   return "External Document Repository";
 }
 
+function isLikelyImageUrl(url: string) {
+  return /\.(png|jpe?g|gif|webp|avif)(\?|#|$)/i.test(url);
+}
+
+function isLikelyVideoUrl(url: string) {
+  return /\.(mp4|webm|ogg|mov)(\?|#|$)/i.test(url);
+}
+
+function getGoogleDriveId(url: string, kind: "folder" | "file" = "file") {
+  const patterns =
+    kind === "folder"
+      ? [/drive\.google\.com\/drive\/folders\/([^/?#]+)/i, /[?&]id=([^&#]+)/i]
+      : [/drive\.google\.com\/file\/d\/([^/?#]+)/i, /[?&]id=([^&#]+)/i];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return "";
+}
+
+function getYouTubeEmbedUrl(url: string) {
+  const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&?/]+)/i);
+  return match?.[1] ? `https://www.youtube.com/embed/${match[1]}` : "";
+}
+
+function getDropboxRawUrl(url: string) {
+  if (!/dropbox\.com/i.test(url)) return url;
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete("dl");
+    parsed.searchParams.set("raw", "1");
+    return parsed.toString();
+  } catch {
+    return url.replace(/[?&]dl=0\b/i, (match) => `${match[0]}raw=1`);
+  }
+}
+
+function buildVenueMediaModal(item: VenueMediaItem): VenueMediaModalState {
+  const url = item.url.trim();
+  if (item.kind === "photos") {
+    const folderId = getGoogleDriveId(url, "folder");
+    if (folderId) {
+      return {
+        ...item,
+        renderMode: "drive-folder",
+        embedUrl: `https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(folderId)}#grid`,
+      };
+    }
+    if (isLikelyImageUrl(url)) return { ...item, renderMode: "image", embedUrl: url };
+    return { ...item, renderMode: "embed", embedUrl: url };
+  }
+
+  if (item.kind === "video") {
+    const youtubeEmbed = getYouTubeEmbedUrl(url);
+    if (youtubeEmbed) return { ...item, renderMode: "embed", embedUrl: youtubeEmbed };
+    const driveFileId = getGoogleDriveId(url, "file");
+    if (driveFileId) {
+      return {
+        ...item,
+        renderMode: "embed",
+        embedUrl: `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`,
+      };
+    }
+    if (isLikelyVideoUrl(url)) return { ...item, renderMode: "video", embedUrl: getDropboxRawUrl(url) };
+    return { ...item, renderMode: "embed", embedUrl: url };
+  }
+
+  const driveFileId = getGoogleDriveId(url, "file");
+  if (driveFileId) {
+    return {
+      ...item,
+      renderMode: "embed",
+      embedUrl: `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`,
+    };
+  }
+  if (isLikelyImageUrl(url)) return { ...item, renderMode: "image", embedUrl: url };
+  return { ...item, renderMode: "embed", embedUrl: url };
+}
+
+function VenueMediaIcon({ kind }: { kind: VenueMediaKind }) {
+  if (kind === "photos") return <Images size={18} aria-hidden="true" />;
+  if (kind === "video") return <Video size={18} aria-hidden="true" />;
+  return <FileText size={18} aria-hidden="true" />;
+}
+
 export default function ProjectDocumentsPage() {
   const api = useApiClient();
   const navigate = useNavigate();
@@ -124,7 +222,9 @@ export default function ProjectDocumentsPage() {
   const params = useParams<{ projectId: string }>();
   const projectId = params.projectId || "";
   const shareMode = useMemo(() => new URLSearchParams(location.search).has("share"), [location.search]);
+  const modalReturnTo = typeof (location.state as any)?.modalReturnTo === "string" ? String((location.state as any).modalReturnTo) : "";
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const autoOpenedMediaSearchRef = useRef("");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -137,11 +237,26 @@ export default function ProjectDocumentsPage() {
     postDate?: string;
     documentSourceMode?: DocumentSourceMode;
     documentLibraryUrl?: string;
+    photoGalleryUrl?: string;
+    venueDocumentUrl?: string;
+    venueVideoUrl?: string;
   } | null>(null);
   const [documents, setDocuments] = useState<ApiProjectDocument[]>([]);
   const [pending, setPending] = useState<PendingDocument[]>([]);
   const [lightboxDoc, setLightboxDoc] = useState<ApiProjectDocument | null>(null);
+  const [venueMediaModal, setVenueMediaModal] = useState<VenueMediaModalState | null>(null);
   const [packageGenerating, setPackageGenerating] = useState(false);
+
+  function closeVenueMediaModal() {
+    if (modalReturnTo) {
+      navigate(modalReturnTo, {
+        replace: true,
+        state: (location.state as any)?.demo === true ? { demo: true } : undefined,
+      });
+      return;
+    }
+    setVenueMediaModal(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +281,9 @@ export default function ProjectDocumentsPage() {
             postDate: workspaceResult.value.project.postDate,
             documentSourceMode: workspaceResult.value.project.documentSourceMode,
             documentLibraryUrl: workspaceResult.value.project.documentLibraryUrl,
+            photoGalleryUrl: workspaceResult.value.project.photoGalleryUrl,
+            venueDocumentUrl: workspaceResult.value.project.venueDocumentUrl,
+            venueVideoUrl: workspaceResult.value.project.venueVideoUrl,
           });
         } else {
           console.warn("Failed to load project document workspace metadata", workspaceResult.reason);
@@ -188,6 +306,15 @@ export default function ProjectDocumentsPage() {
     };
   }, [api, projectId, shareMode]);
 
+  useEffect(() => {
+    if (!venueMediaModal) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") closeVenueMediaModal();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [venueMediaModal, modalReturnTo]);
+
   const uploadedDocuments = useMemo(
     () => documents.filter((document) => document.source === "uploaded"),
     [documents]
@@ -196,6 +323,44 @@ export default function ProjectDocumentsPage() {
     () => documents.filter((document) => document.source === "generated"),
     [documents]
   );
+  const venueMediaItems = useMemo<VenueMediaItem[]>(() => {
+    if (!projectMeta) return [];
+    return [
+      projectMeta.photoGalleryUrl
+        ? {
+            kind: "photos" as const,
+            label: "Photo Gallery",
+            description: "Venue reference photos",
+            url: projectMeta.photoGalleryUrl,
+          }
+        : null,
+      projectMeta.venueDocumentUrl
+        ? {
+            kind: "document" as const,
+            label: "Venue Document",
+            description: "Marketing PDF or reference document",
+            url: projectMeta.venueDocumentUrl,
+          }
+        : null,
+      projectMeta.venueVideoUrl
+        ? {
+            kind: "video" as const,
+            label: "Venue Video",
+            description: "Venue walkthrough or reference video",
+            url: projectMeta.venueVideoUrl,
+          }
+        : null,
+    ].filter((item): item is VenueMediaItem => Boolean(item));
+  }, [projectMeta]);
+
+  useEffect(() => {
+    const requested = new URLSearchParams(location.search).get("media") as VenueMediaKind | null;
+    if (!requested || autoOpenedMediaSearchRef.current === location.search) return;
+    const item = venueMediaItems.find((candidate) => candidate.kind === requested);
+    if (!item) return;
+    autoOpenedMediaSearchRef.current = location.search;
+    setVenueMediaModal(buildVenueMediaModal(item));
+  }, [location.search, venueMediaItems]);
 
   async function generateCreativePackage() {
     if (!projectId || shareMode) return;
@@ -427,6 +592,38 @@ export default function ProjectDocumentsPage() {
       />
 
       <div className="documents-grid">
+        {venueMediaItems.length ? (
+          <Panel className="documents-panel documents-panel-external">
+            <div className="documents-venueMediaCard">
+              <div>
+                <div className="documents-sectionEyebrow">Venue References</div>
+                <div className="documents-externalTitle">{projectMeta?.venueName || "Venue Media"}</div>
+                <div className="documents-copy">
+                  Client-facing venue photos, sales documents, and videos configured in Venue Management.
+                </div>
+              </div>
+              <div className="documents-venueMediaActions">
+                {venueMediaItems.map((item) => (
+                  <button
+                    key={item.kind}
+                    className="documents-venueMediaButton"
+                    type="button"
+                    onClick={() => setVenueMediaModal(buildVenueMediaModal(item))}
+                  >
+                    <span className="documents-venueMediaIcon">
+                      <VenueMediaIcon kind={item.kind} />
+                    </span>
+                    <span>
+                      <strong>{item.label}</strong>
+                      <small>{item.description}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Panel>
+        ) : null}
+
         {usesExternalRepository ? (
           <Panel className="documents-panel documents-panel-external">
             <div className="documents-externalCard">
@@ -592,6 +789,59 @@ export default function ProjectDocumentsPage() {
           )}
         </Panel>
       </div>
+
+      {venueMediaModal ? (
+        <div className="documents-mediaBackdrop" role="presentation" onMouseDown={closeVenueMediaModal}>
+          <div
+            className={`documents-mediaModal documents-mediaModal-${venueMediaModal.kind}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label={venueMediaModal.label}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="documents-mediaHead">
+              <div>
+                <div className="documents-sectionEyebrow">Venue Reference</div>
+                <div className="documents-mediaTitle">{venueMediaModal.label}</div>
+                <div className="documents-copy">
+                  {venueMediaModal.renderMode === "drive-folder"
+                    ? "Google Drive folder preview. If Drive blocks the embedded view, open the source folder."
+                    : venueMediaModal.description}
+                </div>
+              </div>
+              <div className="documents-mediaActions">
+                <a className="btn btn-ghost btn-soft" href={venueMediaModal.url} target="_blank" rel="noreferrer">
+                  <ExternalLink size={16} aria-hidden="true" />
+                  Open Source
+                </a>
+                <button
+                  className="btn btn-ghost btn-soft documents-mediaClose"
+                  type="button"
+                  onClick={closeVenueMediaModal}
+                  aria-label="Close venue reference"
+                >
+                  <X size={17} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <div className="documents-mediaBody">
+              {venueMediaModal.renderMode === "image" ? (
+                <img className="documents-mediaImage" src={venueMediaModal.embedUrl} alt={venueMediaModal.label} />
+              ) : venueMediaModal.renderMode === "video" ? (
+                <video className="documents-mediaVideo" src={venueMediaModal.embedUrl} controls />
+              ) : (
+                <iframe
+                  className="documents-mediaFrame"
+                  src={venueMediaModal.embedUrl}
+                  title={venueMediaModal.label}
+                  allow="autoplay; fullscreen; picture-in-picture"
+                  allowFullScreen
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Lightbox
         isOpen={Boolean(lightboxDoc)}

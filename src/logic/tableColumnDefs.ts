@@ -8,6 +8,7 @@ import {
   getTransitChip,
   getProductionLabel,
 } from "./renderingRules";
+import { PROJECT_ORDER_LIFECYCLE_ACTIONS } from "./orderLifecycleActions";
 
 /**
  * Minimal render models (framework-agnostic)
@@ -41,6 +42,12 @@ export type AngieTableCapabilities = {
   showTransitColumn: boolean;     // if you prefer always showing it, set true and render "—" when disabled
 };
 
+function orderLifecycleLabel(status?: string | null) {
+  if (status === "on_hold") return "On Hold";
+  if (status === "cancelled") return "Cancelled";
+  return null;
+}
+
 /**
  * Build Angie table columns (ProjectRollup rows)
  */
@@ -60,6 +67,7 @@ export function buildAngieProjectTableColumns(
       primary: r.title,
       secondary: [
         r.projectMode === "internal_sandbox" ? "Sandbox" : null,
+        orderLifecycleLabel(r.orderLifecycleStatus),
         `AS360 # ${r.adspaceOrderNumber || r.extId.replace(/^AS360-/i, "")}`,
         r.liftOrderId && String(r.liftOrderId).trim().length > 0 ? `Lift # ${r.liftOrderId}` : null,
       ]
@@ -191,6 +199,8 @@ export function buildAngieProjectTableColumns(
         primary: primaryAction,
         secondary: [
           { label: "Open Hub", action: "open_project" },
+          { label: "Manage Details", action: "manage_project_details" },
+          ...PROJECT_ORDER_LIFECYCLE_ACTIONS.map((item) => ({ label: item.label, action: item.action })),
           { label: "Open Assignment", action: "open_assignment" },
           { label: "Open Proof Review", action: "open_proofs" },
           { label: "Open Transit Review", action: "open_transit" },

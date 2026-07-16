@@ -24,6 +24,11 @@ export type ProjectRollup = {
   extId: string;
   poNumber: string;
   liftOrderId?: string | null;
+  orderLifecycleStatus?: "active" | "on_hold" | "cancelled";
+  orderLifecycleReason?: string | null;
+  orderLifecycleNote?: string | null;
+  orderLifecycleUpdatedAt?: string | null;
+  orderLifecycleUpdatedByName?: string | null;
 
   dates: {
     artworkDue?: string | null; // ISO date string (YYYY-MM-DD)

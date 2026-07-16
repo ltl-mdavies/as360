@@ -108,7 +108,7 @@ export class Adspace360FoundationStack extends Stack {
 
     for (const bucket of [venueAssetsBucket, projectAssetsBucket, generatedDocsBucket]) {
       bucket.addCorsRule({
-        allowedOrigins: [appOrigin, "http://localhost:5173"],
+        allowedOrigins: [appOrigin, "http://localhost:5173", "http://localhost:5174"],
         allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.HEAD, s3.HttpMethods.PUT],
         allowedHeaders: ["*"],
         exposedHeaders: ["ETag"],
@@ -256,7 +256,7 @@ export class Adspace360FoundationStack extends Stack {
     const api = new apigwv2.HttpApi(this, "ProductApi", {
       apiName: `adspace360-product-api-${stageName}`,
       corsPreflight: {
-        allowOrigins: [appOrigin, "http://localhost:5173"],
+        allowOrigins: [appOrigin, "http://localhost:5173", "http://localhost:5174"],
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
@@ -468,6 +468,7 @@ export class Adspace360FoundationStack extends Stack {
         PRESENCE_WS_URL: webSocketStage.url,
         PRESENCE_WS_MANAGEMENT_ENDPOINT: webSocketStage.url,
         PRESENCE_BROADCAST_QUEUE_URL: presenceBroadcastQueue.queueUrl,
+        PRESENCE_BROADCAST_DLQ_URL: presenceBroadcastDlq.queueUrl,
         APP_BASE_URL: appOrigin,
         SHORT_BASE_URL: `https://${shortDomainName}`,
         LIFT_ASSET_CLOUDFRONT_DOMAIN: liftAssetDistribution.distributionDomainName,
@@ -486,6 +487,18 @@ export class Adspace360FoundationStack extends Stack {
     liftOutboundPrivateKeySecret.grantRead(projectApiFn);
     presenceTable.grantReadWriteData(projectApiFn);
     presenceBroadcastQueue.grantSendMessages(projectApiFn);
+    projectApiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["sqs:GetQueueAttributes", "sqs:GetQueueUrl"],
+        resources: [presenceBroadcastQueue.queueArn, presenceBroadcastDlq.queueArn],
+      })
+    );
+    projectApiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "ses:GetAccount"],
+        resources: ["*"],
+      })
+    );
     webSocketApi.grantManageConnections(projectApiFn);
     projectApiFn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -523,6 +536,20 @@ export class Adspace360FoundationStack extends Stack {
       schedule: events.Schedule.rate(Duration.hours(1)),
       targets: [new targets.LambdaFunction(notificationDigestFn)],
     });
+
+    projectApiFn.addEnvironment(
+      "HEALTH_LAMBDA_FUNCTION_NAMES",
+      cdk.Fn.join(",", [
+        venueApiFn.functionName,
+        uploadUrlFn.functionName,
+        presenceFn.functionName,
+        presenceBroadcastFn.functionName,
+        realtimeConfigFn.functionName,
+        notificationDigestFn.functionName,
+      ])
+    );
+    projectApiFn.addEnvironment("PRESENCE_BROADCAST_QUEUE_NAME", presenceBroadcastQueue.queueName);
+    projectApiFn.addEnvironment("PRESENCE_BROADCAST_DLQ_NAME", presenceBroadcastDlq.queueName);
 
     api.addRoutes({
       path: "/api/{proxy+}",

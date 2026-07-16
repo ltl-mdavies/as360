@@ -76,6 +76,16 @@ type Props = {
   onAfterSubmit?: () => void;
 };
 
+function liftIdentifierModeLabel(mode?: ApiLiftPayloadPreview["productIdentifierMode"]) {
+  return mode === "product_id" ? "Product ID" : "Unit Number";
+}
+
+function liftIdentifierModeDetail(mode?: ApiLiftPayloadPreview["productIdentifierMode"]) {
+  return mode === "product_id"
+    ? "Lift is expected to create lines from product_id. Unit Number is still included when available."
+    : "Lift is expected to create lines from productSku / Unit Number. Product ID is still included when mapped.";
+}
+
 export default function ReviewAllocationModal({
   isOpen,
   onClose,
@@ -1474,6 +1484,11 @@ function SubmitTab({
                   <strong>{preview.lines.length} Lift lines</strong>
                 </div>
                 <div className="review-previewValidationCard">
+                  <span className="review-previewValidationLabel">Lift submit context</span>
+                  <strong>{liftIdentifierModeLabel(preview.productIdentifierMode)}</strong>
+                  <small>{liftIdentifierModeDetail(preview.productIdentifierMode)}</small>
+                </div>
+                <div className="review-previewValidationCard">
                   <span className="review-previewValidationLabel">Assignment coverage</span>
                   <strong>{preview.completeness.assigned}/{preview.completeness.required} assigned</strong>
                 </div>
@@ -1497,15 +1512,25 @@ function SubmitTab({
 
               <div className="review-previewLines">
                 {preview.lines.map((line) => (
-                  <div key={`${line.lineNumber}-${line.filename}-${line.unitNumber}`} className="review-previewLine">
+                  <div key={`${line.lineNumber}-${line.filename}-${line.unitNumber}-${line.productId || "no-product"}`} className="review-previewLine">
                     <div className="review-previewLineTop">
                       <div className="review-previewLineNumber">Line {line.lineNumber}</div>
                       <div className="review-previewLineQty">{line.quantity} location{line.quantity === 1 ? "" : "s"}</div>
                     </div>
                     <div className="review-previewLineTitle">{line.mediaVariantLabel}</div>
+                    <div className="review-previewIdentifierGrid" aria-label="Lift product identifiers">
+                      <span className={preview.productIdentifierMode === "unit_number" ? "is-active" : ""}>
+                        <small>productSku / Unit #</small>
+                        <strong>{line.unitNumber || "—"}</strong>
+                      </span>
+                      <span className={preview.productIdentifierMode === "product_id" ? "is-active" : ""}>
+                        <small>product_id</small>
+                        <strong>{line.productId || "—"}</strong>
+                      </span>
+                    </div>
                     <div className="review-previewLineMeta">
                       <span>{line.filename}</span>
-                      <span>SKU {line.unitNumber}</span>
+                      <span>Active key {line.productIdentifier || line.unitNumber || "—"}</span>
                     </div>
                     <div className="review-previewLineMeta">
                       <span>Trim {line.trimHeight}"h × {line.trimWidth}"w</span>

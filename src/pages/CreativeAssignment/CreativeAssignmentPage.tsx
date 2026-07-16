@@ -32,6 +32,7 @@ import Panel from "../../components/common/Panel";
 import Portal from "../../components/common/Portal";
 import Lightbox from "../../components/common/Lightbox";
 import PageHeader from "../../components/common/PageHeader";
+import PullToRefresh from "../../components/common/PullToRefresh";
 import { WorkspacePresenceCluster } from "../../components/realtime/WorkspacePresenceCluster";
 import { ShareAccessDenied, useShareAccess } from "../../components/share/ShareAccess";
 import CreativeUploaderModal from "../../components/uploader/CreativeUploaderModal";
@@ -478,6 +479,17 @@ const demoCreativesLegacy: CreativeAsset[] = useMemo(() => {
   const [openInvPickerId, setOpenInvPickerId] = useState<string | null>(null);
   const [mapModalInventoryId, setMapModalInventoryId] = useState<string | null>(null);
   const [openListDetailsId, setOpenListDetailsId] = useState<string | null>(null);
+  const assignmentPullRefreshDisabled =
+    assignmentSaveState.tone === "saving" ||
+    isReviewOpen ||
+    isUploaderOpen ||
+    isArtworkFolderOpen ||
+    Boolean(mapModalInventoryId) ||
+    Boolean(lightbox);
+  const refreshCreativeAssignment = useCallback(async () => {
+    if (assignmentSaveState.tone === "saving") return;
+    await loadWorkspace(true);
+  }, [assignmentSaveState.tone, loadWorkspace]);
   
   
   const listStageRef = useRef<HTMLDivElement | null>(null);
@@ -1300,6 +1312,7 @@ useEffect(() => {
 
   return (
     <AppShell pageClassName="workspace" projectTitle={projectTitle}>
+      <PullToRefresh onRefresh={refreshCreativeAssignment} disabled={assignmentPullRefreshDisabled}>
       <div
         className={[
           "assign-fullscreen",
@@ -2750,6 +2763,7 @@ useEffect(() => {
         assetType={lightbox?.assetType}
         onClose={() => setLightbox(null)}
       />
+      </PullToRefresh>
     </AppShell>
   );
 }

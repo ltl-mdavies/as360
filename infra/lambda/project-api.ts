@@ -7,13 +7,20 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { ApiGatewayManagementApiClient, GoneException, PostToConnectionCommand } from "@aws-sdk/client-apigatewaymanagementapi";
 import {
+  CloudWatchClient,
+  GetMetricDataCommand,
+  type Dimension,
+  type MetricDataQuery,
+} from "@aws-sdk/client-cloudwatch";
+import {
   AdminCreateUserCommand,
   AdminGetUserCommand,
   CognitoIdentityProviderClient,
 } from "@aws-sdk/client-cognito-identity-provider";
-import { DeleteObjectCommand, CopyObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, CopyObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
+import { GetAccountCommand, SESv2Client } from "@aws-sdk/client-sesv2";
+import { SQSClient, GetQueueAttributesCommand, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { createHash, createHmac, createSign, randomBytes } from "node:crypto";
@@ -105,6 +112,9 @@ const ROUTE_TEMPLATES: Array<{ method: HttpMethod; template: string }> = [
   { method: "POST", template: "/api/projects/{projectId}/submit-preview" },
   { method: "PATCH", template: "/api/projects/{projectId}/assignments/{inventoryId}" },
   { method: "PATCH", template: "/api/projects/{projectId}" },
+  { method: "GET", template: "/api/admin/health" },
+  { method: "PATCH", template: "/api/admin/health/incidents/{incidentId}" },
+  { method: "GET", template: "/api/admin/lift/products" },
   { method: "GET", template: "/api/admin/settings" },
   { method: "PATCH", template: "/api/admin/settings" },
 ];
@@ -125,6 +135,7 @@ type VendorWorkflowStage =
   | "shipped"
   | "complete"
   | "blocked";
+type LiftProductIdentifierMode = "unit_number" | "product_id";
 
 type UserProfileItem = {
   entityType: "UserProfile";
@@ -178,6 +189,9 @@ type VenueItem = {
   isActive: boolean;
   documentSourceMode?: "adspace" | "external" | "hybrid";
   documentLibraryUrl: string;
+  photoGalleryUrl?: string;
+  venueDocumentUrl?: string;
+  venueVideoUrl?: string;
   shippingDestinationOverrideEnabled?: boolean;
   shippingDestination?: ShippingDestination;
   createdAt: string;
@@ -216,6 +230,7 @@ type InventoryItem = {
   variantLabel: string;
   mediaType?: string;
   unitNumber?: string;
+  liftProductMapping?: LiftProductMapping;
   x?: number | null;
   y?: number | null;
   isActive: boolean;
@@ -261,6 +276,7 @@ type MediaVariantItem = {
   color?: string;
   abbreviation?: string;
   unitNumber?: string;
+  liftProductMapping?: LiftProductMapping;
   productionRouting?: "primary" | "external";
   externalVendorId?: string;
   updatedAt: string;
@@ -358,6 +374,11 @@ type ProjectItem = {
   orderSubmittedAt?: string | null;
   orderSubmittedByName?: string | null;
   orderSubmissionNote?: string | null;
+  orderLifecycleStatus?: "active" | "on_hold" | "cancelled";
+  orderLifecycleReason?: string | null;
+  orderLifecycleNote?: string | null;
+  orderLifecycleUpdatedAt?: string | null;
+  orderLifecycleUpdatedByName?: string | null;
   productionReleasedAt?: string | null;
   productionReleasedByName?: string | null;
   productionReleaseNote?: string | null;
@@ -533,6 +554,7 @@ type AppSettingsItem = {
       vendorName: string;
       platformLabel: string;
       activeEnvironment: LiftEnvironmentKey;
+      productIdentifierMode: LiftProductIdentifierMode;
       environments: Record<LiftEnvironmentKey, LiftEnvironmentConfig>;
       companyId: string;
       createOrderUsername: string;
@@ -555,9 +577,23 @@ type LiftEnvironmentConfig = {
   fallbackOrderLookupUrl: string;
   orderUrlResolverUrl: string;
   customerContactListUrl: string;
+  productManagementUrl: string;
   proofEndpointUrlTemplate: string;
   flushSyncUrl: string;
+  shippingReportUrl: string;
   proofUrlResolverUrl: string;
+};
+
+type LiftProductMapping = {
+  liftProductId?: number;
+  liftProductName?: string;
+  liftCatalogId?: number;
+  liftCatalogName?: string;
+  liftProductType?: "KIT" | "REGULAR" | "SERVICE" | string;
+  liftProductStatus?: "A" | "I" | string;
+  liftUnitNumber?: string;
+  liftMappedAt?: string;
+  liftMappedByName?: string;
 };
 
 type NotificationEventType =
@@ -701,6 +737,7 @@ type ProjectProofLineItem = {
   liftProofingId?: number | null;
   mediaVariantKey: string;
   mediaVariantLabel?: string;
+  liftProductId?: number | null;
   liftProductName?: string | null;
   productionRoute?: ProofProductionRoute;
   vendorAccountId?: string | null;
@@ -752,6 +789,23 @@ type ProjectLiftLineSnapshot = {
   lineStepNumber?: number | null;
   printHeightIn?: number | null;
   printWidthIn?: number | null;
+};
+
+type ProjectLiftShippingSnapshot = {
+  orderNumber?: string | null;
+  orderLineId?: number | null;
+  trackingNumber?: string | null;
+  trackerMessage?: string | null;
+  trackerShortMessage?: string | null;
+  shipMethod?: string | null;
+  locationName?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  addressLine3?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | number | null;
+  actualShipDate?: string | null;
 };
 
 type ProjectProofTechnicalReport = {
@@ -860,6 +914,11 @@ type ProjectListItem = {
   orderSubmittedAt?: string | null;
   orderSubmittedByName?: string | null;
   orderSubmissionNote?: string | null;
+  orderLifecycleStatus?: "active" | "on_hold" | "cancelled";
+  orderLifecycleReason?: string | null;
+  orderLifecycleNote?: string | null;
+  orderLifecycleUpdatedAt?: string | null;
+  orderLifecycleUpdatedByName?: string | null;
   productionReleasedAt?: string | null;
   productionReleasedByName?: string | null;
   productionReleaseNote?: string | null;
@@ -918,11 +977,388 @@ type ProjectListItem = {
   scopeIncludedCount: number;
 };
 
+type AdminHealthStatus = "good" | "watch" | "degraded" | "blocked";
+type AdminHealthSeverity = "info" | "warning" | "error" | "blocked";
+type AdminHealthIncidentStatus = "active" | "acknowledged" | "resolved" | "suppressed";
+type AdminHealthIncidentActionHistoryItem = {
+  action: string;
+  actorName: string;
+  at: string;
+  reason?: string;
+  note?: string;
+  verificationStatus?: "cleared" | "active" | "not_checked";
+};
+type AdminHealthSystemId =
+  | "app_api"
+  | "aws_foundation"
+  | "lift"
+  | "customer_access"
+  | "customer_data"
+  | "proof_ops"
+  | "vendor_ops"
+  | "notifications"
+  | "realtime";
+type AdminHealthRunbookSafety = "read_only" | "guarded_write" | "external_review";
+
+type AdminHealthRunbook = {
+  id: string;
+  systemId: AdminHealthSystemId;
+  label: string;
+  safety: AdminHealthRunbookSafety;
+  summary: string;
+  operatorSteps: string[];
+  actionLabel?: string;
+  appPath?: string;
+  evidenceHints: string[];
+};
+
+type AdminHealthIssue = {
+  id: string;
+  systemId: AdminHealthSystemId;
+  severity: AdminHealthSeverity;
+  title: string;
+  message: string;
+  scope?: {
+    customerId?: string;
+    customerName?: string;
+    projectId?: string;
+    projectTitle?: string;
+    orderName?: string;
+    orderNumber?: string;
+    liftOrderId?: string;
+    vendorAccountId?: string;
+    vendorName?: string;
+    orderId?: string;
+    lineNumber?: number;
+    filename?: string;
+  };
+  detectedAt: string;
+  source: string;
+  recommendedAction: string;
+  runbookActionId?: string;
+  dependency?: {
+    issueId: string;
+    title: string;
+    message: string;
+  };
+  incident?: {
+    id: string;
+    fingerprint: string;
+    status: AdminHealthIncidentStatus;
+    firstSeenAt: string;
+    lastSeenAt: string;
+    lastCheckedAt: string;
+    occurrenceCount: number;
+    acknowledgedBy?: string;
+    acknowledgedAt?: string;
+    resolvedAt?: string;
+    suppressedUntil?: string;
+    lastOperatorAction?: string;
+    lastOperatorActionAt?: string;
+    lastOperatorName?: string;
+    lastOperatorReason?: string;
+    lastOperatorNote?: string;
+    lastVerificationStatus?: "cleared" | "active" | "not_checked";
+    actionHistory?: AdminHealthIncidentActionHistoryItem[];
+  };
+  incidentPacket: {
+    systemId: AdminHealthSystemId;
+    severity: AdminHealthSeverity;
+    evidence: Record<string, unknown>;
+    relatedEvents: string[];
+    allowedRunbookIds: string[];
+  };
+};
+
+type AdminHealthSystem = {
+  id: AdminHealthSystemId;
+  label: string;
+  status: AdminHealthStatus;
+  lastCheckedAt: string;
+  issueCount: number;
+  summary: string;
+  details: Record<string, unknown>;
+};
+
+type HealthIncidentItem = {
+  entityType: "HealthIncident";
+  id: string;
+  fingerprint: string;
+  systemId: AdminHealthSystemId;
+  severity: AdminHealthSeverity;
+  status: AdminHealthIncidentStatus;
+  title: string;
+  message: string;
+  source: string;
+  recommendedAction: string;
+  runbookActionId?: string;
+  scope?: AdminHealthIssue["scope"];
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastCheckedAt: string;
+  occurrenceCount: number;
+  acknowledgedBy?: string;
+  acknowledgedAt?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  suppressedBy?: string;
+  suppressedAt?: string;
+  suppressedUntil?: string;
+  lastOperatorAction?: string;
+  lastOperatorActionAt?: string;
+  lastOperatorName?: string;
+  lastOperatorReason?: string;
+  lastOperatorNote?: string;
+  lastVerificationStatus?: "cleared" | "active" | "not_checked";
+  actionHistory?: AdminHealthIncidentActionHistoryItem[];
+  lastEvidence?: Record<string, unknown>;
+  relatedEvents?: string[];
+  allowedRunbookIds?: string[];
+  updatedAt: string;
+};
+
+const ADMIN_HEALTH_RUNBOOKS: Record<string, AdminHealthRunbook> = {
+  open_admin_lift_settings: {
+    id: "open_admin_lift_settings",
+    systemId: "lift",
+    label: "Complete Lift integration setup",
+    safety: "guarded_write",
+    summary: "Validate active Lift credentials and endpoint configuration before any live order workflow depends on Lift.",
+    operatorSteps: [
+      "Open Admin Setup and confirm the active Lift environment.",
+      "Verify vendor name, platform label, company ID, required endpoint URLs, and proof credentials are populated.",
+      "Run the read-only Lift smoke test from this page after saving settings.",
+    ],
+    actionLabel: "Open Admin Setup",
+    appPath: "/admin/settings",
+    evidenceHints: ["activeEnvironment", "liftCredentialsConfigured", "liftEndpointsConfigured"],
+  },
+  review_lift_order_health: {
+    id: "review_lift_order_health",
+    systemId: "lift",
+    label: "Review Lift order health",
+    safety: "external_review",
+    summary: "Confirm the linked Lift order state before relinking, putting the Adspace order on hold, or cancelling it.",
+    operatorSteps: [
+      "Open the affected project and inspect the linked Lift order status.",
+      "Use the Lift deep link or Lift admin to confirm whether the order exists, was cancelled, or moved.",
+      "Choose the intended Adspace disposition: relink to another Lift order, place the order on hold, or cancel the Adspace order.",
+      "Resolve the health issue only after the Adspace disposition is recorded.",
+    ],
+    evidenceHints: ["liftOrderId", "liftOrderHealthStatus", "liftOrderStatus", "projectIds"],
+  },
+  review_lift_product_mapping: {
+    id: "review_lift_product_mapping",
+    systemId: "customer_data",
+    label: "Review Lift product mapping",
+    safety: "read_only",
+    summary: "Compare active venue inventory against the configured Lift submit context before order submission depends on it.",
+    operatorSteps: [
+      "Open Venue Management for one affected venue.",
+      "Review active Lift-routed inventory and media variants.",
+      "Use Map Product to populate the missing Product ID, or enter the missing Unit Number if the current Lift interface uses unit numbers.",
+      "Recheck Health after saving the venue mapping.",
+    ],
+    actionLabel: "Open Venue Management",
+    appPath: "/admin/venues",
+    evidenceHints: ["productIdentifierMode", "missingInventoryCount", "venueIds"],
+  },
+  review_lift_shipping_transit_mismatch: {
+    id: "review_lift_shipping_transit_mismatch",
+    systemId: "vendor_ops",
+    label: "Review Lift shipping mismatch",
+    safety: "read_only",
+    summary: "Compare Lift shipment evidence with Adspace transit state before closing or correcting the order workflow.",
+    operatorSteps: [
+      "Open the affected project and review the Transit Approval panel.",
+      "Compare the Lift ShippingReport line evidence against the Adspace proof lines and customer-facing transit status.",
+      "If shipment is valid, complete the missing transit review or record the operator disposition.",
+      "If the Lift line cannot be mapped, refresh Lift sync and confirm the order line id belongs to this Adspace order.",
+    ],
+    evidenceHints: ["liftOrderId", "liftOrderLineIds", "trackingNumbers", "transitStatus"],
+  },
+  refresh_lift_sync: {
+    id: "refresh_lift_sync",
+    systemId: "proof_ops",
+    label: "Refresh Lift sync",
+    safety: "read_only",
+    summary: "Refresh read-only Lift order and proof status before operators rely on stale project state.",
+    operatorSteps: [
+      "Open one affected project from the incident evidence.",
+      "Run the available Lift/proof refresh workflow for that project.",
+      "Recheck this health dashboard and confirm the incident resolves or moves to a clearer error.",
+    ],
+    evidenceHints: ["projectIds", "waitingProofLines"],
+  },
+  review_workflow_error: {
+    id: "review_workflow_error",
+    systemId: "app_api",
+    label: "Review workflow error",
+    safety: "read_only",
+    summary: "Inspect recent workflow errors and separate customer-facing failures from transient operator actions.",
+    operatorSteps: [
+      "Open the affected project activity view.",
+      "Review the latest Errors lane entry and metadata.",
+      "Acknowledge the incident after ownership is assigned, then resolve it after the workflow succeeds.",
+    ],
+    evidenceHints: ["errorCode", "surface", "metadata"],
+  },
+  review_api_gateway_5xx: {
+    id: "review_api_gateway_5xx",
+    systemId: "app_api",
+    label: "Review API 5XX responses",
+    safety: "read_only",
+    summary: "Correlate API Gateway 5XX counts with Lambda logs and customer-facing workflow failures.",
+    operatorSteps: [
+      "Check Project API and Venue API Lambda logs around the reported CloudWatch window.",
+      "Compare error timestamps with recent workflow errors and operator reports.",
+      "Keep the incident active until the 5XX count clears in the next health snapshot.",
+    ],
+    evidenceHints: ["errors5xx", "windowMinutes", "checkedAt"],
+  },
+  review_lambda_errors: {
+    id: "review_lambda_errors",
+    systemId: "app_api",
+    label: "Review Lambda errors",
+    safety: "read_only",
+    summary: "Inspect Lambda error logs and identify whether retries, Lift, AWS, or app code caused the failure.",
+    operatorSteps: [
+      "Open CloudWatch logs for the function in the evidence packet.",
+      "Review the most recent error stack and request context.",
+      "Map the failure to an affected workflow before resolving or suppressing the incident.",
+    ],
+    evidenceHints: ["functionName", "errors", "systemId"],
+  },
+  review_lambda_throttles: {
+    id: "review_lambda_throttles",
+    systemId: "app_api",
+    label: "Review Lambda throttles",
+    safety: "external_review",
+    summary: "Confirm whether concurrency pressure or downstream latency is blocking request handling.",
+    operatorSteps: [
+      "Review throttle count, concurrent executions, and downstream latency for the function.",
+      "Check whether retries or queue backlog are increasing during the same window.",
+      "Escalate capacity or route-level remediation before marking resolved.",
+    ],
+    evidenceHints: ["functionName", "throttles", "durationP95Ms"],
+  },
+  review_lambda_latency: {
+    id: "review_lambda_latency",
+    systemId: "app_api",
+    label: "Review Lambda latency",
+    safety: "read_only",
+    summary: "Use p95 duration to identify slow app, AWS, or Lift dependencies before users report slowness.",
+    operatorSteps: [
+      "Review the slow function and route timing logs for the CloudWatch window.",
+      "Check related Lift, S3, DynamoDB, and queue metrics for matching latency.",
+      "Resolve after p95 duration returns below the health threshold.",
+    ],
+    evidenceHints: ["functionName", "durationP95Ms", "windowMinutes"],
+  },
+  review_proof_packet: {
+    id: "review_proof_packet",
+    systemId: "proof_ops",
+    label: "Review proof packet",
+    safety: "read_only",
+    summary: "Inspect proof line records where proof assets should exist but URLs or object keys are missing.",
+    operatorSteps: [
+      "Open the affected proof line or project from the evidence packet.",
+      "Compare Lift proof report data with stored proof object keys and URLs.",
+      "Refresh proof sync after the source mismatch is understood.",
+    ],
+    evidenceHints: ["proofLineIds"],
+  },
+  review_realtime_dlq: {
+    id: "review_realtime_dlq",
+    systemId: "realtime",
+    label: "Review realtime dead-letter queue",
+    safety: "external_review",
+    summary: "Inspect failed realtime broadcast payloads before replaying or clearing messages.",
+    operatorSteps: [
+      "Review DLQ message age and approximate message counts.",
+      "Inspect representative failed payloads and the worker logs that produced them.",
+      "Replay or clear messages only after confirming the failure mode is fixed.",
+    ],
+    evidenceHints: ["queueName", "visibleMessages", "ageOfOldestMessageSeconds"],
+  },
+  review_realtime_queue_backlog: {
+    id: "review_realtime_queue_backlog",
+    systemId: "realtime",
+    label: "Review realtime queue backlog",
+    safety: "read_only",
+    summary: "Confirm whether realtime broadcasts are draining quickly enough for collaboration workflows.",
+    operatorSteps: [
+      "Check queue age, visible message count, and broadcast worker logs.",
+      "Confirm active sessions are not waiting on stale collaboration messages.",
+      "Keep watching until queue age returns below the warning threshold.",
+    ],
+    evidenceHints: ["queueName", "ageOfOldestMessageSeconds", "visibleMessages"],
+  },
+  review_ses_account: {
+    id: "review_ses_account",
+    systemId: "notifications",
+    label: "Review SES account posture",
+    safety: "external_review",
+    summary: "Confirm SES account sending status and identity posture before relying on email notifications.",
+    operatorSteps: [
+      "Review SES account sending status and enforcement posture.",
+      "Confirm the configured sender identity is verified in the active AWS account.",
+      "Resolve only after SES sending is enabled and the next health snapshot confirms it.",
+    ],
+    evidenceHints: ["sendingEnabled", "productionAccessEnabled", "enforcementStatus"],
+  },
+  review_ses_delivery_events: {
+    id: "review_ses_delivery_events",
+    systemId: "notifications",
+    label: "Review SES delivery events",
+    safety: "read_only",
+    summary: "Separate sender reputation issues from invalid recipient lists before retrying notifications.",
+    operatorSteps: [
+      "Review bounce, complaint, and reject counts in the incident evidence.",
+      "Check impacted notification recipients or digest rules before retrying delivery.",
+      "Resolve after the event window clears and recipient posture is corrected.",
+    ],
+    evidenceHints: ["bounces", "complaints", "rejects", "windowMinutes"],
+  },
+  retry_notification_digest: {
+    id: "retry_notification_digest",
+    systemId: "notifications",
+    label: "Retry notification digest",
+    safety: "guarded_write",
+    summary: "Retry a failed notification digest only after recipient and SES posture are known-good.",
+    operatorSteps: [
+      "Review the digest rule and recipient list in Admin Setup.",
+      "Confirm SES account and delivery event posture are clear.",
+      "Retry the digest from the notification workflow after correcting the delivery issue.",
+    ],
+    evidenceHints: ["ruleId", "ruleLabel", "entryCount"],
+  },
+  review_vendor_user_access: {
+    id: "review_vendor_user_access",
+    systemId: "customer_access",
+    label: "Review vendor user access",
+    safety: "guarded_write",
+    summary: "Fix active vendor users that are missing an active vendor account assignment.",
+    operatorSteps: [
+      "Open Admin Setup and review the affected user IDs.",
+      "Assign each active vendor user to an active vendor account or deactivate the user.",
+      "Refresh the health snapshot and confirm the access incident clears.",
+    ],
+    actionLabel: "Open Admin Setup",
+    appPath: "/admin/settings",
+    evidenceHints: ["userIds"],
+  },
+};
+
+type AdminMetricStatus = "ok" | "watch" | "degraded" | "unavailable";
+
 const client = new DynamoDBClient({});
+const cloudwatch = new CloudWatchClient({});
 const s3 = new S3Client({});
 const sqs = new SQSClient({});
 const cognito = new CognitoIdentityProviderClient({});
 const secrets = new SecretsManagerClient({});
+const sesv2 = new SESv2Client({});
 const CORE_TABLE_NAME = requiredEnv("CORE_TABLE_NAME");
 const AUDIT_TABLE_NAME = requiredEnv("AUDIT_TABLE_NAME");
 const USER_POOL_ID = process.env.USER_POOL_ID || "";
@@ -940,6 +1376,17 @@ const PRESENCE_TABLE_NAME = process.env.PRESENCE_TABLE_NAME || "";
 const PRESENCE_WS_URL = process.env.PRESENCE_WS_URL || "";
 const PRESENCE_WS_MANAGEMENT_ENDPOINT = process.env.PRESENCE_WS_MANAGEMENT_ENDPOINT?.replace(/^wss:/, "https:") || "";
 const PRESENCE_BROADCAST_QUEUE_URL = process.env.PRESENCE_BROADCAST_QUEUE_URL || "";
+const PRESENCE_BROADCAST_DLQ_URL = process.env.PRESENCE_BROADCAST_DLQ_URL || "";
+const PRESENCE_BROADCAST_QUEUE_NAME = process.env.PRESENCE_BROADCAST_QUEUE_NAME || "";
+const PRESENCE_BROADCAST_DLQ_NAME = process.env.PRESENCE_BROADCAST_DLQ_NAME || "";
+const HEALTH_LAMBDA_FUNCTION_NAMES = [
+  process.env.AWS_LAMBDA_FUNCTION_NAME || "",
+  ...(process.env.HEALTH_LAMBDA_FUNCTION_NAMES || "").split(","),
+]
+  .map((value) => value.trim())
+  .filter(Boolean);
+const HEALTH_HTTP_API_ID = process.env.HEALTH_HTTP_API_ID || "";
+const HEALTH_HTTP_API_STAGE = process.env.HEALTH_HTTP_API_STAGE || "$default";
 const presenceManagement = PRESENCE_WS_MANAGEMENT_ENDPOINT
   ? new ApiGatewayManagementApiClient({ endpoint: PRESENCE_WS_MANAGEMENT_ENDPOINT })
   : null;
@@ -1185,6 +1632,12 @@ export async function handler(event: ApiEvent) {
           }
           return ok(await updateProject(requirePath(event, "projectId"), payload, auth));
         }
+      case "GET /api/admin/health":
+        return ok(await getAdminHealthSnapshot(auth));
+      case "PATCH /api/admin/health/incidents/{incidentId}":
+        return ok(await updateAdminHealthIncident(requirePath(event, "incidentId"), getBody(event), auth));
+      case "GET /api/admin/lift/products":
+        return ok(await listLiftProducts(event.queryStringParameters || {}, auth));
       case "GET /api/admin/settings":
         return ok(
           event.queryStringParameters?.recentWorkflowErrors !== undefined
@@ -1401,6 +1854,9 @@ async function getProjectWorkspace(projectId: string, auth: AuthContext) {
       ...projectSummary,
       documentSourceMode: normalizeDocumentSourceMode(venue?.documentSourceMode, venue?.documentLibraryUrl),
       documentLibraryUrl: venue?.documentLibraryUrl || "",
+      photoGalleryUrl: venue?.photoGalleryUrl || "",
+      venueDocumentUrl: venue?.venueDocumentUrl || "",
+      venueVideoUrl: venue?.venueVideoUrl || "",
     },
     scope: toProjectScopeResponse(scope),
     workspace: {
@@ -1473,6 +1929,9 @@ async function getProjectAllocationOverrideResponse(projectId: string, auth: Aut
       ...projectSummary,
       documentSourceMode: normalizeDocumentSourceMode(venue?.documentSourceMode, venue?.documentLibraryUrl),
       documentLibraryUrl: venue?.documentLibraryUrl || "",
+      photoGalleryUrl: venue?.photoGalleryUrl || "",
+      venueDocumentUrl: venue?.venueDocumentUrl || "",
+      venueVideoUrl: venue?.venueVideoUrl || "",
     },
     scope: toProjectScopeResponse(bundle.scope),
     workspace: {
@@ -2322,6 +2781,11 @@ async function createProject(payload: Record<string, unknown>, auth: AuthContext
     orderSubmittedAt: null,
     orderSubmittedByName: null,
     orderSubmissionNote: null,
+    orderLifecycleStatus: "active",
+    orderLifecycleReason: null,
+    orderLifecycleNote: null,
+    orderLifecycleUpdatedAt: null,
+    orderLifecycleUpdatedByName: null,
     productionReleasedAt: null,
     productionReleasedByName: null,
     productionReleaseNote: null,
@@ -2383,9 +2847,14 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
     updatedAt: isoNow(),
   };
   let liftOrderOverride: { previous: string | null; next: string | null; note: string | null } | null = null;
+  let lifecycleChange: {
+    previous: "active" | "on_hold" | "cancelled";
+    next: "active" | "on_hold" | "cancelled";
+    reason: string | null;
+    note: string | null;
+  } | null = null;
 
   if (Object.prototype.hasOwnProperty.call(payload, "liftOrderId")) {
-    assertPlatformAdmin(auth);
     const requestedLiftOrderId = optionalString(payload.liftOrderId);
     const normalizedLiftOrderId = requestedLiftOrderId ? requestedLiftOrderId.toUpperCase() : null;
     if (normalizedLiftOrderId && !/^[A-Z0-9-]{3,40}$/.test(normalizedLiftOrderId)) {
@@ -2411,6 +2880,32 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
         liftOrderHealthMessage: normalizedLiftOrderId ? "Lift order override saved. Refresh Lift status to verify the linked order." : undefined,
         liftOrderCancelledAt: null,
         lastLiftOrderSyncAt: null,
+      };
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, "orderLifecycleStatus")) {
+    const previousLifecycle = existing.orderLifecycleStatus || "active";
+    const nextLifecycle = optionalOrderLifecycleStatus(payload.orderLifecycleStatus);
+    if (!nextLifecycle) {
+      throw new HttpError(400, "Order disposition must be Active, On Hold, or Cancelled.");
+    }
+    const reason = optionalOrderLifecycleReason(payload.orderLifecycleReason, nextLifecycle);
+    const note = optionalString(payload.orderLifecycleNote) || null;
+    if (previousLifecycle !== nextLifecycle || reason !== (existing.orderLifecycleReason || null) || note !== (existing.orderLifecycleNote || null)) {
+      lifecycleChange = {
+        previous: previousLifecycle,
+        next: nextLifecycle,
+        reason,
+        note,
+      };
+      nextProject = {
+        ...nextProject,
+        orderLifecycleStatus: nextLifecycle,
+        orderLifecycleReason: reason,
+        orderLifecycleNote: note,
+        orderLifecycleUpdatedAt: nextProject.updatedAt,
+        orderLifecycleUpdatedByName: auth.actorName,
       };
     }
   }
@@ -2547,6 +3042,15 @@ async function updateProject(projectId: string, payload: Record<string, unknown>
       previousLiftOrderId: liftOrderOverride.previous,
       nextLiftOrderId: liftOrderOverride.next,
       note: liftOrderOverride.note,
+    });
+  }
+  if (lifecycleChange) {
+    await writeAudit(`PROJECT#${projectId}`, "project.order_disposition_changed", auth, {
+      projectId,
+      previousStatus: lifecycleChange.previous,
+      nextStatus: lifecycleChange.next,
+      reason: lifecycleChange.reason,
+      note: lifecycleChange.note,
     });
   }
 
@@ -3057,6 +3561,7 @@ async function previewProjectOrderSubmission(projectId: string, payload: Record<
     project: await toProjectListItem(project, scope),
     preview: {
       payload: requestPayload,
+      productIdentifierMode: liftPayload.productIdentifierMode,
       validation: liftPayload.validation,
       completeness: {
         required,
@@ -3067,7 +3572,9 @@ async function previewProjectOrderSubmission(projectId: string, payload: Record<
         lineNumber: index + 1,
         mediaVariantLabel: line.mediaVariantLabel,
         filename: line.file_name,
-        unitNumber: line.productSku,
+        productIdentifier: line.product_id ? String(line.product_id) : line.productSku,
+        productId: line.product_id ?? null,
+        unitNumber: line.unit_number || "",
         quantity: line.productQty,
         assignedLocations: line.assigned_Locations.split(",").map((value) => value.trim()).filter(Boolean),
         trimHeight: line.trim_height,
@@ -3082,6 +3589,8 @@ async function previewProjectOrderSubmission(projectId: string, payload: Record<
 
 type LiftCreateOrderProduct = {
   productSku: string;
+  product_id?: number;
+  unit_number?: string;
   productCategory: "Art";
   productQty: number;
   file_name: string;
@@ -3098,6 +3607,8 @@ type LiftCreateOrderProductInternal = LiftCreateOrderProduct & {
   mediaVariantKey: string;
   clientCreativeId: string;
   route: ProofLineRouteMetadata;
+  unitNumber: string | null;
+  liftProductId: number | null;
 };
 
 type LiftCreateOrderPayload = {
@@ -3134,6 +3645,7 @@ async function buildLiftCreateOrderPayload(args: {
   ]);
   const hydratedSettings = hydrateAppSettings(settings, actorName);
   const primaryVendorName = hydratedSettings.integrations.primaryPrintVendor.vendorName || "Primary Print Vendor";
+  const productIdentifierMode = hydratedSettings.integrations.primaryPrintVendor.productIdentifierMode;
   const variantsByKey = new Map(variants.map((variant) => [variant.mediaVariantKey, variant] as const));
   const customerVendorsById = new Map(customerVendors.map((vendor) => [vendor.id, vendor] as const));
 
@@ -3142,6 +3654,8 @@ async function buildLiftCreateOrderPayload(args: {
   const grouped = new Map<string, {
     creative: ProjectCreativeAssetItem;
     unitNumber: string | null;
+    liftProductId: number | null;
+    liftProductName: string | null;
     mediaVariantKey: string;
     mediaVariantLabel: string;
     route: ProofLineRouteMetadata;
@@ -3163,6 +3677,7 @@ async function buildLiftCreateOrderPayload(args: {
       continue;
     }
     const variant = variantsByKey.get(inventory.mediaVariantKey);
+    const liftProductMapping = inventory.liftProductMapping || variant?.liftProductMapping || null;
     const route = resolveProofLineRouteMetadata({
       inventory,
       variant,
@@ -3170,9 +3685,15 @@ async function buildLiftCreateOrderPayload(args: {
       customerVendorsById,
       primaryVendorName,
     });
-    const unitNumber = String(inventory.unitNumber || "").trim();
-    if (route.integrationMode === "lift" && !unitNumber) {
-      errors.push(`Inventory ${inventory.inventoryId} is missing a Lift product SKU / unit number.`);
+    const unitNumber = String(inventory.unitNumber || variant?.unitNumber || liftProductMapping?.liftUnitNumber || "").trim();
+    const liftProductId = liftProductMapping?.liftProductId ?? null;
+    const liftProductName = liftProductMapping?.liftProductName || null;
+    if (route.integrationMode === "lift" && productIdentifierMode === "unit_number" && !unitNumber) {
+      errors.push(`Inventory ${inventory.inventoryId} is missing the configured Lift submit identifier: unit number/productSku.`);
+      continue;
+    }
+    if (route.integrationMode === "lift" && productIdentifierMode === "product_id" && !liftProductId) {
+      errors.push(`Inventory ${inventory.inventoryId} is missing the configured Lift submit identifier: product_id.`);
       continue;
     }
     const trimHeight = inventory.trimHeight ?? null;
@@ -3193,13 +3714,15 @@ async function buildLiftCreateOrderPayload(args: {
             creative.contentType
           )
         : null;
-    const groupKey = `${route.vendorAccountId}||${creative.id}||${unitNumber || "adspace"}||${inventory.mediaVariantKey}`;
+    const groupKey = `${route.vendorAccountId}||${creative.id}||${liftProductId || unitNumber || "adspace"}||${inventory.mediaVariantKey}`;
     const existing = grouped.get(groupKey);
     const mediaVariantLabel = formatVariantLabel(inventory.mediaVariantKey);
     if (!existing) {
       grouped.set(groupKey, {
         creative,
         unitNumber: unitNumber || null,
+        liftProductId,
+        liftProductName,
         mediaVariantKey: inventory.mediaVariantKey,
         mediaVariantLabel,
         route,
@@ -3223,7 +3746,7 @@ async function buildLiftCreateOrderPayload(args: {
       )
     ) {
       errors.push(
-        `Grouped Lift line mismatch for ${creative.filename} / ${unitNumber}: trim or safe dimensions differ across assigned locations.`
+        `Grouped Lift line mismatch for ${creative.filename} / ${liftProductId || unitNumber}: trim or safe dimensions differ across assigned locations.`
       );
       continue;
     }
@@ -3235,7 +3758,7 @@ async function buildLiftCreateOrderPayload(args: {
     if (byVariant !== 0) return byVariant;
     const byFilename = a.creative.filename.localeCompare(b.creative.filename, undefined, { sensitivity: "base" });
     if (byFilename !== 0) return byFilename;
-    return String(a.unitNumber || "").localeCompare(String(b.unitNumber || ""), undefined, { sensitivity: "base" });
+    return String(a.liftProductId || a.unitNumber || "").localeCompare(String(b.liftProductId || b.unitNumber || ""), undefined, { sensitivity: "base" });
   });
   const liftGroups = sortedGroups.filter((group) => group.route.integrationMode === "lift");
   const adspaceManagedGroups = sortedGroups.filter((group) => group.route.integrationMode === "adspace");
@@ -3254,6 +3777,7 @@ async function buildLiftCreateOrderPayload(args: {
       group.locations.sort((a, b) => a.localeCompare(b));
       return {
         productSku: group.unitNumber || "",
+        product_id: group.liftProductId || undefined,
         productCategory: "Art" as const,
         productQty: group.locations.length,
         file_name: sanitizeLiftFilename(group.creative.filename),
@@ -3267,6 +3791,8 @@ async function buildLiftCreateOrderPayload(args: {
         mediaVariantKey: group.mediaVariantKey,
         clientCreativeId: group.creative.id,
         route: group.route,
+        unitNumber: group.unitNumber,
+        liftProductId: group.liftProductId,
       };
     })
     .sort((a, b) => {
@@ -3286,6 +3812,8 @@ async function buildLiftCreateOrderPayload(args: {
     order_note: note || undefined,
     product_data: product_data.map((line) => ({
       productSku: line.productSku,
+      product_id: line.product_id,
+      unit_number: line.unitNumber || undefined,
       productCategory: line.productCategory,
       productQty: line.productQty,
       file_name: line.file_name,
@@ -3308,6 +3836,8 @@ async function buildLiftCreateOrderPayload(args: {
     lineNumber: index + 1,
     mediaVariantKey: group.mediaVariantKey,
     mediaVariantLabel: group.mediaVariantLabel,
+    liftProductId: group.liftProductId,
+    liftProductName: group.liftProductName,
     productionRoute: group.route.productionRoute,
     vendorAccountId: group.route.vendorAccountId,
     vendorName: group.route.vendorName,
@@ -3335,6 +3865,7 @@ async function buildLiftCreateOrderPayload(args: {
   return {
     payload,
     baselineProofs,
+    productIdentifierMode,
     validation: {
       ok: errors.length === 0,
       errors,
@@ -3758,6 +4289,15 @@ function parseLiftHeaders(raw: string) {
         return [key, value];
       })
   );
+}
+
+function buildLiftBasicAuthHeaders(config: AppSettingsItem["integrations"]["primaryPrintVendor"]) {
+  const headers = parseLiftHeaders(config.defaultHeaders);
+  const hasAuthorizationHeader = Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
+  if (!hasAuthorizationHeader && config.createOrderUsername.trim() && config.createOrderPassword.trim()) {
+    headers.Authorization = `Basic ${Buffer.from(`${config.createOrderUsername}:${config.createOrderPassword}`).toString("base64")}`;
+  }
+  return headers;
 }
 
 function toLiftCreateOrderRequestPayload(payload: LiftCreateOrderPayload): LiftCreateOrderRequestPayload {
@@ -5051,10 +5591,11 @@ async function runLiftReadinessSmokeTest(orderNumberValue: string, auth: AuthCon
   const environment = getLiftEnvironmentConfig(vendor);
   const headers = parseLiftHeaders(vendor.defaultHeaders);
 
-  const [orderSync, proofReport, orderUrl] = await Promise.all([
+  const [orderSync, proofReport, orderUrl, shippingReport] = await Promise.all([
     smokeFetchLiftOrderSync(vendor, environment.flushSyncUrl, headers, orderNumber),
     smokeFetchLiftProofReport(vendor, environment.proofUrlResolverUrl, headers, orderNumber),
     smokeFetchLiftOrderUrl(vendor, environment.orderUrlResolverUrl, headers, orderNumber),
+    smokeFetchLiftShippingReport(vendor, environment.shippingReportUrl, headers, orderNumber),
   ]);
 
   return {
@@ -5066,6 +5607,7 @@ async function runLiftReadinessSmokeTest(orderNumberValue: string, auth: AuthCon
       orderSync,
       proofReport,
       orderUrl,
+      shippingReport,
     },
   };
 }
@@ -5209,6 +5751,172 @@ function normalizeLiftProofSmokeRow(row: Record<string, unknown>): Record<string
   };
 }
 
+async function smokeFetchLiftShippingReport(
+  vendor: AppSettingsItem["integrations"]["primaryPrintVendor"],
+  endpointValue: string,
+  headers: Record<string, string>,
+  orderNumber: string
+): Promise<LiftSmokeEndpointResult> {
+  const label = "ShippingReport";
+  const endpointUrl = resolveLiftEnvironmentUrl(vendor, endpointValue);
+  if (!endpointUrl) return liftSmokeUnconfigured(label, "ShippingReport URL is not configured yet.");
+
+  const response = await liftSmokeFetchJson(label, endpointUrl, headers, { offset: "0", p1: orderNumber, p2: "" }, 18_000);
+  if (!response.ok || !response.body || typeof response.body !== "object") return response;
+
+  const rowset = Array.isArray((response.body as Record<string, unknown>).rowset)
+    ? ((response.body as Record<string, unknown>).rowset as Array<Record<string, unknown>>)
+    : [];
+  const normalizedRows = rowset.map(normalizeLiftShippingSmokeRow);
+  const usefulRows = normalizedRows.filter((row) =>
+    hasSmokeValue(row.orderNumber) ||
+    hasSmokeValue(row.orderLineId) ||
+    hasSmokeValue(row.lineNumber) ||
+    hasSmokeValue(row.trackingNumber)
+  );
+  const firstShipping = usefulRows[0] || normalizedRows[0] || {};
+  const expectedFields = [
+    "orderNumber",
+    "orderLineId",
+    "shippingStatus",
+    "carrier",
+    "trackingNumber",
+    "shippedDate",
+    "destinationName",
+  ];
+
+  return {
+    ...response,
+    rowCount: rowset.length,
+    completeRowCount: usefulRows.length,
+    requiredFieldsPresent: expectedFields.filter((field) => hasSmokeValue(firstShipping[field])),
+    requiredFieldsMissing: expectedFields.filter((field) => !hasSmokeValue(firstShipping[field])),
+    ok: response.ok,
+    message:
+      rowset.length === 0
+        ? "ShippingReport responded but returned no rows for this order. That can be expected before shipment activity exists."
+        : usefulRows.length === 0
+          ? "ShippingReport responded, but the row shape did not include recognizable order, line, or tracking fields."
+          : "ShippingReport responded with a recognizable shipping row shape.",
+    sample: {
+      orderNumber: optionalString(firstShipping.orderNumber),
+      orderLineId: optionalNumber(firstShipping.orderLineId),
+      shippingStatus: optionalString(firstShipping.shippingStatus),
+      carrier: optionalString(firstShipping.carrier),
+      trackingNumberPresent: Boolean(optionalString(firstShipping.trackingNumber)),
+      shippedDate: optionalString(firstShipping.shippedDate),
+      destinationName: optionalString(firstShipping.destinationName),
+    },
+  };
+}
+
+function normalizeLiftShippingSmokeRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    orderNumber: row.ORDER_NUMBER ?? row.ORDER_ID ?? row.LIFT_ORDER_NUMBER,
+    orderLineId: row.ORDER_LINE_ID ?? row.LINE_ID,
+    lineNumber: row.LINE_NUMBER ?? row.ORDER_LINE_NUMBER,
+    shippingStatus: row.TRACKER_SHORT_MESSAGE ?? row.SHIPPING_STATUS ?? row.SHIPMENT_STATUS ?? row.STATUS,
+    carrier: row.SHIP_METHOD ?? row.CARRIER ?? row.CARRIER_NAME ?? row.SHIP_VIA,
+    trackingNumber: row.TRACKING_NUMBER ?? row.TRACKING_NO ?? row.PRO_NUMBER,
+    shippedDate: row.SHIPPED_DATE ?? row.SHIP_DATE ?? row.ACTUAL_SHIP_DATE,
+    trackerMessage: row.TRACKER_MESSAGE,
+    trackerShortMessage: row.TRACKER_SHORT_MESSAGE,
+    destinationName: row.LOCATION_NAME,
+    destinationCity: row.CITY,
+    destinationState: row.STATE,
+    destinationZip: row.ZIP,
+  };
+}
+
+function normalizeLiftShippingRow(row: Record<string, unknown>): ProjectLiftShippingSnapshot {
+  return {
+    orderNumber: optionalString(row.ORDER_NUMBER) || optionalString(row.ORDER_ID) || optionalString(row.LIFT_ORDER_NUMBER) || null,
+    orderLineId: optionalNumber(row.ORDER_LINE_ID) ?? optionalNumber(row.LINE_ID) ?? null,
+    trackingNumber: optionalString(row.TRACKING_NUMBER) || optionalString(row.TRACKING_NO) || optionalString(row.PRO_NUMBER) || null,
+    trackerMessage: optionalString(row.TRACKER_MESSAGE) || null,
+    trackerShortMessage: optionalString(row.TRACKER_SHORT_MESSAGE) || optionalString(row.SHIPPING_STATUS) || optionalString(row.SHIPMENT_STATUS) || optionalString(row.STATUS) || null,
+    shipMethod: optionalString(row.SHIP_METHOD) || optionalString(row.CARRIER) || optionalString(row.CARRIER_NAME) || optionalString(row.SHIP_VIA) || null,
+    locationName: optionalString(row.LOCATION_NAME) || null,
+    addressLine1: optionalString(row.ADDRESS_LINE1) || null,
+    addressLine2: optionalString(row.ADDRESS_LINE2) || null,
+    addressLine3: optionalString(row.ADDRESS_LINE3) || null,
+    city: optionalString(row.CITY) || null,
+    state: optionalString(row.STATE) || null,
+    zip: optionalString(row.ZIP) || optionalNumber(row.ZIP) || null,
+    actualShipDate: optionalString(row.ACTUAL_SHIP_DATE) || optionalString(row.SHIPPED_DATE) || optionalString(row.SHIP_DATE) || null,
+  };
+}
+
+async function fetchLiftShippingReport(
+  liftOrderId: string,
+  settings: AppSettingsItem,
+  projectId: string,
+  auth: AuthContext,
+  options: { recordWorkflowErrors?: boolean } = {}
+): Promise<Map<number, ProjectLiftShippingSnapshot>> {
+  const config = settings.integrations.primaryPrintVendor;
+  const shippingUrl = resolveLiftEnvironmentUrl(config, getLiftEnvironmentConfig(config).shippingReportUrl);
+  const rowsByOrderLineId = new Map<number, ProjectLiftShippingSnapshot>();
+  const recordWorkflowErrors = options.recordWorkflowErrors !== false;
+  if (!shippingUrl) return rowsByOrderLineId;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 18_000);
+  try {
+    const url = buildLiftQueryUrl(shippingUrl, {
+      offset: "0",
+      p1: liftOrderId,
+      p2: "",
+    });
+    const response = await fetch(url, {
+      method: "GET",
+      headers: parseLiftHeaders(config.defaultHeaders),
+      signal: controller.signal,
+    });
+    const responseText = await response.text();
+    const responseBody = parseMaybeJson(responseText);
+    if (!response.ok || !responseBody || typeof responseBody !== "object") {
+      if (recordWorkflowErrors) {
+        await recordWorkflowError(`PROJECT#${projectId}`, auth, {
+          severity: "warning",
+          errorCode: "lift_shipping_sync_failed",
+          message: "Lift ShippingReport could not be refreshed.",
+          surface: "shipping_sync",
+          metadata: {
+            liftOrderId,
+            status: response.status,
+          },
+        });
+      }
+      return rowsByOrderLineId;
+    }
+    const rowset = Array.isArray((responseBody as Record<string, unknown>).rowset)
+      ? ((responseBody as Record<string, unknown>).rowset as Array<Record<string, unknown>>)
+      : [];
+    for (const row of rowset) {
+      const snapshot = normalizeLiftShippingRow(row);
+      if (snapshot.orderLineId != null) rowsByOrderLineId.set(snapshot.orderLineId, snapshot);
+    }
+    return rowsByOrderLineId;
+  } catch (error) {
+    if (recordWorkflowErrors) {
+      await recordWorkflowError(`PROJECT#${projectId}`, auth, {
+        severity: "warning",
+        errorCode: "lift_shipping_sync_failed",
+        message: "Lift ShippingReport timed out or failed during refresh.",
+        surface: "shipping_sync",
+        metadata: {
+          liftOrderId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        },
+      });
+    }
+    return rowsByOrderLineId;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function smokeFetchLiftOrderUrl(
   vendor: AppSettingsItem["integrations"]["primaryPrintVendor"],
   endpointValue: string,
@@ -5252,6 +5960,10 @@ async function liftSmokeFetchJson(
     const body = parseMaybeJson(responseText);
     const durationMs = Date.now() - startedAt;
     clearTimeout(timeout);
+    const bodyRecord = body && typeof body === "object" ? body as Record<string, unknown> : null;
+    const liftErrorTitle = optionalString(bodyRecord?.title) || optionalString(bodyRecord?.code);
+    const liftErrorCode = optionalString(bodyRecord?.["o:errorCode"]) || optionalString(bodyRecord?.code);
+    const liftErrorCause = optionalString(bodyRecord?.cause);
     return {
       label,
       configured: true,
@@ -5259,7 +5971,17 @@ async function liftSmokeFetchJson(
       status: response.status,
       durationMs,
       urlHost: safeUrlHost(url),
-      message: response.ok ? `${label} responded successfully.` : `${label} returned HTTP ${response.status}.`,
+      message: response.ok
+        ? `${label} responded successfully.`
+        : liftErrorTitle
+          ? `${label} returned HTTP ${response.status}: ${liftErrorTitle}.`
+          : `${label} returned HTTP ${response.status}.`,
+      sample: !response.ok && (liftErrorCode || liftErrorCause)
+        ? {
+            errorCode: liftErrorCode || null,
+            cause: liftErrorCause ? liftErrorCause.slice(0, 240) : null,
+          }
+        : undefined,
       body,
     };
   } catch (error) {
@@ -6579,6 +7301,7 @@ type VendorWorkspaceLine = {
     vendorNote?: string | null;
     sizeBytes?: number | null;
   } | null;
+  liftShipping: ProjectLiftShippingSnapshot | null;
   productionStatus: VendorOrderStatus;
   baselineProductionStatus: VendorOrderStatus;
   workflow: {
@@ -7066,7 +7789,12 @@ function proofRouteFallback(
   return { productionRoute, routeLabel, integrationMode };
 }
 
-async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAccountIds?: Set<string>, actorName = "System") {
+async function buildVendorOrdersForProject(
+  project: ProjectItem,
+  allowedVendorAccountIds?: Set<string>,
+  actorName = "System",
+  options: { liftShippingByOrderLineId?: Map<number, ProjectLiftShippingSnapshot> } = {}
+) {
   const bundle = await loadProjectRecordBundle(project.id);
   if (!bundle.project) return [];
   const vendorRegistryCustomerId = project.sourceCustomerId || project.customerId;
@@ -7101,6 +7829,7 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
   );
   const signedUrlCache = new Map<string, Promise<string>>();
   const grouped = new Map<string, VendorWorkspaceLine[]>();
+  const liftShippingByOrderLineId = options.liftShippingByOrderLineId || new Map<number, ProjectLiftShippingSnapshot>();
 
   async function addLine(args: {
     id: string;
@@ -7284,6 +8013,10 @@ async function buildVendorOrdersForProject(project: ProjectItem, allowedVendorAc
               sizeBytes: proofAsset.vendorProofSizeBytes,
             }
           : null,
+        liftShipping:
+          args.proof?.liftOrderLineId != null
+            ? liftShippingByOrderLineId.get(args.proof.liftOrderLineId) || null
+            : null,
         productionStatus,
         baselineProductionStatus: baselineStatus,
         workflow,
@@ -7460,12 +8193,17 @@ async function getVendorWorkspaceOrder(vendorOrderId: string, auth: AuthContext,
   assertVendorAccountAccess(auth, vendorAccountId);
   let project = await findProjectById(projectId);
   if (!project) throw new HttpError(404, "Vendor order not found");
+  let liftShippingByOrderLineId = new Map<number, ProjectLiftShippingSnapshot>();
   if (options.refreshLift && project.liftOrderId) {
     await syncProjectProofLinesFromLift(project, auth, { forceRead: true });
     project = await findProjectById(projectId);
     if (!project) throw new HttpError(404, "Vendor order not found");
+    if (project.liftOrderId) {
+      const settings = hydrateAppSettings(await findAppSettings(), auth.actorName);
+      liftShippingByOrderLineId = await fetchLiftShippingReport(project.liftOrderId, settings, project.id, auth);
+    }
   }
-  const orders = await buildVendorOrdersForProject(project, new Set([vendorAccountId]), auth.actorName);
+  const orders = await buildVendorOrdersForProject(project, new Set([vendorAccountId]), auth.actorName, { liftShippingByOrderLineId });
   const order = orders.find((item) => item.id === vendorOrderId);
   if (!order) throw new HttpError(404, "Vendor order not found");
   const documents = (await listProjectDocuments(projectId)).filter((document) => document.vendorOrderId === vendorOrderId);
@@ -8342,6 +9080,11 @@ async function toProjectListItem(
     orderSubmittedAt: project.orderSubmittedAt || null,
     orderSubmittedByName: project.orderSubmittedByName || null,
     orderSubmissionNote: project.orderSubmissionNote || null,
+    orderLifecycleStatus: project.orderLifecycleStatus || "active",
+    orderLifecycleReason: project.orderLifecycleReason || null,
+    orderLifecycleNote: project.orderLifecycleNote || null,
+    orderLifecycleUpdatedAt: project.orderLifecycleUpdatedAt || null,
+    orderLifecycleUpdatedByName: project.orderLifecycleUpdatedByName || null,
     productionReleasedAt: project.productionReleasedAt || null,
     productionReleasedByName: project.productionReleasedByName || null,
     productionReleaseNote: project.productionReleaseNote || null,
@@ -8447,6 +9190,7 @@ function defaultAppSettings(actorName: string): AppSettingsItem {
         vendorName: "Larger Than Life, Inc.",
         platformLabel: "Lift ERP",
         activeEnvironment: "prod",
+        productIdentifierMode: "unit_number",
         environments: {
           prod: defaultLiftEnvironmentConfig("prod"),
           qa1: defaultLiftEnvironmentConfig("qa1"),
@@ -8473,8 +9217,10 @@ function defaultLiftEnvironmentConfig(environment: LiftEnvironmentKey): LiftEnvi
       fallbackOrderLookupUrl: "",
       orderUrlResolverUrl: "",
       customerContactListUrl: "",
+      productManagementUrl: "",
       proofEndpointUrlTemplate: "",
       flushSyncUrl: "",
+      shippingReportUrl: "",
       proofUrlResolverUrl: "",
     };
   }
@@ -8486,8 +9232,10 @@ function defaultLiftEnvironmentConfig(environment: LiftEnvironmentKey): LiftEnvi
     orderUrlResolverUrl: "",
     customerContactListUrl:
       "https://ltlco.lifterp.com/ords/lift/erp/flush/ondemand/91/CustomerContactLIst/CustomerContactList?",
+    productManagementUrl: "https://ltlco.lifterp.com/ords/api/lift/erp/api/v1/product-management/products",
     proofEndpointUrlTemplate: "",
     flushSyncUrl: "",
+    shippingReportUrl: "",
     proofUrlResolverUrl: "",
   };
 }
@@ -8535,8 +9283,11 @@ function hydrateAppSettings(existing: AppSettingsItem | null | undefined, actorN
       fallbackOrderLookupPath?: string;
       orderUrlResolverPath?: string;
       customerContactListPath?: string;
+      productManagementPath?: string;
+      productManagementUrl?: string;
       proofEndpointPath?: string;
       syncEndpointPath?: string;
+      shippingReportPath?: string;
       proofUrlResolverPath?: string;
     }
   >;
@@ -8555,8 +9306,10 @@ function hydrateAppSettings(existing: AppSettingsItem | null | undefined, actorN
     fallbackOrderLookupUrl: existingVendor.fallbackOrderLookupPath,
     orderUrlResolverUrl: existingVendor.orderUrlResolverPath,
     customerContactListUrl: existingVendor.customerContactListPath,
+    productManagementUrl: existingVendor.productManagementUrl || existingVendor.productManagementPath,
     proofEndpointUrlTemplate: existingVendor.proofEndpointPath,
     flushSyncUrl: existingVendor.syncEndpointPath,
+    shippingReportUrl: existingVendor.shippingReportPath,
     proofUrlResolverUrl: existingVendor.proofUrlResolverPath,
   };
   return {
@@ -8605,6 +9358,7 @@ function hydrateAppSettings(existing: AppSettingsItem | null | undefined, actorN
         ...defaults.integrations.primaryPrintVendor,
         ...existingVendor,
         activeEnvironment,
+        productIdentifierMode: normalizeLiftProductIdentifierMode(existingVendor.productIdentifierMode),
         environments: {
           prod: {
             ...defaultEnvironments.prod,
@@ -8624,6 +9378,10 @@ function hydrateAppSettings(existing: AppSettingsItem | null | undefined, actorN
 
 function normalizeLiftEnvironmentKey(value: string | null | undefined): LiftEnvironmentKey {
   return String(value || "").toLowerCase() === "qa1" ? "qa1" : "prod";
+}
+
+function normalizeLiftProductIdentifierMode(value: unknown): LiftProductIdentifierMode {
+  return value === "product_id" ? "product_id" : "unit_number";
 }
 
 function omitUndefinedLiftEnvironmentConfig(
@@ -8877,6 +9635,10 @@ async function updateAdminSettings(payload: Record<string, unknown>, auth: AuthC
           hasOwn(payload, "primaryPrintActiveEnvironment")
             ? normalizeLiftEnvironmentKey(optionalString(payload.primaryPrintActiveEnvironment))
             : existing.integrations.primaryPrintVendor.activeEnvironment,
+        productIdentifierMode:
+          hasOwn(payload, "primaryPrintProductIdentifierMode")
+            ? normalizeLiftProductIdentifierMode(optionalString(payload.primaryPrintProductIdentifierMode))
+            : existing.integrations.primaryPrintVendor.productIdentifierMode,
         environments: {
           prod: {
             ...existing.integrations.primaryPrintVendor.environments.prod,
@@ -8900,6 +9662,10 @@ async function updateAdminSettings(payload: Record<string, unknown>, auth: AuthC
               hasOwn(payload, "primaryPrintProdCustomerContactListUrl")
                 ? optionalString(payload.primaryPrintProdCustomerContactListUrl)
                 : existing.integrations.primaryPrintVendor.environments.prod.customerContactListUrl,
+            productManagementUrl:
+              hasOwn(payload, "primaryPrintProdProductManagementUrl")
+                ? optionalString(payload.primaryPrintProdProductManagementUrl)
+                : existing.integrations.primaryPrintVendor.environments.prod.productManagementUrl,
             proofEndpointUrlTemplate:
               hasOwn(payload, "primaryPrintProdProofEndpointUrlTemplate")
                 ? optionalString(payload.primaryPrintProdProofEndpointUrlTemplate)
@@ -8908,6 +9674,10 @@ async function updateAdminSettings(payload: Record<string, unknown>, auth: AuthC
               hasOwn(payload, "primaryPrintProdFlushSyncUrl")
                 ? optionalString(payload.primaryPrintProdFlushSyncUrl)
                 : existing.integrations.primaryPrintVendor.environments.prod.flushSyncUrl,
+            shippingReportUrl:
+              hasOwn(payload, "primaryPrintProdShippingReportUrl")
+                ? optionalString(payload.primaryPrintProdShippingReportUrl)
+                : existing.integrations.primaryPrintVendor.environments.prod.shippingReportUrl,
             proofUrlResolverUrl:
               hasOwn(payload, "primaryPrintProdProofUrlResolverUrl")
                 ? optionalString(payload.primaryPrintProdProofUrlResolverUrl)
@@ -8935,6 +9705,10 @@ async function updateAdminSettings(payload: Record<string, unknown>, auth: AuthC
               hasOwn(payload, "primaryPrintQa1CustomerContactListUrl")
                 ? optionalString(payload.primaryPrintQa1CustomerContactListUrl)
                 : existing.integrations.primaryPrintVendor.environments.qa1.customerContactListUrl,
+            productManagementUrl:
+              hasOwn(payload, "primaryPrintQa1ProductManagementUrl")
+                ? optionalString(payload.primaryPrintQa1ProductManagementUrl)
+                : existing.integrations.primaryPrintVendor.environments.qa1.productManagementUrl,
             proofEndpointUrlTemplate:
               hasOwn(payload, "primaryPrintQa1ProofEndpointUrlTemplate")
                 ? optionalString(payload.primaryPrintQa1ProofEndpointUrlTemplate)
@@ -8943,6 +9717,10 @@ async function updateAdminSettings(payload: Record<string, unknown>, auth: AuthC
               hasOwn(payload, "primaryPrintQa1FlushSyncUrl")
                 ? optionalString(payload.primaryPrintQa1FlushSyncUrl)
                 : existing.integrations.primaryPrintVendor.environments.qa1.flushSyncUrl,
+            shippingReportUrl:
+              hasOwn(payload, "primaryPrintQa1ShippingReportUrl")
+                ? optionalString(payload.primaryPrintQa1ShippingReportUrl)
+                : existing.integrations.primaryPrintVendor.environments.qa1.shippingReportUrl,
             proofUrlResolverUrl:
               hasOwn(payload, "primaryPrintQa1ProofUrlResolverUrl")
                 ? optionalString(payload.primaryPrintQa1ProofUrlResolverUrl)
@@ -9149,9 +9927,12 @@ async function listRecentWorkflowIssues(auth: AuthContext, limit = 10) {
         projectMode: project.projectMode || "live",
         customerId: project.customerId,
         customerName: project.customerName,
+        adspaceOrderNumber: getProjectAdspaceOrderNumber(project),
+        liftOrderId: project.liftOrderId || null,
         sourceCustomerName: project.sourceCustomerName || null,
         venueName: project.venueName,
         createdAt: String(event.createdAt || ""),
+        eventId: workflowIssueEventId(event),
         actorName: String(event.actorName || "System"),
         severity:
           event.detail?.severity === "info" || event.detail?.severity === "warning" || event.detail?.severity === "error"
@@ -9169,7 +9950,1908 @@ async function listRecentWorkflowIssues(auth: AuthContext, limit = 10) {
     })
   );
 
-  return issues.filter(Boolean);
+  return issues.filter((issue): issue is NonNullable<typeof issue> => Boolean(issue));
+}
+
+async function getAdminHealthSnapshot(auth: AuthContext) {
+  assertPlatformAdmin(auth);
+  const checkedAt = isoNow();
+  const [
+    settingsRaw,
+    projectsRaw,
+    proofLinesRaw,
+    transitRaw,
+    vendorLineStatusesRaw,
+    customersRaw,
+    venuesRaw,
+    inventoryRaw,
+    roomMapsRaw,
+    mediaVariantsRaw,
+    users,
+    vendorAccountsRaw,
+    customerVendorsRaw,
+    shareLinksRaw,
+    shareParticipantsRaw,
+    notificationDigestsRaw,
+    healthIncidentsRaw,
+    recentIssues,
+    presenceRecords,
+    bucketChecks,
+    queueHealth,
+    observability,
+  ] = await Promise.all([
+    findAppSettings(),
+    scanByEntityType("Project"),
+    scanByEntityType("ProjectProofLine"),
+    scanByEntityType("ProjectTransitApproval"),
+    scanByEntityType("ProjectVendorLineStatus"),
+    scanByEntityType("Customer"),
+    scanByEntityType("Venue"),
+    scanByEntityType("InventoryItem"),
+    scanByEntityType("RoomMap"),
+    scanByEntityType("MediaVariant"),
+    listUserProfiles(),
+    scanByEntityType("VendorAccount"),
+    scanByEntityType("CustomerVendor"),
+    scanByEntityType("ProjectShareLink"),
+    scanByEntityType("ShareParticipant"),
+    scanByEntityType("NotificationDigest"),
+    scanByEntityType("HealthIncident"),
+    listRecentWorkflowIssues(auth, 25),
+    listAdminPresenceRecords(),
+    probeAdminHealthBuckets(),
+    getRealtimeQueueHealth(),
+    getAdminHealthObservability(),
+  ]);
+
+  const settings = hydrateAppSettings(settingsRaw, auth.actorName);
+  const projects = projectsRaw.filter((item): item is ProjectItem => item.entityType === "Project");
+  const proofLines = proofLinesRaw.filter((item): item is ProjectProofLineItem => item.entityType === "ProjectProofLine");
+  const transits = transitRaw.filter((item): item is ProjectTransitApprovalItem => item.entityType === "ProjectTransitApproval");
+  const vendorLineStatuses = vendorLineStatusesRaw.filter((item): item is ProjectVendorLineStatusItem => item.entityType === "ProjectVendorLineStatus");
+  const customers = customersRaw.filter((item): item is CustomerItem => item.entityType === "Customer");
+  const venues = venuesRaw.filter((item): item is VenueItem => item.entityType === "Venue");
+  const inventory = inventoryRaw.filter((item): item is InventoryItem => item.entityType === "InventoryItem");
+  const roomMaps = roomMapsRaw.filter((item): item is RoomMapItem => item.entityType === "RoomMap");
+  const mediaVariants = mediaVariantsRaw.filter((item): item is MediaVariantItem => item.entityType === "MediaVariant");
+  const vendorAccounts = vendorAccountsRaw.filter((item): item is VendorAccountItem => item.entityType === "VendorAccount");
+  const customerVendors = customerVendorsRaw.filter((item): item is CustomerVendorItem => item.entityType === "CustomerVendor");
+  const shareLinks = shareLinksRaw.filter((item): item is ProjectShareLinkItem => item.entityType === "ProjectShareLink");
+  const shareParticipants = shareParticipantsRaw.filter((item): item is ShareParticipantItem => item.entityType === "ShareParticipant");
+  const notificationDigests = notificationDigestsRaw.filter((item): item is NotificationDigestItem => item.entityType === "NotificationDigest");
+  const healthIncidents = healthIncidentsRaw.filter((item): item is HealthIncidentItem => item.entityType === "HealthIncident");
+  const projectsById = new Map(projects.map((project) => [project.id, project] as const));
+  const proofLinesByProjectId = groupBy(proofLines, (line) => line.projectId);
+  const transitByProjectId = new Map(transits.map((transit) => [transit.projectId, transit] as const));
+  const activeCustomers = customers.filter((customer) => customerStatus(customer) === "active");
+  const activeRealCustomers = activeCustomers.filter((customer) => !customer.isInternalSandbox);
+  const activeVenues = venues.filter((venue) => venue.isActive !== false);
+  const activeVendorAccounts = vendorAccounts.filter((vendor) => vendor.isActive !== false);
+  const activeExternalVendors = customerVendors.filter((vendor) => vendor.isActive !== false);
+  const issues: AdminHealthIssue[] = [];
+
+  const addIssue = (issue: Omit<AdminHealthIssue, "id" | "detectedAt" | "incidentPacket"> & {
+    id?: string;
+    detectedAt?: string;
+    evidence?: Record<string, unknown>;
+    relatedEvents?: string[];
+    allowedRunbookIds?: string[];
+  }) => {
+    const id = issue.id || healthIssueId(issue.systemId, issue.title, issue.scope);
+    const evidence = issue.evidence || {};
+    issues.push({
+      id,
+      systemId: issue.systemId,
+      severity: issue.severity,
+      title: issue.title,
+      message: issue.message,
+      scope: issue.scope,
+      detectedAt: issue.detectedAt || checkedAt,
+      source: issue.source,
+      recommendedAction: issue.recommendedAction,
+      runbookActionId: issue.runbookActionId,
+      dependency: issue.dependency,
+      incidentPacket: {
+        systemId: issue.systemId,
+        severity: issue.severity,
+        evidence,
+        relatedEvents: issue.relatedEvents || [],
+        allowedRunbookIds: issue.allowedRunbookIds || (issue.runbookActionId ? [issue.runbookActionId] : []),
+      },
+    });
+  };
+
+  const vendor = settings.integrations.primaryPrintVendor;
+  const activeLiftEnvironment = vendor.environments[vendor.activeEnvironment];
+  const liftEndpointValues = [
+    activeLiftEnvironment.orderEndpointUrl,
+    activeLiftEnvironment.orderUrlResolverUrl,
+    activeLiftEnvironment.flushSyncUrl,
+    activeLiftEnvironment.proofUrlResolverUrl,
+    activeLiftEnvironment.proofEndpointUrlTemplate,
+  ];
+  const liftEndpointsConfigured = liftEndpointValues.every((value) => {
+    const trimmed = value.trim();
+    return trimmed.startsWith("http://") || trimmed.startsWith("https://") || (trimmed.length > 0 && activeLiftEnvironment.baseUrl.trim().length > 0);
+  });
+  const liftCredentialsConfigured = Boolean(
+    vendor.vendorName.trim() &&
+    vendor.platformLabel.trim() &&
+    vendor.companyId.trim() &&
+    vendor.createOrderUsername.trim() &&
+    vendor.createOrderPassword.trim() &&
+    vendor.proofClientId.trim() &&
+    vendor.proofClientSecret.trim()
+  );
+  const liftProjects = projects.filter((project) => !!project.liftOrderId);
+  const liftHealthCounts = countBy(liftProjects, (project) => project.liftOrderHealthStatus || "unknown");
+  const liftDispositionedProjects = liftProjects.filter(
+    (project) =>
+      (project.liftOrderHealthStatus === "cancelled" || project.liftOrderHealthStatus === "missing") &&
+      (project.orderLifecycleStatus === "on_hold" || project.orderLifecycleStatus === "cancelled")
+  );
+  const liftBlockedProjects = liftProjects.filter(
+    (project) =>
+      (project.liftOrderHealthStatus === "cancelled" || project.liftOrderHealthStatus === "missing") &&
+      project.orderLifecycleStatus !== "on_hold" &&
+      project.orderLifecycleStatus !== "cancelled"
+  );
+  const liftBlockedIssueRefs = liftBlockedProjects.slice(0, 6).map((project) => {
+    const title = project.liftOrderHealthStatus === "cancelled" ? "Lift order cancelled" : "Lift order unavailable";
+    return {
+      project,
+      title,
+      id: healthIssueId("lift", title, projectScope(project)),
+      message: project.liftOrderId ? `${title} for Lift ${project.liftOrderId}` : `${title} for ${project.title}`,
+    };
+  });
+  const staleLiftSyncProjects = liftProjects.filter((project) => {
+    if (project.liftOrderHealthStatus === "cancelled" || project.liftOrderHealthStatus === "missing") return false;
+    const lastSync = project.lastLiftProofSyncAt || project.lastLiftOrderSyncAt || project.orderSubmittedAt || "";
+    return lastSync ? Date.now() - Date.parse(lastSync) > 60 * 60 * 1000 : true;
+  });
+  const waitingProofProjects = projects.filter((project) => {
+    const projectProofs = proofLinesByProjectId.get(project.id) || [];
+    return projectProofs.some((line) => line.status === "waiting");
+  });
+  const liftShippingEndpointConfigured = Boolean(
+    resolveLiftEnvironmentUrl(vendor, getLiftEnvironmentConfig(vendor).shippingReportUrl)
+  );
+  const liftShippingAuditProjects = liftShippingEndpointConfigured
+    ? liftProjects
+        .filter((project) =>
+          project.liftOrderHealthStatus !== "cancelled" &&
+          project.liftOrderHealthStatus !== "missing" &&
+          project.orderLifecycleStatus !== "cancelled" &&
+          project.orderLifecycleStatus !== "on_hold"
+        )
+        .sort((a, b) =>
+          (b.productionReleasedAt || b.lastLiftProofSyncAt || b.lastLiftOrderSyncAt || b.updatedAt || b.createdAt).localeCompare(
+            a.productionReleasedAt || a.lastLiftProofSyncAt || a.lastLiftOrderSyncAt || a.updatedAt || a.createdAt
+          )
+        )
+        .slice(0, 10)
+    : [];
+  const liftShippingAudits = await Promise.all(
+    liftShippingAuditProjects.map(async (project) => {
+      const rowsByOrderLineId = await fetchLiftShippingReport(project.liftOrderId as string, settings, project.id, auth, {
+        recordWorkflowErrors: false,
+      });
+      const projectProofs = proofLinesByProjectId.get(project.id) || [];
+      const proofByLiftLineId = new Map(
+        projectProofs
+          .filter((line) => line.liftOrderLineId != null)
+          .map((line) => [line.liftOrderLineId as number, line] as const)
+      );
+      const shippingRows = Array.from(rowsByOrderLineId.values()).filter(isLiftShippingEvidence);
+      const unmappedRows = shippingRows.filter((row) => row.orderLineId != null && !proofByLiftLineId.has(row.orderLineId));
+      const mappedRows = shippingRows
+        .map((row) => ({
+          shipping: row,
+          proofLine: row.orderLineId != null ? proofByLiftLineId.get(row.orderLineId) || null : null,
+        }))
+        .filter((entry) => entry.proofLine);
+      const transit = transitByProjectId.get(project.id) || null;
+      return {
+        project,
+        transitStatus: transit?.status || "not_started",
+        shippingRows,
+        mappedRows,
+        unmappedRows,
+      };
+    })
+  );
+
+  if (!vendor.enabled) {
+    addIssue({
+      systemId: "lift",
+      severity: "warning",
+      title: "Lift integration disabled",
+      message: "Primary print vendor integration posture is disabled.",
+      source: "admin_settings",
+      recommendedAction: "Confirm whether Lift should be enabled before live order validation.",
+      evidence: { activeEnvironment: vendor.activeEnvironment },
+    });
+  } else if (!liftCredentialsConfigured || !liftEndpointsConfigured) {
+    addIssue({
+      systemId: "lift",
+      severity: "error",
+      title: "Lift configuration incomplete",
+      message: "The active Lift environment is missing required credentials or required endpoint URLs.",
+      source: "admin_settings",
+      recommendedAction: "Open Admin Setup and complete the active Lift environment configuration.",
+      runbookActionId: "open_admin_lift_settings",
+      evidence: { liftCredentialsConfigured, liftEndpointsConfigured, activeEnvironment: vendor.activeEnvironment },
+    });
+  }
+
+  for (const { project, title, id } of liftBlockedIssueRefs) {
+    addIssue({
+      id,
+      systemId: "lift",
+      severity: "blocked",
+      title,
+      message: project.liftOrderHealthMessage || `Lift order ${project.liftOrderId} needs operator review.`,
+      scope: projectScope(project),
+      source: "project_lift_health",
+      recommendedAction: "Review the linked Lift order, then choose the Adspace disposition: relink to another Lift order, put the order on hold, or cancel the Adspace order.",
+      runbookActionId: "review_lift_order_health",
+      evidence: {
+        liftOrderId: project.liftOrderId,
+        liftOrderHealthStatus: project.liftOrderHealthStatus,
+        liftOrderStatus: project.liftOrderStatus,
+      },
+    });
+  }
+
+  if (staleLiftSyncProjects.length > 0) {
+    addIssue({
+      systemId: "lift",
+      severity: "warning",
+      title: "Stale Lift sync",
+      message: `${staleLiftSyncProjects.length} Lift-backed project${staleLiftSyncProjects.length === 1 ? "" : "s"} have not synced order/proof status in over an hour.`,
+      scope: staleLiftSyncProjects.length === 1 ? projectScope(staleLiftSyncProjects[0]) : undefined,
+      source: "project_lift_sync",
+      recommendedAction: "Refresh Lift sync for the affected project before relying on production or proof status.",
+      runbookActionId: "refresh_lift_sync",
+      evidence: { projectIds: staleLiftSyncProjects.slice(0, 10).map((project) => project.id) },
+    });
+  }
+
+  for (const audit of liftShippingAudits) {
+    if (audit.shippingRows.length > 0 && audit.transitStatus !== "approved") {
+      const firstMapped = audit.mappedRows[0];
+      const firstShipping = firstMapped?.shipping || audit.shippingRows[0];
+      const proofLine = firstMapped?.proofLine || null;
+      addIssue({
+        systemId: "vendor_ops",
+        severity: "warning",
+        title: "Lift shipping without transit approval",
+        message: `Lift shows shipment activity for order ${audit.project.liftOrderId}, but Adspace transit is ${audit.transitStatus.replace(/_/g, " ")}.`,
+        scope: proofLine ? proofLineScope(audit.project, proofLine) : projectScope(audit.project),
+        source: "lift_shipping_report",
+        recommendedAction: "Open the project Transit Approval panel and reconcile the Lift shipment evidence with the customer-facing transit state.",
+        runbookActionId: "review_lift_shipping_transit_mismatch",
+        evidence: {
+          projectId: audit.project.id,
+          liftOrderId: audit.project.liftOrderId,
+          transitStatus: audit.transitStatus,
+          shippedLineCount: audit.shippingRows.length,
+          mappedLineCount: audit.mappedRows.length,
+          firstLiftOrderLineId: firstShipping.orderLineId,
+          firstLineNumber: proofLine?.lineNumber,
+          firstFilename: proofLine?.clientFileName,
+          firstTrackingNumber: firstShipping.trackingNumber,
+          firstShippingStatus: liftShippingStatusLabel(firstShipping),
+          firstShipMethod: firstShipping.shipMethod,
+          firstActualShipDate: firstShipping.actualShipDate,
+        },
+        relatedEvents: [`lift.shipping:${audit.project.liftOrderId}`],
+      });
+    }
+
+    if (audit.unmappedRows.length > 0) {
+      const firstUnmapped = audit.unmappedRows[0];
+      addIssue({
+        systemId: "vendor_ops",
+        severity: "warning",
+        title: "Lift shipping line unmapped",
+        message: `${audit.unmappedRows.length} ShippingReport line${audit.unmappedRows.length === 1 ? "" : "s"} for Lift order ${audit.project.liftOrderId} could not be matched to an Adspace proof line.`,
+        scope: projectScope(audit.project),
+        source: "lift_shipping_report",
+        recommendedAction: "Refresh Lift sync, then confirm whether the ShippingReport order line belongs to this Adspace order or needs manual reconciliation.",
+        runbookActionId: "review_lift_shipping_transit_mismatch",
+        evidence: {
+          projectId: audit.project.id,
+          liftOrderId: audit.project.liftOrderId,
+          unmappedLineCount: audit.unmappedRows.length,
+          liftOrderLineIds: audit.unmappedRows.slice(0, 10).map((row) => row.orderLineId).filter((lineId) => lineId != null),
+          firstLiftOrderLineId: firstUnmapped.orderLineId,
+          firstTrackingNumber: firstUnmapped.trackingNumber,
+          firstShippingStatus: liftShippingStatusLabel(firstUnmapped),
+          firstShipMethod: firstUnmapped.shipMethod,
+          firstActualShipDate: firstUnmapped.actualShipDate,
+        },
+        relatedEvents: [`lift.shipping.unmapped:${audit.project.liftOrderId}`],
+      });
+    }
+  }
+
+  for (const issue of recentIssues.filter((issue) => !issue?.isDrill).slice(0, 10)) {
+    const severity: AdminHealthSeverity = issue.severity === "error" ? "error" : issue.severity === "warning" ? "warning" : "info";
+    addIssue({
+      id: `workflow:${issue.eventId}`,
+      systemId: issue.surface === "notifications" ? "notifications" : issue.surface === "proof_sync" ? "proof_ops" : "app_api",
+      severity,
+      title: issue.errorCode.replace(/_/g, " "),
+      message: issue.message,
+      scope: {
+        customerId: issue.customerId,
+        customerName: issue.customerName,
+        projectId: issue.projectId,
+        projectTitle: issue.projectTitle,
+        orderName: issue.projectTitle,
+        orderNumber: issue.adspaceOrderNumber,
+        liftOrderId: issue.liftOrderId || undefined,
+        orderId: issue.liftOrderId || issue.adspaceOrderNumber,
+        lineNumber: metadataNumber(issue.metadata, "lineNumber"),
+        filename: metadataString(issue.metadata, "filename", "creativeFilename", "clientFileName", "vendorProofFilename"),
+      },
+      detectedAt: issue.createdAt || checkedAt,
+      source: `workflow_error:${issue.surface}`,
+      recommendedAction: "Open the project activity Errors lane and resolve the latest workflow issue.",
+      runbookActionId: "review_workflow_error",
+      evidence: { eventId: issue.eventId, errorCode: issue.errorCode, surface: issue.surface, metadata: issue.metadata },
+      relatedEvents: [`workflow.error:${issue.errorCode}:${issue.eventId}`],
+    });
+  }
+
+  if (observability.status === "unavailable") {
+    addIssue({
+      systemId: "aws_foundation",
+      severity: "warning",
+      title: "Observability metrics unavailable",
+      message: observability.message,
+      source: "cloudwatch_metric_data",
+      recommendedAction: "Confirm Project API CloudWatch read permissions and metric namespace availability.",
+      evidence: { message: observability.message, checkedAt: observability.checkedAt },
+    });
+  }
+  if (observability.apiGateway.errors5xx > 0) {
+    addIssue({
+      systemId: "app_api",
+      severity: "error",
+      title: "API 5XX responses detected",
+      message: `${observability.apiGateway.errors5xx} API Gateway 5XX response${observability.apiGateway.errors5xx === 1 ? "" : "s"} were recorded in the last ${observability.windowMinutes} minutes.`,
+      source: "cloudwatch_api_gateway",
+      recommendedAction: "Review recent Project API and Venue API Lambda errors before declaring the app healthy.",
+      runbookActionId: "review_api_gateway_5xx",
+      evidence: observability.apiGateway,
+      relatedEvents: ["cloudwatch:AWS/ApiGateway:5XXError"],
+    });
+  }
+  for (const fn of observability.lambda.functions) {
+    if (fn.errors > 0) {
+      addIssue({
+        systemId: fn.systemId,
+        severity: "error",
+        title: "Lambda errors detected",
+        message: `${fn.label} recorded ${fn.errors} error${fn.errors === 1 ? "" : "s"} in the last ${observability.windowMinutes} minutes.`,
+        source: "cloudwatch_lambda",
+        recommendedAction: `Inspect CloudWatch logs for ${fn.functionName} and confirm whether the error maps to a customer-facing workflow.`,
+        runbookActionId: "review_lambda_errors",
+        evidence: fn,
+        relatedEvents: [`cloudwatch:AWS/Lambda:Errors:${fn.functionName}`],
+      });
+    }
+    if (fn.throttles > 0) {
+      addIssue({
+        systemId: fn.systemId,
+        severity: "error",
+        title: "Lambda throttles detected",
+        message: `${fn.label} recorded ${fn.throttles} throttle${fn.throttles === 1 ? "" : "s"} in the last ${observability.windowMinutes} minutes.`,
+        source: "cloudwatch_lambda",
+        recommendedAction: "Review concurrency, downstream latency, and retry pressure for the throttled function.",
+        runbookActionId: "review_lambda_throttles",
+        evidence: fn,
+        relatedEvents: [`cloudwatch:AWS/Lambda:Throttles:${fn.functionName}`],
+      });
+    }
+    if (fn.durationP95Ms >= 10_000) {
+      addIssue({
+        systemId: fn.systemId,
+        severity: "error",
+        title: "Lambda latency degraded",
+        message: `${fn.label} p95 duration is ${Math.round(fn.durationP95Ms)}ms over the last ${observability.windowMinutes} minutes.`,
+        source: "cloudwatch_lambda",
+        recommendedAction: "Inspect slow routes, downstream AWS calls, and Lift connectivity before treating the app as healthy.",
+        runbookActionId: "review_lambda_latency",
+        evidence: fn,
+      });
+    } else if (fn.durationP95Ms >= 3_000) {
+      addIssue({
+        systemId: fn.systemId,
+        severity: "warning",
+        title: "Lambda latency elevated",
+        message: `${fn.label} p95 duration is ${Math.round(fn.durationP95Ms)}ms over the last ${observability.windowMinutes} minutes.`,
+        source: "cloudwatch_lambda",
+        recommendedAction: "Watch latency and review recent route timing logs if operators report slowness.",
+        runbookActionId: "review_lambda_latency",
+        evidence: fn,
+      });
+    }
+  }
+
+  const waitingProofLines = proofLines.filter((line) => line.status === "waiting");
+  const revisedProofLines = proofLines.filter((line) => line.revised);
+  const missingProofUrls = proofLines.filter((line) => line.status !== "waiting" && !line.proofObjectKey && !line.liftProofFullUrl);
+  if (waitingProofProjects.length > 0) {
+    addIssue({
+      systemId: "proof_ops",
+      severity: "warning",
+      title: "Proof assets pending",
+      message: `${waitingProofProjects.length} project${waitingProofProjects.length === 1 ? "" : "s"} have proof lines waiting for proof assets.`,
+      scope: waitingProofProjects.length === 1 ? projectScope(waitingProofProjects[0]) : undefined,
+      source: "project_proof_lines",
+      recommendedAction: "Refresh proof sync and confirm Lift or vendor proof publication for the affected projects.",
+      runbookActionId: "refresh_lift_sync",
+      evidence: { projectIds: waitingProofProjects.slice(0, 10).map((project) => project.id), waitingProofLines: waitingProofLines.length },
+    });
+  }
+  if (missingProofUrls.length > 0) {
+    addIssue({
+      systemId: "proof_ops",
+      severity: "error",
+      title: "Proof URL missing",
+      message: `${missingProofUrls.length} proof line${missingProofUrls.length === 1 ? "" : "s"} are not waiting but do not have a proof file URL.`,
+      scope: missingProofUrls.length === 1 && projectsById.get(missingProofUrls[0].projectId)
+        ? proofLineScope(projectsById.get(missingProofUrls[0].projectId) as ProjectItem, missingProofUrls[0])
+        : undefined,
+      source: "project_proof_lines",
+      recommendedAction: "Review proof sync mismatch errors and refresh the affected proof packet.",
+      runbookActionId: "review_proof_packet",
+      evidence: {
+        proofLineIds: missingProofUrls.slice(0, 10).map((line) => line.id),
+        proofLines: missingProofUrls.slice(0, 5).map((line) => ({
+          projectId: line.projectId,
+          lineNumber: line.lineNumber,
+          filename: line.clientFileName,
+        })),
+      },
+    });
+  }
+
+  const missingBuckets = [
+    ["Project assets bucket", PROJECT_ASSETS_BUCKET_NAME],
+    ["Venue assets bucket", VENUE_ASSETS_BUCKET_NAME],
+    ["Generated documents bucket", GENERATED_DOCS_BUCKET_NAME],
+  ].filter(([, value]) => !String(value || "").trim());
+  const failedBucketChecks = bucketChecks.filter((check) => check.configured && !check.ok);
+  if (missingBuckets.length > 0) {
+    addIssue({
+      systemId: "aws_foundation",
+      severity: "blocked",
+      title: "AWS asset bucket configuration missing",
+      message: `${missingBuckets.map(([label]) => label).join(", ")} ${missingBuckets.length === 1 ? "is" : "are"} not configured for the project API.`,
+      source: "lambda_environment",
+      recommendedAction: "Review the deployed stack environment variables and bucket grants before accepting uploads or generated documents.",
+      evidence: { missingBuckets: missingBuckets.map(([label]) => label) },
+    });
+  }
+  for (const check of failedBucketChecks) {
+    addIssue({
+      systemId: "aws_foundation",
+      severity: "error",
+      title: `${check.label} unreachable`,
+      message: check.message,
+      source: "s3_head_bucket",
+      recommendedAction: "Review bucket existence, Lambda IAM grants, and deployed stack environment variables for this asset workflow.",
+      evidence: {
+        bucketName: check.bucketName,
+        operation: "HeadBucket",
+        statusCode: check.statusCode,
+      },
+    });
+  }
+  if (!PRESENCE_TABLE_NAME || !PRESENCE_WS_URL) {
+    addIssue({
+      systemId: "realtime",
+      severity: "warning",
+      title: "Realtime configuration incomplete",
+      message: "Presence table or WebSocket URL is not configured for realtime collaboration.",
+      source: "lambda_environment",
+      recommendedAction: "Review realtime stack outputs and Lambda environment wiring.",
+      evidence: { hasPresenceTable: Boolean(PRESENCE_TABLE_NAME), hasPresenceWebSocketUrl: Boolean(PRESENCE_WS_URL) },
+    });
+  }
+  if (queueHealth.broadcastQueue.configured && !queueHealth.broadcastQueue.ok) {
+    addIssue({
+      systemId: "realtime",
+      severity: "error",
+      title: "Realtime broadcast queue unreachable",
+      message: queueHealth.broadcastQueue.message,
+      source: "sqs_get_queue_attributes",
+      recommendedAction: "Review SQS queue configuration and Project API permissions before relying on realtime fanout.",
+      evidence: queueHealth.broadcastQueue,
+    });
+  }
+  if (queueHealth.deadLetterQueue.configured && !queueHealth.deadLetterQueue.ok) {
+    addIssue({
+      systemId: "realtime",
+      severity: "warning",
+      title: "Realtime dead-letter queue unreachable",
+      message: queueHealth.deadLetterQueue.message,
+      source: "sqs_get_queue_attributes",
+      recommendedAction: "Review DLQ configuration so failed realtime broadcasts remain visible.",
+      evidence: queueHealth.deadLetterQueue,
+    });
+  }
+  if ((queueHealth.deadLetterQueue.visibleMessages || 0) > 0) {
+    addIssue({
+      systemId: "realtime",
+      severity: "error",
+      title: "Realtime broadcast DLQ has messages",
+      message: `${queueHealth.deadLetterQueue.visibleMessages} realtime broadcast message${queueHealth.deadLetterQueue.visibleMessages === 1 ? "" : "s"} are waiting in the dead-letter queue.`,
+      source: "sqs_dead_letter_queue",
+      recommendedAction: "Inspect the failed realtime broadcast payloads before clearing or replaying them.",
+      runbookActionId: "review_realtime_dlq",
+      evidence: queueHealth.deadLetterQueue,
+    });
+  }
+  for (const queue of observability.sqs.queues) {
+    if (queue.ageOfOldestMessageSeconds >= 300) {
+      addIssue({
+        systemId: "realtime",
+        severity: "error",
+        title: "Realtime queue age degraded",
+        message: `${queue.label} oldest message age is ${Math.round(queue.ageOfOldestMessageSeconds)} seconds.`,
+        source: "cloudwatch_sqs",
+        recommendedAction: "Review the realtime broadcast worker and failed payloads before clearing backlog.",
+        runbookActionId: queue.id === "dead_letter" ? "review_realtime_dlq" : "review_realtime_queue_backlog",
+        evidence: queue,
+        relatedEvents: [`cloudwatch:AWS/SQS:ApproximateAgeOfOldestMessage:${queue.queueName}`],
+      });
+    } else if (queue.ageOfOldestMessageSeconds >= 60) {
+      addIssue({
+        systemId: "realtime",
+        severity: "warning",
+        title: "Realtime queue age elevated",
+        message: `${queue.label} oldest message age is ${Math.round(queue.ageOfOldestMessageSeconds)} seconds.`,
+        source: "cloudwatch_sqs",
+        recommendedAction: "Watch realtime delivery and confirm the broadcast worker is draining normally.",
+        runbookActionId: "review_realtime_queue_backlog",
+        evidence: queue,
+      });
+    }
+  }
+
+  const digestErrors = notificationDigests.filter((digest) => !!digest.lastError);
+  const dueDigests = notificationDigests.filter((digest) => Date.parse(digest.nextSendAt || "") <= Date.now() && digest.entries?.length);
+  const workflowErrorAlertsEnabled = Boolean(settings.notifications.workflowErrors);
+  if (!workflowErrorAlertsEnabled) {
+    addIssue({
+      systemId: "notifications",
+      severity: "warning",
+      title: "Workflow error alerts disabled",
+      message: "Global workflow error notifications are disabled.",
+      source: "admin_settings",
+      recommendedAction: "Enable workflow error notification posture before broader pilot use.",
+      evidence: { notificationEmailRecipients: settings.notifications.emailRecipients ? "configured" : "missing" },
+    });
+  }
+  if (observability.ses.accountChecked && !observability.ses.sendingEnabled) {
+    addIssue({
+      systemId: "notifications",
+      severity: "blocked",
+      title: "SES sending disabled",
+      message: "SES account sending is disabled, so customer/vendor notification delivery cannot be trusted.",
+      source: "ses_get_account",
+      recommendedAction: "Review SES account posture, enforcement status, and verified sending identities.",
+      runbookActionId: "review_ses_account",
+      evidence: observability.ses,
+    });
+  }
+  if (observability.ses.bounces > 0 || observability.ses.complaints > 0 || observability.ses.rejects > 0) {
+    const severity: AdminHealthSeverity = observability.ses.complaints > 0 || observability.ses.rejects > 0 ? "error" : "warning";
+    addIssue({
+      systemId: "notifications",
+      severity,
+      title: "SES delivery events detected",
+      message: `SES recorded ${observability.ses.bounces} bounce${observability.ses.bounces === 1 ? "" : "s"}, ${observability.ses.complaints} complaint${observability.ses.complaints === 1 ? "" : "s"}, and ${observability.ses.rejects} reject${observability.ses.rejects === 1 ? "" : "s"} in the last ${observability.windowMinutes} minutes.`,
+      source: "cloudwatch_ses",
+      recommendedAction: "Review sender reputation, recipient lists, and notification recipients before retrying impacted digests.",
+      runbookActionId: "review_ses_delivery_events",
+      evidence: observability.ses,
+      relatedEvents: ["cloudwatch:AWS/SES:Bounce", "cloudwatch:AWS/SES:Complaint", "cloudwatch:AWS/SES:Reject"],
+    });
+  }
+  for (const digest of digestErrors.slice(0, 5)) {
+    addIssue({
+      systemId: "notifications",
+      severity: "error",
+      title: "Notification digest failed",
+      message: digest.lastError || "A notification digest has a recorded delivery error.",
+      scope: { customerId: digest.customerId, customerName: digest.customerName },
+      detectedAt: digest.lastAttemptAt || digest.updatedAt || checkedAt,
+      source: "notification_digest",
+      recommendedAction: "Review recipients and retry the digest after correcting the delivery issue.",
+      runbookActionId: "retry_notification_digest",
+      evidence: { ruleId: digest.ruleId, ruleLabel: digest.ruleLabel, entryCount: digest.entries?.length || 0 },
+    });
+  }
+
+  const inactiveUsers = users.filter((profile) => !profile.isActive);
+  const vendorUsersMissingAccounts = users.filter(
+    (profile) => isVendorRole(profile.role) && (!profile.vendorAccountIds?.length || !profile.vendorAccountIds.some((id) => activeVendorAccounts.some((vendorAccount) => vendorAccount.id === id)))
+  );
+  const suspendedCustomers = customers.filter((customer) => customerStatus(customer) === "suspended");
+  const activeShareLinks = shareLinks.filter((link) => link.status === "active" && (!link.expiresAt || Date.parse(link.expiresAt) > Date.now()));
+  const expiredActiveShareLinks = shareLinks.filter((link) => link.status === "active" && link.expiresAt && Date.parse(link.expiresAt) <= Date.now());
+  if (vendorUsersMissingAccounts.length > 0) {
+    addIssue({
+      systemId: "customer_access",
+      severity: "error",
+      title: "Vendor user account assignment missing",
+      message: `${vendorUsersMissingAccounts.length} active vendor user${vendorUsersMissingAccounts.length === 1 ? "" : "s"} do not have an active vendor account assignment.`,
+      source: "user_profiles",
+      recommendedAction: "Open Admin Setup and assign each vendor user to an active vendor account or deactivate the user.",
+      runbookActionId: "review_vendor_user_access",
+      evidence: { userIds: vendorUsersMissingAccounts.slice(0, 10).map((profile) => profile.id) },
+    });
+  }
+  if (expiredActiveShareLinks.length > 0) {
+    addIssue({
+      systemId: "customer_access",
+      severity: "warning",
+      title: "Expired share links still active",
+      message: `${expiredActiveShareLinks.length} share link${expiredActiveShareLinks.length === 1 ? "" : "s"} are active but past expiration.`,
+      source: "share_links",
+      recommendedAction: "Regenerate or revoke expired shared links.",
+      evidence: { shareLinkIds: expiredActiveShareLinks.slice(0, 10).map((link) => link.id) },
+    });
+  }
+
+  const customersMissingLiftId = activeRealCustomers.filter((customer) => !String(customer.liftCustomerId || "").trim());
+  const inventoryByVenue = countBy(inventory.filter((item) => item.isActive !== false), (item) => item.venueId);
+  const mapsByVenue = countBy(roomMaps, (map) => map.venueId);
+  const variantsByVenue = countBy(mediaVariants, (variant) => variant.venueId);
+  const venuesMissingInventory = activeVenues.filter((venue) => !inventoryByVenue[venue.id]);
+  const venuesMissingMaps = activeVenues.filter((venue) => !mapsByVenue[venue.id]);
+  const venuesMissingVariants = activeVenues.filter((venue) => !variantsByVenue[venue.id]);
+  const activeVenueIds = new Set(activeVenues.map((venue) => venue.id));
+  const mediaVariantByVenueKey = new Map(mediaVariants.map((variant) => [`${variant.venueId}||${variant.mediaVariantKey}`, variant] as const));
+  const productIdentifierMode = vendor.productIdentifierMode;
+  const activeLiftRoutedInventory = inventory.filter((item) => {
+    if (item.isActive === false || !activeVenueIds.has(item.venueId)) return false;
+    const variant = mediaVariantByVenueKey.get(`${item.venueId}||${item.mediaVariantKey}`);
+    const routing = item.productionRoutingOverride || variant?.productionRouting || "primary";
+    return routing !== "external";
+  });
+  const liftInventoryMissingContextIdentifier = activeLiftRoutedInventory.filter((item) => {
+    const variant = mediaVariantByVenueKey.get(`${item.venueId}||${item.mediaVariantKey}`);
+    const mapping = item.liftProductMapping || variant?.liftProductMapping || null;
+    if (productIdentifierMode === "product_id") return !mapping?.liftProductId;
+    return !String(item.unitNumber || variant?.unitNumber || mapping?.liftUnitNumber || "").trim();
+  });
+  const liftIdentifierMissingByVenue = countBy(liftInventoryMissingContextIdentifier, (item) => item.venueId);
+  const liftIdentifierAffectedVenueIds = Object.keys(liftIdentifierMissingByVenue);
+  if (customersMissingLiftId.length > 0) {
+    addIssue({
+      systemId: "customer_data",
+      severity: "warning",
+      title: "Customer Lift IDs missing",
+      message: `${customersMissingLiftId.length} active customer${customersMissingLiftId.length === 1 ? "" : "s"} are missing Lift customer IDs.`,
+      source: "customers",
+      recommendedAction: "Add Lift customer IDs before creating live Lift-backed projects for these customers.",
+      evidence: { customerIds: customersMissingLiftId.slice(0, 10).map((customer) => customer.id) },
+    });
+  }
+  if (venuesMissingInventory.length > 0) {
+    addIssue({
+      systemId: "customer_data",
+      severity: "error",
+      title: "Active venues missing inventory",
+      message: `${venuesMissingInventory.length} active venue${venuesMissingInventory.length === 1 ? "" : "s"} have no active inventory records.`,
+      source: "venue_inventory",
+      recommendedAction: "Import or activate venue inventory before using these venues in project workflows.",
+      evidence: { venueIds: venuesMissingInventory.slice(0, 10).map((venue) => venue.id) },
+    });
+  }
+  if (liftInventoryMissingContextIdentifier.length > 0) {
+    const identifierLabel = productIdentifierMode === "product_id" ? "Product ID" : "Unit Number";
+    addIssue({
+      systemId: "customer_data",
+      severity: "warning",
+      title: `Lift ${identifierLabel} mapping incomplete`,
+      message: `${liftInventoryMissingContextIdentifier.length} active Lift-routed inventory record${liftInventoryMissingContextIdentifier.length === 1 ? "" : "s"} are missing the configured Lift submit identifier: ${identifierLabel}.`,
+      source: "venue_inventory_lift_mapping",
+      recommendedAction: `Open Venue Management and map ${identifierLabel} for affected Lift-routed inventory before submitting orders to Lift.`,
+      runbookActionId: "review_lift_product_mapping",
+      evidence: {
+        productIdentifierMode,
+        missingInventoryCount: liftInventoryMissingContextIdentifier.length,
+        affectedVenueCount: liftIdentifierAffectedVenueIds.length,
+        venueIds: liftIdentifierAffectedVenueIds.slice(0, 10),
+        sampleInventoryIds: liftInventoryMissingContextIdentifier.slice(0, 10).map((item) => item.inventoryId),
+      },
+    });
+  }
+
+  const externalProofLinesNeedingAction = proofLines.filter((line) => line.productionRoute === "external_vendor" && (line.status === "waiting" || line.status === "pending"));
+  const blockedVendorStatuses = vendorLineStatuses.filter((status) => status.productionStatus === "blocked");
+  const primaryVendorProjectsBlocked = liftBlockedProjects.length;
+  if (primaryVendorProjectsBlocked > 0) {
+    const dependency =
+      liftBlockedIssueRefs.length === 1
+        ? {
+            issueId: liftBlockedIssueRefs[0].id,
+            title: liftBlockedIssueRefs[0].title,
+            message: `Caused by ${liftBlockedIssueRefs[0].message}. Resolve that Lift order health issue first.`,
+          }
+        : {
+            issueId: liftBlockedIssueRefs[0]?.id || healthIssueId("lift", "Lift order unavailable"),
+            title: "Lift order health issues",
+            message: `Caused by ${primaryVendorProjectsBlocked} cancelled or unavailable Lift-backed order${primaryVendorProjectsBlocked === 1 ? "" : "s"}. Resolve the Lift order health issues first.`,
+          };
+    addIssue({
+      systemId: "vendor_ops",
+      severity: "blocked",
+      title: "Primary vendor actions locked",
+      message: `${primaryVendorProjectsBlocked} primary/LTL order${primaryVendorProjectsBlocked === 1 ? "" : "s"} are locked by Lift health.`,
+      source: "vendor_order_health",
+      recommendedAction: "Resolve the linked Lift order health issue before expecting primary vendor progress.",
+      runbookActionId: "review_lift_order_health",
+      dependency,
+      evidence: { projectIds: liftBlockedProjects.map((project) => project.id) },
+      relatedEvents: liftBlockedIssueRefs.map((issue) => issue.id),
+    });
+  }
+  if (blockedVendorStatuses.length > 0) {
+    addIssue({
+      systemId: "vendor_ops",
+      severity: "error",
+      title: "Vendor lines blocked",
+      message: `${blockedVendorStatuses.length} vendor line${blockedVendorStatuses.length === 1 ? "" : "s"} are marked blocked.`,
+      source: "vendor_line_status",
+      recommendedAction: "Open the affected vendor order and resolve the blocked line status.",
+      evidence: { lineIds: blockedVendorStatuses.slice(0, 10).map((status) => status.vendorLineId) },
+    });
+  }
+
+  const activePresenceRecords = presenceRecords.filter((record) => record.expiresAt > Math.floor(Date.now() / 1000));
+  const stalePresenceRecords = presenceRecords.filter((record) => record.expiresAt <= Math.floor(Date.now() / 1000));
+  if (stalePresenceRecords.length > 50) {
+    addIssue({
+      systemId: "realtime",
+      severity: "warning",
+      title: "Stale presence records accumulating",
+      message: `${stalePresenceRecords.length} expired realtime presence records are still present.`,
+      source: "presence_table",
+      recommendedAction: "Confirm DynamoDB TTL cleanup is active; stale presence cleanup can be automated in a later slice.",
+      evidence: { stalePresenceRecords: stalePresenceRecords.length },
+    });
+  }
+
+  const incidentSync = await syncAdminHealthIncidents(issues, healthIncidents, checkedAt, auth);
+  const statusIssues = incidentSync.issues.filter((issue) => !isSuppressedHealthIssue(issue, checkedAt));
+
+  const systems: AdminHealthSystem[] = [
+    buildHealthSystem("app_api", "App/API", checkedAt, statusIssues, "Application API is reachable and health snapshot generation completed.", {
+      projectCount: projects.length,
+      recentWorkflowIssues: recentIssues.filter((issue) => !issue?.isDrill).length,
+      observability: {
+        windowMinutes: observability.windowMinutes,
+        status: observability.status,
+        apiGateway: observability.apiGateway,
+        lambda: observability.lambda,
+      },
+    }),
+    buildHealthSystem("aws_foundation", "AWS Foundation", checkedAt, statusIssues, "Required app-visible AWS foundation configuration is present.", {
+      buckets: {
+        projectAssets: bucketChecks.find((check) => check.id === "project_assets"),
+        venueAssets: bucketChecks.find((check) => check.id === "venue_assets"),
+        generatedDocs: bucketChecks.find((check) => check.id === "generated_docs"),
+      },
+      auditTableConfigured: Boolean(AUDIT_TABLE_NAME),
+      coreTableConfigured: Boolean(CORE_TABLE_NAME),
+      notificationSender: NOTIFICATIONS_FROM_EMAIL,
+      observabilityStatus: observability.status,
+    }),
+    buildHealthSystem("lift", "Lift Integration", checkedAt, statusIssues, "Lift posture is configured and linked orders do not show blocking health.", {
+      activeEnvironment: vendor.activeEnvironment,
+      enabled: vendor.enabled,
+      endpointsConfigured: liftEndpointsConfigured,
+      credentialsConfigured: liftCredentialsConfigured,
+      productIdentifierMode,
+      linkedProjects: liftProjects.length,
+      healthCounts: liftHealthCounts,
+      dispositionedLiftIssues: liftDispositionedProjects.length,
+      staleSyncProjects: staleLiftSyncProjects.length,
+    }),
+    buildHealthSystem("customer_access", "Customer Access", checkedAt, statusIssues, "Customer, vendor, and share access posture has no blocking assignment issues.", {
+      usersByRole: countBy(users, (profile) => profile.role),
+      inactiveUsers: inactiveUsers.length,
+      suspendedCustomers: suspendedCustomers.length,
+      activeShareLinks: activeShareLinks.length,
+      shareParticipants: shareParticipants.length,
+      requireParticipantIdentity: settings.shareDefaults.requireParticipantIdentity,
+    }),
+    buildHealthSystem("customer_data", "Customer Data", checkedAt, statusIssues, "Customer and venue data is complete enough for current workflows.", {
+      activeCustomers: activeCustomers.length,
+      activeRealCustomers: activeRealCustomers.length,
+      activeVenues: activeVenues.length,
+      activeInventory: inventory.filter((item) => item.isActive !== false).length,
+      liftProductIdentifierMode: productIdentifierMode,
+      liftRoutedInventory: activeLiftRoutedInventory.length,
+      liftIdentifierMissing: liftInventoryMissingContextIdentifier.length,
+      venuesMissingMaps: venuesMissingMaps.length,
+      venuesMissingVariants: venuesMissingVariants.length,
+      activeExternalVendors: activeExternalVendors.length,
+    }),
+    buildHealthSystem("proof_ops", "Proof Operations", checkedAt, statusIssues, "Proof lines are synced and no proof asset gaps are detected.", {
+      proofLines: proofLines.length,
+      waitingProofLines: waitingProofLines.length,
+      revisedProofLines: revisedProofLines.length,
+      missingProofUrls: missingProofUrls.length,
+    }),
+    buildHealthSystem("vendor_ops", "Vendor Operations", checkedAt, statusIssues, "Vendor queues do not show blocked lines or Lift-lock conditions.", {
+      activeVendorAccounts: activeVendorAccounts.length,
+      externalProofLinesNeedingAction: externalProofLinesNeedingAction.length,
+      blockedVendorStatuses: blockedVendorStatuses.length,
+      primaryVendorProjectsBlocked,
+      dispositionedLiftIssues: liftDispositionedProjects.length,
+      liftShippingAuditProjects: liftShippingAudits.length,
+      liftShippingRows: liftShippingAudits.reduce((total, audit) => total + audit.shippingRows.length, 0),
+      liftShippingUnmappedRows: liftShippingAudits.reduce((total, audit) => total + audit.unmappedRows.length, 0),
+    }),
+    buildHealthSystem("notifications", "Notifications", checkedAt, statusIssues, "Notification rules and digests have no recorded delivery failures.", {
+      workflowErrorAlertsEnabled,
+      notificationRulesEnabled: countEnabledNotificationRules(settings),
+      digestBacklog: notificationDigests.length,
+      dueDigests: dueDigests.length,
+      digestErrors: digestErrors.length,
+      ses: observability.ses,
+    }),
+    buildHealthSystem("realtime", "Realtime Collaboration", checkedAt, statusIssues, "Realtime presence configuration is present and stale records are within tolerance.", {
+      activePresenceRecords: activePresenceRecords.length,
+      stalePresenceRecords: stalePresenceRecords.length,
+      presenceByWorkspace: countBy(activePresenceRecords, (record) => record.workspace || "unknown"),
+      broadcastQueue: queueHealth.broadcastQueue,
+      deadLetterQueue: queueHealth.deadLetterQueue,
+      queueMetrics: observability.sqs,
+    }),
+  ];
+
+  const overallStatus = worstHealthStatus(systems.map((system) => system.status));
+  const activeIssues = statusIssues.filter((issue) => issue.severity !== "info");
+  const runbooks = buildAdminHealthRunbookCatalog(statusIssues);
+
+  return {
+    overallStatus,
+    checkedAt,
+    systems,
+    issues: incidentSync.issues.sort((a, b) => healthSeverityRank(b.severity) - healthSeverityRank(a.severity) || b.detectedAt.localeCompare(a.detectedAt)),
+    runbooks,
+    recentIncidents: incidentSync.recentIncidents,
+    incidentSummary: incidentSync.summary,
+    summaryCounts: {
+      systemsGood: systems.filter((system) => system.status === "good").length,
+      systemsWatch: systems.filter((system) => system.status === "watch").length,
+      systemsDegraded: systems.filter((system) => system.status === "degraded").length,
+      systemsBlocked: systems.filter((system) => system.status === "blocked").length,
+      activeIssues: activeIssues.length,
+      warnings: statusIssues.filter((issue) => issue.severity === "warning").length,
+      errors: statusIssues.filter((issue) => issue.severity === "error").length,
+      blocked: statusIssues.filter((issue) => issue.severity === "blocked").length,
+    },
+    nextRecommendedChecks: buildNextRecommendedChecks(systems, statusIssues),
+  };
+}
+
+type AdminHealthIncidentSummary = {
+  id: string;
+  fingerprint: string;
+  systemId: AdminHealthSystemId;
+  severity: AdminHealthSeverity;
+  status: AdminHealthIncidentStatus;
+  title: string;
+  message: string;
+  source: string;
+  scope?: AdminHealthIssue["scope"];
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastCheckedAt: string;
+  occurrenceCount: number;
+  acknowledgedBy?: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+  suppressedUntil?: string;
+  lastOperatorAction?: string;
+  lastOperatorActionAt?: string;
+  lastOperatorName?: string;
+  lastOperatorReason?: string;
+  lastOperatorNote?: string;
+  lastVerificationStatus?: "cleared" | "active" | "not_checked";
+  actionHistory?: AdminHealthIncidentActionHistoryItem[];
+};
+
+async function syncAdminHealthIncidents(
+  issues: AdminHealthIssue[],
+  existingIncidents: HealthIncidentItem[],
+  checkedAt: string,
+  auth: AuthContext
+) {
+  const existingByFingerprint = new Map(existingIncidents.map((incident) => [incident.fingerprint, incident]));
+  const seenFingerprints = new Set<string>();
+  const nextIssues: AdminHealthIssue[] = [];
+  const writes: HealthIncidentItem[] = [];
+
+  for (const issue of issues) {
+    const fingerprint = issue.id;
+    seenFingerprints.add(fingerprint);
+    const existing = existingByFingerprint.get(fingerprint);
+    const id = existing?.id || healthIncidentId(fingerprint);
+    const suppressionStillActive = existing?.status === "suppressed" && !!existing.suppressedUntil && Date.parse(existing.suppressedUntil) > Date.parse(checkedAt);
+    const status: AdminHealthIncidentStatus = suppressionStillActive
+      ? "suppressed"
+      : existing?.status === "acknowledged" || existing?.status === "suppressed"
+      ? "acknowledged"
+      : "active";
+    const incident: HealthIncidentItem = {
+      entityType: "HealthIncident",
+      id,
+      fingerprint,
+      systemId: issue.systemId,
+      severity: issue.severity,
+      status,
+      title: issue.title,
+      message: issue.message,
+      source: issue.source,
+      recommendedAction: issue.recommendedAction,
+      runbookActionId: issue.runbookActionId,
+      scope: issue.scope,
+      firstSeenAt: existing?.firstSeenAt || issue.detectedAt || checkedAt,
+      lastSeenAt: checkedAt,
+      lastCheckedAt: checkedAt,
+      occurrenceCount: (existing?.occurrenceCount || 0) + 1,
+      acknowledgedBy: existing?.acknowledgedBy,
+      acknowledgedAt: existing?.acknowledgedAt,
+      suppressedBy: suppressionStillActive ? existing?.suppressedBy : undefined,
+      suppressedAt: suppressionStillActive ? existing?.suppressedAt : undefined,
+      suppressedUntil: suppressionStillActive ? existing?.suppressedUntil : undefined,
+      lastOperatorAction: existing?.lastOperatorAction,
+      lastOperatorActionAt: existing?.lastOperatorActionAt,
+      lastOperatorName: existing?.lastOperatorName,
+      lastOperatorReason: existing?.lastOperatorReason,
+      lastOperatorNote: existing?.lastOperatorNote,
+      lastVerificationStatus: existing?.lastVerificationStatus,
+      actionHistory: existing?.actionHistory,
+      lastEvidence: issue.incidentPacket.evidence,
+      relatedEvents: issue.incidentPacket.relatedEvents,
+      allowedRunbookIds: issue.incidentPacket.allowedRunbookIds,
+      updatedAt: checkedAt,
+    };
+    if (existing?.status === "resolved") {
+      incident.lastOperatorAction = "reopened_by_detection";
+      incident.lastOperatorActionAt = checkedAt;
+      incident.lastOperatorName = "Health monitor";
+      incident.lastOperatorReason = "detected_again";
+      incident.lastOperatorNote = "Health monitor detected this incident again after it had been resolved.";
+      incident.lastVerificationStatus = "active";
+      incident.actionHistory = appendHealthIncidentHistory(existing.actionHistory, {
+        action: "reopened_by_detection",
+        actorName: "Health monitor",
+        at: checkedAt,
+        reason: "detected_again",
+        note: "Health monitor detected this incident again after it had been resolved.",
+        verificationStatus: "active",
+      });
+    }
+    writes.push(incident);
+    nextIssues.push({
+      ...issue,
+      incident: toAdminHealthIssueIncident(incident),
+    });
+  }
+
+  for (const incident of existingIncidents) {
+    if (seenFingerprints.has(incident.fingerprint)) continue;
+    if (incident.status === "resolved") continue;
+    const resolved: HealthIncidentItem = {
+      ...incident,
+      status: "resolved",
+      resolvedAt: incident.resolvedAt || checkedAt,
+      lastCheckedAt: checkedAt,
+      lastOperatorAction: "auto_resolved",
+      lastOperatorActionAt: checkedAt,
+      lastOperatorName: "Health monitor",
+      lastOperatorReason: "not_detected",
+      lastOperatorNote: "Health monitor did not detect this incident in the latest snapshot.",
+      lastVerificationStatus: "cleared",
+      actionHistory: appendHealthIncidentHistory(incident.actionHistory, {
+        action: "auto_resolved",
+        actorName: "Health monitor",
+        at: checkedAt,
+        reason: "not_detected",
+        note: "Health monitor did not detect this incident in the latest snapshot.",
+        verificationStatus: "cleared",
+      }),
+      updatedAt: checkedAt,
+    };
+    writes.push(resolved);
+  }
+
+  if (writes.length) {
+    await Promise.all(writes.map((incident) => putCore(buildHealthIncidentRecord(incident))));
+  }
+
+  const mergedById = new Map(existingIncidents.map((incident) => [incident.id, incident]));
+  writes.forEach((incident) => mergedById.set(incident.id, incident));
+  const allIncidents = Array.from(mergedById.values());
+  const resolvedSince = Date.now() - 24 * 60 * 60 * 1000;
+  const activeIncidents = allIncidents.filter((incident) => incident.status === "active" || incident.status === "acknowledged" || incident.status === "suppressed");
+  const recentIncidents = allIncidents
+    .slice()
+    .sort((a, b) => String(b.lastOperatorActionAt || b.lastSeenAt).localeCompare(String(a.lastOperatorActionAt || a.lastSeenAt)))
+    .slice(0, 8)
+    .map(toAdminHealthIncidentSummary);
+
+  return {
+    issues: nextIssues,
+    recentIncidents,
+    summary: {
+      active: activeIncidents.filter((incident) => incident.status === "active").length,
+      acknowledged: activeIncidents.filter((incident) => incident.status === "acknowledged").length,
+      suppressed: activeIncidents.filter((incident) => incident.status === "suppressed").length,
+      resolvedRecently: allIncidents.filter((incident) => incident.status === "resolved" && Date.parse(incident.resolvedAt || "") >= resolvedSince).length,
+      newIncidents: nextIssues.filter((issue) => (issue.incident?.occurrenceCount || 0) <= 1).length,
+      recurring: nextIssues.filter((issue) => (issue.incident?.occurrenceCount || 0) > 1).length,
+    },
+  };
+}
+
+async function updateAdminHealthIncident(incidentId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  assertPlatformAdmin(auth);
+  const action = requiredString(payload, "action");
+  const note = optionalString(payload.note);
+  const reason = optionalString(payload.reason);
+  const verificationStatus = parseHealthVerificationStatus(payload.verificationStatus);
+  const incident = await findHealthIncidentById(incidentId);
+  if (!incident) throw new HttpError(404, `Health incident ${incidentId} not found`);
+  const now = isoNow();
+  const actionHistory = appendHealthIncidentHistory(incident.actionHistory, {
+    action,
+    actorName: auth.actorName,
+    at: now,
+    reason,
+    note,
+    verificationStatus,
+  });
+  let updated: HealthIncidentItem;
+
+  if (action === "acknowledge") {
+    updated = {
+      ...incident,
+      status: "acknowledged",
+      acknowledgedBy: auth.actorName,
+      acknowledgedAt: now,
+      lastOperatorAction: "acknowledged",
+      lastOperatorActionAt: now,
+      lastOperatorName: auth.actorName,
+      lastOperatorReason: reason,
+      lastOperatorNote: note,
+      lastVerificationStatus: verificationStatus,
+      actionHistory,
+      updatedAt: now,
+    };
+  } else if (action === "resolve") {
+    updated = {
+      ...incident,
+      status: "resolved",
+      resolvedBy: auth.actorName,
+      resolvedAt: now,
+      lastOperatorAction: "resolved",
+      lastOperatorActionAt: now,
+      lastOperatorName: auth.actorName,
+      lastOperatorReason: reason,
+      lastOperatorNote: note,
+      lastVerificationStatus: verificationStatus,
+      actionHistory,
+      updatedAt: now,
+    };
+  } else if (action === "suppress") {
+    const hours = Math.max(1, Math.min(optionalNumber(payload.hours) || 24, 168));
+    updated = {
+      ...incident,
+      status: "suppressed",
+      suppressedBy: auth.actorName,
+      suppressedAt: now,
+      suppressedUntil: new Date(Date.now() + hours * 60 * 60 * 1000).toISOString(),
+      lastOperatorAction: "suppressed",
+      lastOperatorActionAt: now,
+      lastOperatorName: auth.actorName,
+      lastOperatorReason: reason,
+      lastOperatorNote: note,
+      lastVerificationStatus: verificationStatus,
+      actionHistory,
+      updatedAt: now,
+    };
+  } else if (action === "reopen") {
+    updated = {
+      ...incident,
+      status: "active",
+      resolvedAt: undefined,
+      resolvedBy: undefined,
+      suppressedAt: undefined,
+      suppressedBy: undefined,
+      suppressedUntil: undefined,
+      lastOperatorAction: "reopened",
+      lastOperatorActionAt: now,
+      lastOperatorName: auth.actorName,
+      lastOperatorReason: reason,
+      lastOperatorNote: note,
+      lastVerificationStatus: verificationStatus,
+      actionHistory,
+      updatedAt: now,
+    };
+  } else {
+    throw new HttpError(400, `Unsupported health incident action ${action}`);
+  }
+
+  await putCore(buildHealthIncidentRecord(updated));
+  await writeAudit(`HEALTH_INCIDENT#${updated.id}`, `health.incident.${action}`, auth, {
+    incidentId: updated.id,
+    fingerprint: updated.fingerprint,
+    systemId: updated.systemId,
+    severity: updated.severity,
+    status: updated.status,
+    reason: reason || undefined,
+    note: note || undefined,
+    verificationStatus,
+  });
+  return { incident: toAdminHealthIncidentSummary(updated) };
+}
+
+function parseHealthVerificationStatus(value: unknown): AdminHealthIncidentActionHistoryItem["verificationStatus"] {
+  return value === "cleared" || value === "active" || value === "not_checked" ? value : undefined;
+}
+
+function appendHealthIncidentHistory(
+  history: AdminHealthIncidentActionHistoryItem[] | undefined,
+  entry: AdminHealthIncidentActionHistoryItem
+) {
+  return [
+    ...(history || []),
+    {
+      action: entry.action,
+      actorName: entry.actorName,
+      at: entry.at,
+      reason: entry.reason || undefined,
+      note: entry.note || undefined,
+      verificationStatus: entry.verificationStatus || undefined,
+    },
+  ].slice(-12);
+}
+
+async function findHealthIncidentById(incidentId: string) {
+  const items = await queryByPk(`HEALTH_INCIDENT#${incidentId}`);
+  return (items.find((item) => item.entityType === "HealthIncident") || null) as HealthIncidentItem | null;
+}
+
+function isSuppressedHealthIssue(issue: AdminHealthIssue, checkedAt: string) {
+  return issue.incident?.status === "suppressed" && !!issue.incident.suppressedUntil && Date.parse(issue.incident.suppressedUntil) > Date.parse(checkedAt);
+}
+
+function healthIncidentId(fingerprint: string) {
+  return createHash("sha256").update(fingerprint).digest("hex").slice(0, 24);
+}
+
+function toAdminHealthIssueIncident(incident: HealthIncidentItem): NonNullable<AdminHealthIssue["incident"]> {
+  return {
+    id: incident.id,
+    fingerprint: incident.fingerprint,
+    status: incident.status,
+    firstSeenAt: incident.firstSeenAt,
+    lastSeenAt: incident.lastSeenAt,
+    lastCheckedAt: incident.lastCheckedAt,
+    occurrenceCount: incident.occurrenceCount,
+    acknowledgedBy: incident.acknowledgedBy,
+    acknowledgedAt: incident.acknowledgedAt,
+    resolvedAt: incident.resolvedAt,
+    suppressedUntil: incident.suppressedUntil,
+    lastOperatorAction: incident.lastOperatorAction,
+    lastOperatorActionAt: incident.lastOperatorActionAt,
+    lastOperatorName: incident.lastOperatorName,
+    lastOperatorReason: incident.lastOperatorReason,
+    lastOperatorNote: incident.lastOperatorNote,
+    lastVerificationStatus: incident.lastVerificationStatus,
+    actionHistory: incident.actionHistory,
+  };
+}
+
+function toAdminHealthIncidentSummary(incident: HealthIncidentItem): AdminHealthIncidentSummary {
+  return {
+    id: incident.id,
+    fingerprint: incident.fingerprint,
+    systemId: incident.systemId,
+    severity: incident.severity,
+    status: incident.status,
+    title: incident.title,
+    message: incident.message,
+    source: incident.source,
+    scope: incident.scope,
+    firstSeenAt: incident.firstSeenAt,
+    lastSeenAt: incident.lastSeenAt,
+    lastCheckedAt: incident.lastCheckedAt,
+    occurrenceCount: incident.occurrenceCount,
+    acknowledgedBy: incident.acknowledgedBy,
+    acknowledgedAt: incident.acknowledgedAt,
+    resolvedAt: incident.resolvedAt,
+    suppressedUntil: incident.suppressedUntil,
+    lastOperatorAction: incident.lastOperatorAction,
+    lastOperatorActionAt: incident.lastOperatorActionAt,
+    lastOperatorName: incident.lastOperatorName,
+    lastOperatorReason: incident.lastOperatorReason,
+    lastOperatorNote: incident.lastOperatorNote,
+    lastVerificationStatus: incident.lastVerificationStatus,
+    actionHistory: incident.actionHistory,
+  };
+}
+
+type AdminPresenceRecord = {
+  projectId?: string;
+  workspace?: string;
+  actorType?: string;
+  lastSeenAt?: string;
+  expiresAt: number;
+};
+
+async function listAdminPresenceRecords(): Promise<AdminPresenceRecord[]> {
+  if (!PRESENCE_TABLE_NAME) return [];
+  try {
+    const response = await client.send(
+      new ScanCommand({
+        TableName: PRESENCE_TABLE_NAME,
+        Limit: 250,
+      })
+    );
+    return (response.Items || []).map((item) => unmarshall(item) as AdminPresenceRecord);
+  } catch (error) {
+    console.warn("Failed to scan presence records for admin health", error);
+    return [];
+  }
+}
+
+type AdminBucketCheck = {
+  id: "project_assets" | "venue_assets" | "generated_docs";
+  label: string;
+  bucketName: string;
+  configured: boolean;
+  ok: boolean;
+  statusCode?: number;
+  message: string;
+  checkedAt: string;
+};
+
+async function probeAdminHealthBuckets(): Promise<AdminBucketCheck[]> {
+  const buckets: Array<{ id: AdminBucketCheck["id"]; label: string; bucketName: string; workflow: string }> = [
+    { id: "project_assets", label: "Project assets bucket", bucketName: PROJECT_ASSETS_BUCKET_NAME, workflow: "artwork, proofs, and active project files" },
+    { id: "venue_assets", label: "Venue assets bucket", bucketName: VENUE_ASSETS_BUCKET_NAME, workflow: "maps, venue documents, and venue imports" },
+    { id: "generated_docs", label: "Generated documents bucket", bucketName: GENERATED_DOCS_BUCKET_NAME, workflow: "reports, packages, reconciliation, and Lift payload records" },
+  ];
+  return Promise.all(buckets.map(async (bucket) => {
+    const checkedAt = isoNow();
+    if (!bucket.bucketName) {
+      return {
+        id: bucket.id,
+        label: bucket.label,
+        bucketName: "",
+        configured: false,
+        ok: false,
+        message: `${bucket.label} is not configured for ${bucket.workflow}.`,
+        checkedAt,
+      };
+    }
+    try {
+      await withTimeout(
+        s3.send(new HeadBucketCommand({ Bucket: bucket.bucketName })),
+        2500,
+        `${bucket.label} reachability check timed out.`
+      );
+      return {
+        id: bucket.id,
+        label: bucket.label,
+        bucketName: bucket.bucketName,
+        configured: true,
+        ok: true,
+        statusCode: 200,
+        message: `${bucket.label} is reachable for ${bucket.workflow}.`,
+        checkedAt,
+      };
+    } catch (error) {
+      const statusCode = awsStatusCode(error);
+      return {
+        id: bucket.id,
+        label: bucket.label,
+        bucketName: bucket.bucketName,
+        configured: true,
+        ok: false,
+        statusCode,
+        message: `${bucket.label} could not be reached${statusCode ? ` (HTTP ${statusCode})` : ""}: ${errorMessage(error)}`,
+        checkedAt,
+      };
+    }
+  }));
+}
+
+type AdminQueueCheck = {
+  id: "broadcast" | "dead_letter";
+  label: string;
+  configured: boolean;
+  ok: boolean;
+  visibleMessages: number;
+  notVisibleMessages: number;
+  message: string;
+  checkedAt: string;
+};
+
+async function getRealtimeQueueHealth(): Promise<{ broadcastQueue: AdminQueueCheck; deadLetterQueue: AdminQueueCheck }> {
+  const [broadcastQueue, deadLetterQueue] = await Promise.all([
+    getQueueAttributesForHealth("broadcast", "Realtime broadcast queue", PRESENCE_BROADCAST_QUEUE_URL),
+    getQueueAttributesForHealth("dead_letter", "Realtime broadcast dead-letter queue", PRESENCE_BROADCAST_DLQ_URL),
+  ]);
+  return { broadcastQueue, deadLetterQueue };
+}
+
+async function getQueueAttributesForHealth(
+  id: AdminQueueCheck["id"],
+  label: string,
+  queueUrl: string
+): Promise<AdminQueueCheck> {
+  const checkedAt = isoNow();
+  if (!queueUrl) {
+    return {
+      id,
+      label,
+      configured: false,
+      ok: false,
+      visibleMessages: 0,
+      notVisibleMessages: 0,
+      message: `${label} is not configured.`,
+      checkedAt,
+    };
+  }
+  try {
+    const response = await withTimeout(
+      sqs.send(new GetQueueAttributesCommand({
+        QueueUrl: queueUrl,
+        AttributeNames: [
+          "ApproximateNumberOfMessages",
+          "ApproximateNumberOfMessagesNotVisible",
+        ],
+      })),
+      2500,
+      `${label} attribute check timed out.`
+    );
+    const attributes = response.Attributes || {};
+    const visibleMessages = Number(attributes.ApproximateNumberOfMessages || 0);
+    const notVisibleMessages = Number(attributes.ApproximateNumberOfMessagesNotVisible || 0);
+    return {
+      id,
+      label,
+      configured: true,
+      ok: true,
+      visibleMessages,
+      notVisibleMessages,
+      message: `${label} is reachable with ${visibleMessages} visible message${visibleMessages === 1 ? "" : "s"}.`,
+      checkedAt,
+    };
+  } catch (error) {
+    return {
+      id,
+      label,
+      configured: true,
+      ok: false,
+      visibleMessages: 0,
+      notVisibleMessages: 0,
+      message: `${label} attributes could not be read: ${errorMessage(error)}`,
+      checkedAt,
+    };
+  }
+}
+
+type AdminFunctionMetric = {
+  functionName: string;
+  label: string;
+  systemId: AdminHealthSystemId;
+  invocations: number;
+  errors: number;
+  throttles: number;
+  durationP95Ms: number;
+};
+
+type AdminApiGatewayMetric = {
+  configured: boolean;
+  apiId: string;
+  stage: string;
+  requests: number;
+  errors4xx: number;
+  errors5xx: number;
+  latencyP95Ms: number;
+};
+
+type AdminSqsMetric = {
+  id: AdminQueueCheck["id"];
+  label: string;
+  queueName: string;
+  configured: boolean;
+  ageOfOldestMessageSeconds: number;
+};
+
+type AdminSesMetric = {
+  accountChecked: boolean;
+  sendingEnabled: boolean;
+  productionAccessEnabled?: boolean;
+  enforcementStatus?: string;
+  sends: number;
+  bounces: number;
+  complaints: number;
+  rejects: number;
+  message?: string;
+};
+
+type AdminObservabilitySnapshot = {
+  status: AdminMetricStatus;
+  message: string;
+  checkedAt: string;
+  windowMinutes: number;
+  lambda: {
+    configured: boolean;
+    functions: AdminFunctionMetric[];
+  };
+  apiGateway: AdminApiGatewayMetric;
+  sqs: {
+    queues: AdminSqsMetric[];
+  };
+  ses: AdminSesMetric;
+};
+
+async function getAdminHealthObservability(): Promise<AdminObservabilitySnapshot> {
+  const checkedAt = isoNow();
+  const windowMinutes = 15;
+  const startTime = new Date(Date.now() - windowMinutes * 60 * 1000);
+  const endTime = new Date();
+  const queries: MetricDataQuery[] = [];
+  const metricIds: Record<string, string> = {};
+  let queryIndex = 0;
+
+  const addMetric = (
+    key: string,
+    namespace: string,
+    metricName: string,
+    stat: string,
+    dimensions: Dimension[],
+    period = 60
+  ) => {
+    const id = `m${queryIndex++}`;
+    metricIds[key] = id;
+    queries.push({
+      Id: id,
+      ReturnData: true,
+      MetricStat: {
+        Period: period,
+        Stat: stat,
+        Metric: {
+          Namespace: namespace,
+          MetricName: metricName,
+          Dimensions: dimensions,
+        },
+      },
+    });
+  };
+
+  HEALTH_LAMBDA_FUNCTION_NAMES.forEach((functionName, index) => {
+    const dimensions = [{ Name: "FunctionName", Value: functionName }];
+    addMetric(`lambda:${index}:invocations`, "AWS/Lambda", "Invocations", "Sum", dimensions);
+    addMetric(`lambda:${index}:errors`, "AWS/Lambda", "Errors", "Sum", dimensions);
+    addMetric(`lambda:${index}:throttles`, "AWS/Lambda", "Throttles", "Sum", dimensions);
+    addMetric(`lambda:${index}:durationP95`, "AWS/Lambda", "Duration", "p95", dimensions);
+  });
+
+  if (HEALTH_HTTP_API_ID) {
+    const apiDimensions = [
+      { Name: "ApiId", Value: HEALTH_HTTP_API_ID },
+      { Name: "Stage", Value: HEALTH_HTTP_API_STAGE },
+    ];
+    addMetric("api:count", "AWS/ApiGateway", "Count", "Sum", apiDimensions);
+    addMetric("api:4xx", "AWS/ApiGateway", "4XXError", "Sum", apiDimensions);
+    addMetric("api:5xx", "AWS/ApiGateway", "5XXError", "Sum", apiDimensions);
+    addMetric("api:latencyP95", "AWS/ApiGateway", "Latency", "p95", apiDimensions);
+  }
+
+  const queueMetricSources: Array<{ id: AdminQueueCheck["id"]; label: string; queueName: string }> = [
+    { id: "broadcast", label: "Realtime broadcast queue", queueName: PRESENCE_BROADCAST_QUEUE_NAME },
+    { id: "dead_letter", label: "Realtime broadcast dead-letter queue", queueName: PRESENCE_BROADCAST_DLQ_NAME },
+  ];
+  queueMetricSources.filter((queue) => Boolean(queue.queueName)).forEach((queue) => {
+    addMetric(`sqs:${queue.id}:age`, "AWS/SQS", "ApproximateAgeOfOldestMessage", "Maximum", [
+      { Name: "QueueName", Value: queue.queueName },
+    ]);
+  });
+
+  addMetric("ses:sends", "AWS/SES", "Send", "Sum", []);
+  addMetric("ses:bounces", "AWS/SES", "Bounce", "Sum", []);
+  addMetric("ses:complaints", "AWS/SES", "Complaint", "Sum", []);
+  addMetric("ses:rejects", "AWS/SES", "Reject", "Sum", []);
+
+  let valuesById = new Map<string, number[]>();
+  let metricError: string | null = null;
+  if (queries.length) {
+    try {
+      const response = await withTimeout(
+        cloudwatch.send(new GetMetricDataCommand({
+          StartTime: startTime,
+          EndTime: endTime,
+          ScanBy: "TimestampDescending",
+          MetricDataQueries: queries,
+        })),
+        4500,
+        "CloudWatch metric rollup timed out."
+      );
+      valuesById = new Map((response.MetricDataResults || []).map((result) => [result.Id || "", result.Values || []]));
+    } catch (error) {
+      metricError = errorMessage(error);
+      console.warn("Failed to load admin health CloudWatch metrics", error);
+    }
+  }
+
+  const metricValues = (key: string) => valuesById.get(metricIds[key] || "") || [];
+  const metricSum = (key: string) => Math.round(sumMetricValues(metricValues(key)));
+  const metricMax = (key: string) => maxMetricValue(metricValues(key));
+
+  const lambdaFunctions = HEALTH_LAMBDA_FUNCTION_NAMES.map((functionName, index) => ({
+    functionName,
+    label: adminHealthLambdaLabel(functionName),
+    systemId: adminHealthLambdaSystemId(functionName),
+    invocations: metricSum(`lambda:${index}:invocations`),
+    errors: metricSum(`lambda:${index}:errors`),
+    throttles: metricSum(`lambda:${index}:throttles`),
+    durationP95Ms: metricMax(`lambda:${index}:durationP95`),
+  }));
+  const apiGateway: AdminApiGatewayMetric = {
+    configured: Boolean(HEALTH_HTTP_API_ID),
+    apiId: HEALTH_HTTP_API_ID,
+    stage: HEALTH_HTTP_API_STAGE,
+    requests: metricSum("api:count"),
+    errors4xx: metricSum("api:4xx"),
+    errors5xx: metricSum("api:5xx"),
+    latencyP95Ms: metricMax("api:latencyP95"),
+  };
+  const sqsQueues: AdminSqsMetric[] = [
+    {
+      id: "broadcast",
+      label: "Realtime broadcast queue",
+      queueName: PRESENCE_BROADCAST_QUEUE_NAME,
+      configured: Boolean(PRESENCE_BROADCAST_QUEUE_NAME),
+      ageOfOldestMessageSeconds: metricMax("sqs:broadcast:age"),
+    },
+    {
+      id: "dead_letter",
+      label: "Realtime broadcast dead-letter queue",
+      queueName: PRESENCE_BROADCAST_DLQ_NAME,
+      configured: Boolean(PRESENCE_BROADCAST_DLQ_NAME),
+      ageOfOldestMessageSeconds: metricMax("sqs:dead_letter:age"),
+    },
+  ];
+
+  const ses = await getAdminSesHealth({
+    sends: metricSum("ses:sends"),
+    bounces: metricSum("ses:bounces"),
+    complaints: metricSum("ses:complaints"),
+    rejects: metricSum("ses:rejects"),
+  });
+  const status = metricError
+    ? "unavailable"
+    : deriveAdminObservabilityStatus(lambdaFunctions, apiGateway, sqsQueues, ses);
+
+  return {
+    status,
+    message: metricError
+      ? `CloudWatch metrics could not be loaded: ${metricError}`
+      : "CloudWatch and SES production signal rollups loaded.",
+    checkedAt,
+    windowMinutes,
+    lambda: {
+      configured: HEALTH_LAMBDA_FUNCTION_NAMES.length > 0,
+      functions: lambdaFunctions,
+    },
+    apiGateway,
+    sqs: {
+      queues: sqsQueues,
+    },
+    ses,
+  };
+}
+
+async function getAdminSesHealth(metrics: Pick<AdminSesMetric, "sends" | "bounces" | "complaints" | "rejects">): Promise<AdminSesMetric> {
+  try {
+    const account = await withTimeout(
+      sesv2.send(new GetAccountCommand({})),
+      2500,
+      "SES account health check timed out."
+    );
+    return {
+      accountChecked: true,
+      sendingEnabled: account.SendingEnabled !== false,
+      productionAccessEnabled: account.ProductionAccessEnabled,
+      enforcementStatus: account.EnforcementStatus,
+      ...metrics,
+    };
+  } catch (error) {
+    console.warn("Failed to load SES account health", error);
+    return {
+      accountChecked: false,
+      sendingEnabled: true,
+      ...metrics,
+      message: `SES account posture could not be checked: ${errorMessage(error)}`,
+    };
+  }
+}
+
+function deriveAdminObservabilityStatus(
+  functions: AdminFunctionMetric[],
+  apiGateway: AdminApiGatewayMetric,
+  queues: AdminSqsMetric[],
+  ses: AdminSesMetric
+): AdminMetricStatus {
+  if (
+    functions.some((fn) => fn.errors > 0 || fn.throttles > 0 || fn.durationP95Ms >= 10_000) ||
+    apiGateway.errors5xx > 0 ||
+    queues.some((queue) => queue.ageOfOldestMessageSeconds >= 300) ||
+    ses.sendingEnabled === false ||
+    ses.complaints > 0 ||
+    ses.rejects > 0
+  ) {
+    return "degraded";
+  }
+  if (
+    functions.some((fn) => fn.durationP95Ms >= 3_000) ||
+    queues.some((queue) => queue.ageOfOldestMessageSeconds >= 60) ||
+    ses.bounces > 0 ||
+    ses.accountChecked === false
+  ) {
+    return "watch";
+  }
+  return "ok";
+}
+
+function adminHealthLambdaLabel(functionName: string) {
+  if (functionName.includes("ProjectApiFunction")) return "Project API";
+  if (functionName.includes("VenueApiFunction")) return "Venue API";
+  if (functionName.includes("CreateUploadUrlFunction")) return "Upload signer";
+  if (functionName.includes("WorkspacePresenceFunction")) return "Realtime presence";
+  if (functionName.includes("WorkspaceBroadcastFunction")) return "Realtime broadcast worker";
+  if (functionName.includes("RealtimeConfigFunction")) return "Realtime config";
+  if (functionName.includes("NotificationDigestFunction")) return "Notification digest worker";
+  if (functionName.includes("HealthFunction")) return "Public health check";
+  return functionName;
+}
+
+function adminHealthLambdaSystemId(functionName: string): AdminHealthSystemId {
+  if (functionName.includes("WorkspacePresenceFunction") || functionName.includes("WorkspaceBroadcastFunction") || functionName.includes("RealtimeConfigFunction")) {
+    return "realtime";
+  }
+  if (functionName.includes("NotificationDigestFunction")) return "notifications";
+  return "app_api";
+}
+
+function sumMetricValues(values: number[]) {
+  return values.reduce((total, value) => total + (Number.isFinite(value) ? value : 0), 0);
+}
+
+function maxMetricValue(values: number[]) {
+  return values.reduce((max, value) => Number.isFinite(value) && value > max ? value : max, 0);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function awsStatusCode(error: unknown) {
+  const metadata = typeof error === "object" && error && "$metadata" in error
+    ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+    : undefined;
+  return metadata?.httpStatusCode;
+}
+
+function buildHealthSystem(
+  id: AdminHealthSystemId,
+  label: string,
+  checkedAt: string,
+  issues: AdminHealthIssue[],
+  healthySummary: string,
+  details: Record<string, unknown>
+): AdminHealthSystem {
+  const systemIssues = issues.filter((issue) => issue.systemId === id);
+  const status = systemIssues.length
+    ? statusFromSeverity(systemIssues.reduce((max, issue) => healthSeverityRank(issue.severity) > healthSeverityRank(max) ? issue.severity : max, "info" as AdminHealthSeverity))
+    : "good";
+  const topIssue = systemIssues
+    .slice()
+    .sort((a, b) => healthSeverityRank(b.severity) - healthSeverityRank(a.severity) || b.detectedAt.localeCompare(a.detectedAt))[0];
+  return {
+    id,
+    label,
+    status,
+    lastCheckedAt: checkedAt,
+    issueCount: systemIssues.length,
+    summary: topIssue ? topIssue.message : healthySummary,
+    details,
+  };
+}
+
+function statusFromSeverity(severity: AdminHealthSeverity): AdminHealthStatus {
+  if (severity === "blocked") return "blocked";
+  if (severity === "error") return "degraded";
+  if (severity === "warning") return "watch";
+  return "good";
+}
+
+function worstHealthStatus(statuses: AdminHealthStatus[]): AdminHealthStatus {
+  return statuses.reduce((max, status) => healthStatusRank(status) > healthStatusRank(max) ? status : max, "good" as AdminHealthStatus);
+}
+
+function healthStatusRank(status: AdminHealthStatus) {
+  if (status === "blocked") return 4;
+  if (status === "degraded") return 3;
+  if (status === "watch") return 2;
+  return 1;
+}
+
+function healthSeverityRank(severity: AdminHealthSeverity) {
+  if (severity === "blocked") return 4;
+  if (severity === "error") return 3;
+  if (severity === "warning") return 2;
+  return 1;
+}
+
+function countBy<T>(items: T[], getKey: (item: T) => string | number | null | undefined) {
+  return items.reduce<Record<string, number>>((counts, item) => {
+    const key = String(getKey(item) || "unknown");
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function groupBy<T>(items: T[], getKey: (item: T) => string | number | null | undefined) {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = String(getKey(item) || "unknown");
+    const group = groups.get(key);
+    if (group) group.push(item);
+    else groups.set(key, [item]);
+  }
+  return groups;
+}
+
+function projectScope(project: ProjectItem) {
+  const orderNumber = getProjectAdspaceOrderNumber(project);
+  return {
+    customerId: project.customerId,
+    customerName: project.customerName,
+    projectId: project.id,
+    projectTitle: project.title,
+    orderName: project.title,
+    orderNumber,
+    liftOrderId: project.liftOrderId || undefined,
+    orderId: project.liftOrderId || orderNumber,
+  };
+}
+
+function proofLineScope(project: ProjectItem, proofLine: ProjectProofLineItem): AdminHealthIssue["scope"] {
+  return {
+    ...projectScope(project),
+    vendorAccountId: proofLine.vendorAccountId || undefined,
+    vendorName: proofLine.vendorName || undefined,
+    lineNumber: proofLine.lineNumber,
+    filename: proofLine.clientFileName,
+  };
+}
+
+function isLiftShippingEvidence(snapshot: ProjectLiftShippingSnapshot) {
+  return Boolean(
+    optionalString(snapshot.trackingNumber) ||
+    optionalString(snapshot.actualShipDate) ||
+    optionalString(snapshot.trackerShortMessage) ||
+    optionalString(snapshot.trackerMessage)
+  );
+}
+
+function liftShippingStatusLabel(snapshot: ProjectLiftShippingSnapshot) {
+  return optionalString(snapshot.trackerShortMessage) || optionalString(snapshot.trackerMessage) || "Shipping activity";
+}
+
+function metadataString(metadata: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function metadataNumber(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function healthIssueId(systemId: AdminHealthSystemId, title: string, scope?: AdminHealthIssue["scope"]) {
+  return [
+    systemId,
+    title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
+    scope?.projectId || scope?.customerId || scope?.vendorAccountId || "global",
+  ].join(":");
+}
+
+function countEnabledNotificationRules(settings: AppSettingsItem) {
+  return [
+    settings.notifications.proofApproved,
+    settings.notifications.transitDecision,
+    settings.notifications.productionReleased,
+    settings.notifications.workflowErrors,
+  ].filter(Boolean).length;
+}
+
+function buildNextRecommendedChecks(systems: AdminHealthSystem[], issues: AdminHealthIssue[]) {
+  const recommendations = issues
+    .filter((issue) => issue.severity !== "info")
+    .sort((a, b) => healthSeverityRank(b.severity) - healthSeverityRank(a.severity))
+    .map((issue) => issue.recommendedAction);
+  if (recommendations.length) return Array.from(new Set(recommendations)).slice(0, 4);
+  const watchSystems = systems.filter((system) => system.status !== "good");
+  if (watchSystems.length) return watchSystems.map((system) => `Review ${system.label}.`).slice(0, 4);
+  return ["No operator action needed. Continue normal monitoring."];
+}
+
+function buildAdminHealthRunbookCatalog(issues: AdminHealthIssue[]) {
+  const runbookIds = new Set<string>();
+  for (const issue of issues) {
+    if (issue.runbookActionId) runbookIds.add(issue.runbookActionId);
+    for (const id of issue.incidentPacket.allowedRunbookIds || []) {
+      runbookIds.add(id);
+    }
+  }
+  return Array.from(runbookIds).sort().map((id) => ADMIN_HEALTH_RUNBOOKS[id] || buildFallbackAdminHealthRunbook(id));
+}
+
+function buildFallbackAdminHealthRunbook(id: string): AdminHealthRunbook {
+  return {
+    id,
+    systemId: "app_api",
+    label: id.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" "),
+    safety: "read_only",
+    summary: "Review the incident evidence packet and assign an operator before resolving the issue.",
+    operatorSteps: [
+      "Copy the incident packet from the issue detail.",
+      "Review the source, evidence, and related events.",
+      "Acknowledge the incident once ownership is assigned.",
+    ],
+    evidenceHints: [],
+  };
 }
 
 async function resolveNotificationSampleProject(customerId: string) {
@@ -9530,6 +12212,202 @@ async function listLiftCustomerContacts(search: string, auth: AuthContext) {
         .some((value) => normalizeText(value).includes(normalizedSearch));
     })
     .slice(0, 50);
+}
+
+type NormalizedLiftProduct = {
+  productId: number | null;
+  productName: string;
+  catalogId: number | null;
+  catalogName: string;
+  unitNumbers: string[];
+  status: string;
+  productType: string;
+  parentProductId: number | null;
+  accountingItemCode: string;
+  productDescription: string;
+  additionalFields: Record<string, string | number | boolean | null>;
+  components: NormalizedLiftProduct[];
+};
+
+async function listLiftProducts(query: Record<string, string | undefined>, auth: AuthContext) {
+  assertPlatformAdmin(auth);
+  const settings = hydrateAppSettings(await findAppSettings(), auth.actorName);
+  const config = settings.integrations.primaryPrintVendor;
+  const environment = getLiftEnvironmentConfig(config);
+  const endpointUrl = resolveLiftEnvironmentUrl(config, environment.productManagementUrl);
+  if (!endpointUrl) {
+    throw new HttpError(400, "Lift Product Management URL is not configured in Internal Admin.");
+  }
+
+  const productType = optionalString(query.productType || query.product_type);
+  if (productType && !["KIT", "REGULAR", "SERVICE"].includes(productType.toUpperCase())) {
+    throw new HttpError(400, "productType must be KIT, REGULAR, or SERVICE.");
+  }
+  const status = optionalString(query.status) || "A";
+  if (status && !["A", "I"].includes(status.toUpperCase())) {
+    throw new HttpError(400, "status must be A or I.");
+  }
+
+  const productId = optionalString(query.productId || query.product_id);
+  const productName = optionalString(query.productName || query.product_name);
+  const catalogId = optionalString(query.catalogId || query.catalog_id);
+  const catalogName = optionalString(query.catalogName || query.catalog_name);
+  const parentProductId = optionalString(query.parentProductId || query.parent_product_id);
+  const accountingItemCode = optionalString(query.accountingItemCode || query.accounting_item_code);
+  if (![productId, productName, catalogId, catalogName, parentProductId, accountingItemCode].some(Boolean)) {
+    throw new HttpError(400, "Choose a Lift catalog or product filter before searching products.");
+  }
+
+  const requestedFetchSize = optionalNumber(query.fetchSize);
+  const fetchSize = requestedFetchSize == null ? undefined : clampInteger(requestedFetchSize, 1, 250, 100);
+  const requestedFetchOffset = optionalNumber(query.fetchOffset);
+  const fetchOffset = requestedFetchOffset == null ? undefined : clampInteger(requestedFetchOffset, 0, 1000000, 0);
+  const params: Record<string, string> = {
+    status: status.toUpperCase(),
+  };
+  if (fetchSize != null) params.fetchSize = String(fetchSize);
+  if (fetchOffset != null) params.fetchOffset = String(fetchOffset);
+  if (productId) params.product_id = productId;
+  if (productName) params.product_name = productName;
+  if (catalogId) params.catalog_id = catalogId;
+  if (catalogName) params.catalog_name = catalogName;
+  if (parentProductId) params.parent_product_id = parentProductId;
+  if (accountingItemCode) params.accounting_item_code = accountingItemCode;
+  if (productType) params.product_type = productType.toUpperCase();
+
+  let url = "";
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    url = buildLiftQueryUrl(endpointUrl, params);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: buildLiftBasicAuthHeaders(config),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const body = parseMaybeJson(text);
+    clearTimeout(timeout);
+    if (!response.ok) {
+      const errorMessage = formatLiftProductError(response.status, body);
+      throw new HttpError(response.status >= 500 ? 502 : response.status, errorMessage);
+    }
+    const rawProducts = normalizeLiftProductResponse(body);
+    const products = rawProducts.map(normalizeLiftProduct).slice(0, fetchSize ?? 250);
+    const catalogs = Array.from(
+      products.reduce((map, product) => {
+        if (product.catalogId != null || product.catalogName) {
+          map.set(`${product.catalogId || ""}::${product.catalogName}`, {
+            catalogId: product.catalogId,
+            catalogName: product.catalogName,
+          });
+        }
+        return map;
+      }, new Map<string, { catalogId: number | null; catalogName: string }>())
+        .values()
+    ).sort((a, b) => a.catalogName.localeCompare(b.catalogName) || Number(a.catalogId || 0) - Number(b.catalogId || 0));
+
+    return {
+      products,
+      catalogs,
+      query: params,
+      activeEnvironment: config.activeEnvironment,
+      durationMs: Date.now() - startedAt,
+      urlHost: safeUrlHost(url),
+      hasMore: rawProducts.length > products.length || (fetchSize != null && products.length === fetchSize),
+    };
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error instanceof HttpError) throw error;
+    const timedOut = error instanceof Error && error.name === "AbortError";
+    throw new HttpError(
+      502,
+      timedOut
+        ? "Lift product lookup did not respond within 15 seconds."
+        : formatLiftFetchFailure("product lookup", url || endpointUrl, error)
+    );
+  }
+}
+
+function normalizeLiftProductResponse(body: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(body)) return body.filter(isRecord);
+  if (isRecord(body)) {
+    const products = body.products || body.items || body.rowset || body.data;
+    if (Array.isArray(products)) return products.filter(isRecord);
+  }
+  return [];
+}
+
+function normalizeLiftProduct(raw: Record<string, unknown>): NormalizedLiftProduct {
+  const unitNumbersRaw = raw.unitNumber ?? raw.unitNumbers ?? raw.UNIT_NUMBER ?? raw.UNIT_NUMBERS;
+  const unitNumbers = Array.isArray(unitNumbersRaw)
+    ? unitNumbersRaw.map((value) => optionalString(value)).filter(Boolean)
+    : optionalString(unitNumbersRaw)
+      ? [optionalString(unitNumbersRaw)]
+      : [];
+  const rawComponents = Array.isArray(raw.components) ? raw.components.filter(isRecord) : [];
+  return {
+    productId: optionalNumber(raw.productId ?? raw.PRODUCT_ID) ?? null,
+    productName: optionalString(raw.productName ?? raw.PRODUCT_NAME),
+    catalogId: optionalNumber(raw.catalogId ?? raw.CATALOG_ID) ?? null,
+    catalogName: optionalString(raw.catalogName ?? raw.CATALOG_NAME),
+    unitNumbers,
+    status: optionalString(raw.status ?? raw.STATUS),
+    productType: optionalString(raw.productType ?? raw.PRODUCT_TYPE),
+    parentProductId: optionalNumber(raw.parentProductId ?? raw.PARENT_PRODUCT_ID) ?? null,
+    accountingItemCode: optionalString(raw.accountingItemCode ?? raw.ACCOUNTING_ITEM_CODE),
+    productDescription: optionalString(raw.productDescription ?? raw.PRODUCT_DESCRIPTION),
+    additionalFields: normalizeLiftProductAdditionalFields(raw),
+    components: rawComponents.map(normalizeLiftProduct),
+  };
+}
+
+const LIFT_PRODUCT_CORE_KEYS = new Set([
+  "productid",
+  "productname",
+  "catalogid",
+  "catalogname",
+  "unitnumber",
+  "unitnumbers",
+  "status",
+  "producttype",
+  "parentproductid",
+  "accountingitemcode",
+  "productdescription",
+  "components",
+]);
+
+function normalizeLiftProductAdditionalFields(raw: Record<string, unknown>) {
+  const entries = Object.entries(raw)
+    .filter(([key]) => !LIFT_PRODUCT_CORE_KEYS.has(key.replace(/[_\s]/g, "").toLowerCase()))
+    .filter(([, value]) => value == null || ["string", "number", "boolean"].includes(typeof value))
+    .slice(0, 80)
+    .map(([key, value]) => [
+      key,
+      typeof value === "string" ? value.slice(0, 240) : value as string | number | boolean | null,
+    ]);
+  return Object.fromEntries(entries) as Record<string, string | number | boolean | null>;
+}
+
+function formatLiftProductError(status: number, body: unknown) {
+  const record = isRecord(body) ? body : {};
+  return (
+    optionalString(record.error) ||
+    optionalString(record.message) ||
+    optionalString(record.title) ||
+    optionalString(record["o:errorDetails"]) ||
+    `Lift product lookup returned HTTP ${status}.`
+  );
+}
+
+function clampInteger(value: number | undefined, min: number, max: number, fallback: number) {
+  if (value == null || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 async function updateCustomerSettings(customerId: string, payload: Record<string, unknown>, auth: AuthContext) {
@@ -10080,6 +12958,20 @@ async function rawListRecentWorkflowErrors(limit = 10) {
     .slice(0, Math.max(1, Math.min(limit, 25)));
 }
 
+function workflowIssueEventId(event: Record<string, any>) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      projectId: event.projectId || "",
+      createdAt: event.createdAt || "",
+      errorCode: event.detail?.errorCode || "workflow_error",
+      message: event.detail?.message || "",
+      surface: event.detail?.surface || "workflow",
+      metadata: event.detail?.metadata || {},
+    }))
+    .digest("hex")
+    .slice(0, 20);
+}
+
 async function putCore(item: Record<string, unknown>) {
   invalidateEntityScanForWrite(item.entityType);
   await client.send(
@@ -10618,6 +13510,18 @@ function buildNotificationDigestRecord(digest: NotificationDigestItem) {
   };
 }
 
+function buildHealthIncidentRecord(incident: HealthIncidentItem) {
+  return {
+    pk: `HEALTH_INCIDENT#${incident.id}`,
+    sk: "INCIDENT",
+    gsi1pk: `HEALTH_STATUS#${incident.status}`,
+    gsi1sk: `${incident.lastCheckedAt}#${incident.id}`,
+    gsi2pk: `HEALTH_SYSTEM#${incident.systemId}`,
+    gsi2sk: `${incident.status}#${incident.lastCheckedAt}#${incident.id}`,
+    ...incident,
+  };
+}
+
 function buildProjectNotificationDispatchRecord(dispatch: ProjectNotificationDispatchItem) {
   return {
     pk: `PROJECT#${dispatch.projectId}`,
@@ -10776,6 +13680,7 @@ async function toProjectProofLineResponse(
     liftProofingId: proof.liftProofingId ?? null,
     mediaVariantKey: proof.mediaVariantKey,
     mediaVariantLabel,
+    liftProductId: proof.liftProductId ?? null,
     liftProductName: proof.liftProductName || null,
     productionRoute: route.productionRoute,
     vendorAccountId: proof.vendorAccountId || null,
@@ -11183,6 +14088,30 @@ function optionalProjectMode(value: unknown): ProjectItem["projectMode"] | undef
   if (!parsed) return undefined;
   if (parsed === "live" || parsed === "internal_sandbox") return parsed;
   throw new HttpError(400, `Invalid project mode ${parsed}`);
+}
+
+function optionalOrderLifecycleStatus(value: unknown): NonNullable<ProjectItem["orderLifecycleStatus"]> | undefined {
+  const parsed = optionalString(value);
+  if (!parsed) return undefined;
+  if (parsed === "active" || parsed === "on_hold" || parsed === "cancelled") return parsed;
+  throw new HttpError(400, `Invalid order disposition ${parsed}`);
+}
+
+function optionalOrderLifecycleReason(value: unknown, status: NonNullable<ProjectItem["orderLifecycleStatus"]>) {
+  if (status === "active") return null;
+  const parsed = optionalString(value);
+  const allowed = new Set([
+    "cancelled_in_lift",
+    "customer_requested",
+    "duplicate_or_replaced",
+    "date_or_scope_change",
+    "billing_or_po_issue",
+    "test_or_invalid_order",
+    "other",
+  ]);
+  if (!parsed) throw new HttpError(400, "Order disposition reason is required.");
+  if (!allowed.has(parsed)) throw new HttpError(400, `Invalid order disposition reason ${parsed}`);
+  return parsed;
 }
 
 function generateTemporaryPassword() {

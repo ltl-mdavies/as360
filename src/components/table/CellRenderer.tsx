@@ -2,11 +2,19 @@
 import { useNavigate } from "react-router-dom";
 import PopoverMenu from "../common/PopoverMenu";
 import { useLocation } from "react-router-dom";
+import { buildProjectOrderActionPath, isProjectOrderLifecycleAction } from "../../logic/orderLifecycleActions";
 
 function routeForAction(action: string, projectId: string): string | null {
+  if (isProjectOrderLifecycleAction(action)) {
+    return buildProjectOrderActionPath(projectId, action, "default");
+  }
+
   switch (action) {
     case "open_project":
       return `/p/${projectId}`;
+
+    case "manage_project_details":
+      return `/p/${projectId}?panel=details`;
 
     case "open_assignment":
       return `/p/${projectId}/assignment`;
@@ -41,7 +49,7 @@ export default function CellRenderer({ cell, row }: { cell: any; row?: any }) {
   const projectId = row?.projectId as string | undefined;
   const location = useLocation();
   const isCustomerContext = location.pathname.startsWith("/customer");
-  const modeSuffix = isCustomerContext ? "?mode=customer" : "";
+  const modeParam = isCustomerContext ? "mode=customer" : "";
 
   switch (cell.type) {
     case "text":
@@ -75,7 +83,9 @@ export default function CellRenderer({ cell, row }: { cell: any; row?: any }) {
       const go = (action: string) => {
         if (!projectId) return;
         const route = routeForAction(action, projectId);
-        if (route) navigate(route + modeSuffix);
+        if (!route) return;
+        const separator = route.includes("?") ? "&" : "?";
+        navigate(modeParam ? `${route}${separator}${modeParam}` : route);
       };
 
       return (

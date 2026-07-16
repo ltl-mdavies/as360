@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import Portal from "../common/Portal";
 import type { ApiVenueInventoryPreset } from "../../api/projects";
+import type { ProjectOrderLifecycleAction } from "../../logic/orderLifecycleActions";
 
 export type ProjectDetailsDraft = {
   title: string;
@@ -14,9 +15,23 @@ export type ProjectDetailsDraft = {
   contractNumber?: string;
   liftOrderId?: string | null;
   liftOrderOverrideNote?: string;
+  orderLifecycleStatus?: OrderLifecycleStatus;
+  orderLifecycleReason?: OrderLifecycleReason | "";
+  orderLifecycleNote?: string;
   inventoryPresetId?: string;
   inventoryPresetName?: string;
 };
+
+export type OrderLifecycleStatus = "active" | "on_hold" | "cancelled";
+export type ProjectDetailsHealthAction = ProjectOrderLifecycleAction;
+export type OrderLifecycleReason =
+  | "cancelled_in_lift"
+  | "customer_requested"
+  | "duplicate_or_replaced"
+  | "date_or_scope_change"
+  | "billing_or_po_issue"
+  | "test_or_invalid_order"
+  | "other";
 
 type VenueOption = {
   id: string;
@@ -31,10 +46,22 @@ type Props = {
   venues: VenueOption[];
   isVenueLocked?: boolean;
   canManageLiftOrder?: boolean;
+  canManageOrderDisposition?: boolean;
+  initialHealthAction?: ProjectDetailsHealthAction | null;
   inventoryPresets?: ApiVenueInventoryPreset[];
   isInventoryScopeLocked?: boolean;
   onSave: (draft: ProjectDetailsDraft) => void;
 };
+
+const ORDER_LIFECYCLE_REASON_OPTIONS: Array<{ value: OrderLifecycleReason; label: string }> = [
+  { value: "cancelled_in_lift", label: "Cancelled in Lift" },
+  { value: "customer_requested", label: "Customer requested" },
+  { value: "duplicate_or_replaced", label: "Duplicate or replaced" },
+  { value: "date_or_scope_change", label: "Date or scope changed" },
+  { value: "billing_or_po_issue", label: "Billing or PO issue" },
+  { value: "test_or_invalid_order", label: "Test or invalid order" },
+  { value: "other", label: "Other" },
+];
 
 export default function EditProjectDetailsModal({
   isOpen,
@@ -43,11 +70,15 @@ export default function EditProjectDetailsModal({
   venues,
   isVenueLocked = false,
   canManageLiftOrder = false,
+  canManageOrderDisposition = false,
+  initialHealthAction = null,
   inventoryPresets = [],
   isInventoryScopeLocked = false,
   onSave,
 }: Props) {
-  const [advancedOpen, setAdvancedOpen] = useState(Boolean(initial.endClientName || initial.poNumber || initial.liftOrderId));
+  const [advancedOpen, setAdvancedOpen] = useState(
+    Boolean(initial.endClientName || initial.poNumber || initial.liftOrderId || (initial.orderLifecycleStatus && initial.orderLifecycleStatus !== "active"))
+  );
   const [title, setTitle] = useState(initial.title);
   const [market, setMarket] = useState(initial.market);
   const [venueId, setVenueId] = useState(initial.venueId || "");
@@ -59,11 +90,34 @@ export default function EditProjectDetailsModal({
   const [contractNumber, setContractNumber] = useState(initial.contractNumber || "");
   const [liftOrderId, setLiftOrderId] = useState(initial.liftOrderId || "");
   const [liftOrderOverrideNote, setLiftOrderOverrideNote] = useState("");
+  const [orderLifecycleStatus, setOrderLifecycleStatus] = useState<OrderLifecycleStatus>(initial.orderLifecycleStatus || "active");
+  const [orderLifecycleReason, setOrderLifecycleReason] = useState<OrderLifecycleReason | "">(initial.orderLifecycleReason || "");
+  const [orderLifecycleNote, setOrderLifecycleNote] = useState(initial.orderLifecycleNote || "");
   const [inventoryPresetId, setInventoryPresetId] = useState(initial.inventoryPresetId || "full_venue");
+  const titleId = useId();
+  const descriptionId = useId();
 
   useEffect(() => {
     if (!isOpen) return;
-    setAdvancedOpen(Boolean(initial.endClientName || initial.poNumber || initial.liftOrderId));
+    const shouldOpenAdvanced = Boolean(
+      initialHealthAction ||
+        initial.endClientName ||
+        initial.poNumber ||
+        initial.liftOrderId ||
+        (initial.orderLifecycleStatus && initial.orderLifecycleStatus !== "active")
+    );
+    const nextLifecycleStatus =
+      initialHealthAction === "hold_order"
+        ? "on_hold"
+        : initialHealthAction === "cancel_order"
+        ? "cancelled"
+        : initial.orderLifecycleStatus || "active";
+    const nextLifecycleReason =
+      (initialHealthAction === "hold_order" || initialHealthAction === "cancel_order") && !initial.orderLifecycleReason
+        ? "cancelled_in_lift"
+        : initial.orderLifecycleReason || "";
+
+    setAdvancedOpen(shouldOpenAdvanced);
     setTitle(initial.title);
     setMarket(initial.market);
     setVenueId(initial.venueId || "");
@@ -75,6 +129,9 @@ export default function EditProjectDetailsModal({
     setContractNumber(initial.contractNumber || "");
     setLiftOrderId(initial.liftOrderId || "");
     setLiftOrderOverrideNote("");
+    setOrderLifecycleStatus(nextLifecycleStatus);
+    setOrderLifecycleReason(nextLifecycleReason);
+    setOrderLifecycleNote(initial.orderLifecycleNote || "");
     setInventoryPresetId(initial.inventoryPresetId || "full_venue");
   }, [
     isOpen,
@@ -88,8 +145,21 @@ export default function EditProjectDetailsModal({
     initial.endClientName,
     initial.contractNumber,
     initial.liftOrderId,
+    initial.orderLifecycleStatus,
+    initial.orderLifecycleReason,
+    initial.orderLifecycleNote,
     initial.inventoryPresetId,
+    initialHealthAction,
   ]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose]);
 
   const markets = useMemo(() => {
     const set = new Set<string>(venues.map((venue) => venue.market).filter(Boolean));
@@ -102,11 +172,17 @@ export default function EditProjectDetailsModal({
     [venues, market]
   );
 
-  const canSave = title.trim().length > 2 && market.trim() && (venueName.trim() || venueId);
+  const dispositionNeedsReason = orderLifecycleStatus !== "active";
+  const canSave =
+    title.trim().length > 2 &&
+    market.trim() &&
+    (venueName.trim() || venueId) &&
+    (!canManageOrderDisposition || !dispositionNeedsReason || Boolean(orderLifecycleReason));
 
   function handleSave() {
     if (!canSave) return;
     const selectedVenue = venues.find((venue) => venue.id === venueId);
+    const nextLifecycleStatus = orderLifecycleStatus || "active";
     onSave({
       title: title.trim(),
       market: market.trim(),
@@ -117,6 +193,13 @@ export default function EditProjectDetailsModal({
       poNumber: poNumber.trim() || undefined,
       endClientName: endClientName.trim() || undefined,
       contractNumber: contractNumber.trim() || undefined,
+      ...(canManageOrderDisposition
+        ? {
+            orderLifecycleStatus: nextLifecycleStatus,
+            orderLifecycleReason: nextLifecycleStatus === "active" ? "" : orderLifecycleReason,
+            orderLifecycleNote: nextLifecycleStatus === "active" ? "" : orderLifecycleNote.trim(),
+          }
+        : {}),
       inventoryPresetId,
       inventoryPresetName: inventoryPresets.find((preset) => preset.id === inventoryPresetId)?.name || "Full Venue",
       ...(canManageLiftOrder
@@ -134,14 +217,21 @@ export default function EditProjectDetailsModal({
   return (
     <Portal>
       <div className="cp-backdrop" onMouseDown={onClose}>
-        <div className="cp-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div
+          className="cp-modal"
+          onMouseDown={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descriptionId}
+        >
           <div className="cp-head">
             <div>
-              <div className="cp-title">Edit Project Details</div>
-              <div className="cp-sub">Update campaign metadata without changing assignment work.</div>
+              <div className="cp-title" id={titleId}>Edit Project Details</div>
+              <div className="cp-sub" id={descriptionId}>Update campaign metadata without changing assignment work.</div>
             </div>
 
-            <button className="btn btn-ghost btn-soft" type="button" onClick={onClose}>
+            <button className="btn btn-ghost btn-soft cp-closeButton" type="button" onClick={onClose} aria-label="Close project details">
               x
             </button>
           </div>
@@ -287,6 +377,65 @@ export default function EditProjectDetailsModal({
                       placeholder="Optional; AS360 # is used if blank"
                     />
                   </div>
+
+                  {canManageOrderDisposition ? (
+                    <>
+                      <div className="cp-field">
+                        <div className="cp-label">Order Disposition</div>
+                        <select
+                          className="cp-select"
+                          value={orderLifecycleStatus}
+                          onChange={(e) => {
+                            const next = e.target.value as OrderLifecycleStatus;
+                            setOrderLifecycleStatus(next);
+                            if (next === "active") {
+                              setOrderLifecycleReason("");
+                              setOrderLifecycleNote("");
+                            }
+                          }}
+                        >
+                          <option value="active">Active</option>
+                          <option value="on_hold">On Hold</option>
+                          <option value="cancelled">Cancelled</option>
+                        </select>
+                      </div>
+
+                      {orderLifecycleStatus !== "active" ? (
+                        <>
+                          <div className="cp-field">
+                            <div className="cp-label">Disposition Reason *</div>
+                            <select
+                              className="cp-select"
+                              value={orderLifecycleReason}
+                              onChange={(e) => setOrderLifecycleReason(e.target.value as OrderLifecycleReason)}
+                            >
+                              <option value="">Select reason...</option>
+                              {ORDER_LIFECYCLE_REASON_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="cp-field cp-field-wide">
+                            <div className="cp-label">Disposition Note</div>
+                            <input
+                              className="cp-input"
+                              value={orderLifecycleNote}
+                              onChange={(e) => setOrderLifecycleNote(e.target.value)}
+                              placeholder="Optional note for the audit trail"
+                            />
+                          </div>
+
+                          <div className="cp-note cp-field-wide">
+                            Use On Hold when the Adspace order may continue later. Use Cancelled when the Adspace order
+                            should intentionally stop matching a cancelled or unavailable Lift order.
+                          </div>
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
 
                   {canManageLiftOrder ? (
                     <>

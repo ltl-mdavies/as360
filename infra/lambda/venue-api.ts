@@ -72,6 +72,9 @@ type VenueItem = {
   isActive: boolean;
   documentSourceMode?: "adspace" | "external" | "hybrid";
   documentLibraryUrl: string;
+  photoGalleryUrl?: string;
+  venueDocumentUrl?: string;
+  venueVideoUrl?: string;
   shippingDestinationOverrideEnabled?: boolean;
   shippingDestination?: ShippingDestination;
   createdAt: string;
@@ -115,9 +118,22 @@ type MediaVariantItem = {
   color?: string;
   abbreviation?: string;
   unitNumber?: string;
+  liftProductMapping?: LiftProductMapping;
   productionRouting?: "primary" | "external";
   externalVendorId?: string;
   updatedAt: string;
+};
+
+type LiftProductMapping = {
+  liftProductId?: number;
+  liftProductName?: string;
+  liftCatalogId?: number;
+  liftCatalogName?: string;
+  liftProductType?: "KIT" | "REGULAR" | "SERVICE" | string;
+  liftProductStatus?: "A" | "I" | string;
+  liftUnitNumber?: string;
+  liftMappedAt?: string;
+  liftMappedByName?: string;
 };
 
 type CustomerVendorItem = {
@@ -146,6 +162,7 @@ type InventoryItem = {
   variantLabel: string;
   mediaType?: string;
   unitNumber?: string;
+  liftProductMapping?: LiftProductMapping;
   x?: number | null;
   y?: number | null;
   isActive: boolean;
@@ -668,6 +685,9 @@ async function listVenues(customerId: string | undefined, auth: AuthContext, lit
       isActive: venue.isActive,
       documentSourceMode: normalizeDocumentSourceMode(venue.documentSourceMode, venue.documentLibraryUrl),
       documentLibraryUrl: venue.documentLibraryUrl,
+      photoGalleryUrl: venue.photoGalleryUrl || "",
+      venueDocumentUrl: venue.venueDocumentUrl || "",
+      venueVideoUrl: venue.venueVideoUrl || "",
       shippingDestinationOverrideEnabled: venue.shippingDestinationOverrideEnabled || false,
       shippingDestination: venue.shippingDestination,
       createdAt: venue.createdAt,
@@ -877,6 +897,9 @@ async function createVenue(payload: Record<string, unknown>, auth: AuthContext) 
     isActive: optionalBoolean(payload.isActive) ?? true,
     documentSourceMode: normalizeDocumentSourceMode(optionalString(payload.documentSourceMode), optionalString(payload.documentLibraryUrl)),
     documentLibraryUrl: optionalString(payload.documentLibraryUrl) || "",
+    photoGalleryUrl: optionalString(payload.photoGalleryUrl) || "",
+    venueDocumentUrl: optionalString(payload.venueDocumentUrl) || "",
+    venueVideoUrl: optionalString(payload.venueVideoUrl) || "",
     shippingDestinationOverrideEnabled: optionalBoolean(payload.shippingDestinationOverrideEnabled) ?? false,
     shippingDestination: normalizeShippingDestination(payload.shippingDestination),
     createdAt: now,
@@ -922,6 +945,9 @@ async function updateVenue(venueId: string, payload: Record<string, unknown>, au
       hasOwn(payload, "documentLibraryUrl") ? optionalString(payload.documentLibraryUrl) : existing.documentLibraryUrl
     ),
     documentLibraryUrl: hasOwn(payload, "documentLibraryUrl") ? optionalString(payload.documentLibraryUrl) || "" : existing.documentLibraryUrl,
+    photoGalleryUrl: hasOwn(payload, "photoGalleryUrl") ? optionalString(payload.photoGalleryUrl) || "" : existing.photoGalleryUrl || "",
+    venueDocumentUrl: hasOwn(payload, "venueDocumentUrl") ? optionalString(payload.venueDocumentUrl) || "" : existing.venueDocumentUrl || "",
+    venueVideoUrl: hasOwn(payload, "venueVideoUrl") ? optionalString(payload.venueVideoUrl) || "" : existing.venueVideoUrl || "",
     shippingDestinationOverrideEnabled: hasOwn(payload, "shippingDestinationOverrideEnabled")
       ? optionalBoolean(payload.shippingDestinationOverrideEnabled) ?? false
       : existing.shippingDestinationOverrideEnabled,
@@ -1311,12 +1337,16 @@ async function updateVariant(venueId: string, variantId: string, payload: Record
     color: optionalString(payload.color) ?? existing.color,
     abbreviation: hasOwn(payload, "abbreviation") ? optionalString(payload.abbreviation) : existing.abbreviation,
     unitNumber: hasOwn(payload, "unitNumber") ? optionalString(payload.unitNumber) : existing.unitNumber,
+    liftProductMapping: hasOwn(payload, "liftProductMapping")
+      ? normalizeLiftProductMapping(payload.liftProductMapping, auth.actorName)
+      : existing.liftProductMapping,
     productionRouting: nextRouting,
     externalVendorId: nextRouting === "external" ? nextExternalVendorId : undefined,
     updatedAt: isoNow(),
   };
 
   await putCore(buildVariantRecord(next));
+  venueDetailResponseCache.delete(`venue-detail:${venueId}:${authScopeCacheKey(auth)}`);
   await writeAudit(`VENUE_ADMIN#${venueId}`, "variant.updated", auth.actorName, {
     venueId,
     variantId,
@@ -1493,6 +1523,9 @@ async function updateInventory(inventoryItemId: string, payload: Record<string, 
     locationId: nextMapId || existing.locationId,
     mapName: nextMapName,
     unitNumber: hasOwn(payload, "unitNumber") ? optionalString(payload.unitNumber) || undefined : existing.unitNumber,
+    liftProductMapping: hasOwn(payload, "liftProductMapping")
+      ? normalizeLiftProductMapping(payload.liftProductMapping, auth.actorName)
+      : existing.liftProductMapping,
     mediaVariantKey: nextVariantIdentity.mediaVariantKey,
     variantLabel: nextVariantIdentity.variantLabel,
     mediaType: nextVariantIdentity.mediaType,
@@ -1538,6 +1571,7 @@ async function updateInventory(inventoryItemId: string, payload: Record<string, 
     .filter((item) => item.id !== existing.id);
   nextInventory.push(next);
   await reconcileVenueVariantsForInventorySet(existing.venueId, nextInventory, venueItems);
+  venueDetailResponseCache.delete(`venue-detail:${existing.venueId}:${authScopeCacheKey(auth)}`);
   await writeAudit(`VENUE_ADMIN#${existing.venueId}`, "inventory.updated", auth.actorName, {
     inventoryItemId,
     changes: payload,
@@ -2167,6 +2201,34 @@ function optionalVariantRouting(value: unknown): MediaVariantItem["productionRou
   if (!parsed) return undefined;
   if (parsed === "primary" || parsed === "external") return parsed;
   throw new HttpError(400, `Invalid production routing ${parsed}`);
+}
+
+function normalizeLiftProductMapping(value: unknown, actorName: string): LiftProductMapping | undefined {
+  if (value == null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "liftProductMapping must be an object");
+  }
+  const raw = value as Record<string, unknown>;
+  const productType = optionalString(raw.liftProductType);
+  if (productType && !["KIT", "REGULAR", "SERVICE"].includes(productType)) {
+    throw new HttpError(400, "liftProductType must be KIT, REGULAR, or SERVICE");
+  }
+  const productStatus = optionalString(raw.liftProductStatus);
+  if (productStatus && !["A", "I"].includes(productStatus)) {
+    throw new HttpError(400, "liftProductStatus must be A or I");
+  }
+  const mapping: LiftProductMapping = {
+    liftProductId: numberOrUndefined(raw.liftProductId, undefined) ?? undefined,
+    liftProductName: optionalString(raw.liftProductName),
+    liftCatalogId: numberOrUndefined(raw.liftCatalogId, undefined) ?? undefined,
+    liftCatalogName: optionalString(raw.liftCatalogName),
+    liftProductType: productType,
+    liftProductStatus: productStatus,
+    liftUnitNumber: optionalString(raw.liftUnitNumber),
+    liftMappedAt: new Date().toISOString(),
+    liftMappedByName: actorName,
+  };
+  return Object.fromEntries(Object.entries(mapping).filter(([, fieldValue]) => fieldValue !== undefined)) as LiftProductMapping;
 }
 
 function requiredNumber(value: unknown, key: string) {
