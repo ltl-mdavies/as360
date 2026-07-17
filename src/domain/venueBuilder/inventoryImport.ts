@@ -201,7 +201,11 @@ function canonicalizeRow(
   return canonical;
 }
 
-export function parseCsvText(text: string): Record<string, string>[] {
+export function parseCsvText(
+  text: string,
+  options: { delimiter?: "auto" | "comma" | "tab" } = {}
+): Record<string, string>[] {
+  const delimiter = resolveDelimiter(text, options.delimiter || "auto");
   const rows: string[][] = [];
   let current = "";
   let row: string[] = [];
@@ -221,7 +225,7 @@ export function parseCsvText(text: string): Record<string, string>[] {
       continue;
     }
 
-    if (ch === "," && !inQuotes) {
+    if (ch === delimiter && !inQuotes) {
       row.push(current);
       current = "";
       continue;
@@ -254,6 +258,15 @@ export function parseCsvText(text: string): Record<string, string>[] {
     });
     return out;
   });
+}
+
+function resolveDelimiter(text: string, mode: "auto" | "comma" | "tab") {
+  if (mode === "tab") return "\t";
+  if (mode === "comma") return ",";
+  const firstContentLine = text.split(/\r?\n/).find((line) => line.trim()) || "";
+  const tabCount = (firstContentLine.match(/\t/g) || []).length;
+  const commaCount = (firstContentLine.match(/,/g) || []).length;
+  return tabCount > commaCount ? "\t" : ",";
 }
 
 export function normalizeInventoryImportRows(

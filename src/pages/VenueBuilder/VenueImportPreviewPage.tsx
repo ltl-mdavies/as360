@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Link2, Search, X } from "lucide-react";
+import { Link2, LockKeyhole, MapPin, PackageSearch, Search, Settings2, UnlockKeyhole, Upload, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../../app/AppShell";
 import { useApiClient } from "../../api/useApiClient";
@@ -9,6 +9,7 @@ import {
   type ApiCustomerVendor,
   type ApiLiftProduct,
   type ApiShippingDestination,
+  type ApiVenueDetailResponse,
   type ApiVenueInventoryPreset,
 } from "../../api/projects";
 import Panel from "../../components/common/Panel";
@@ -22,7 +23,7 @@ import {
   parseCsvText,
   resolveCanonicalField,
 } from "../../domain/venueBuilder/inventoryImport";
-import type { VenueImportCanonicalField, VenueImportHeaderOverride } from "../../domain/venueBuilder/types";
+import type { InventoryImportDraft, VenueImportCanonicalField, VenueImportHeaderOverride } from "../../domain/venueBuilder/types";
 import "../../styles/venueBuilder.css";
 
 type LoadTone = "idle" | "success" | "warning";
@@ -163,6 +164,7 @@ type LiftProductMapperState = {
   productType: "" | "KIT" | "REGULAR" | "SERVICE";
   status: "A" | "I";
   results: ApiLiftProduct[];
+  localQuery: string;
   selectedProduct: ApiLiftProduct | null;
   selectedUnitNumber: string;
   loading: boolean;
@@ -306,6 +308,106 @@ function liftProductDetailRows(product: ApiLiftProduct | null) {
   });
   return [...coreRows, ...detailRows.map(([key, value]) => [formatLiftDetailLabel(key), value] as const)]
     .filter(([, value]) => value !== undefined && value !== "");
+}
+
+function normalizeLiftProductSearchText(value: unknown) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[_\-./]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function liftProductSearchFields(product: ApiLiftProduct) {
+  const additionalValues = Object.values(product.additionalFields || {})
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .slice(0, 24);
+  return [
+    product.productName,
+    product.accountingItemCode,
+    product.productId,
+    product.catalogName,
+    product.catalogId,
+    product.productType,
+    product.status,
+    product.productDescription,
+    ...(product.unitNumbers || []),
+    ...additionalValues,
+  ];
+}
+
+function scoreLiftProductSearch(product: ApiLiftProduct, rawQuery: string) {
+  const query = normalizeLiftProductSearchText(rawQuery);
+  if (!query) return 1;
+
+  const productName = normalizeLiftProductSearchText(product.productName);
+  const unitText = normalizeLiftProductSearchText((product.unitNumbers || []).join(" "));
+  const allText = normalizeLiftProductSearchText(liftProductSearchFields(product).join(" "));
+  const tokens = query.split(" ").filter(Boolean);
+  if (!tokens.length) return 1;
+
+  let score = 0;
+  if (productName === query) score += 120;
+  if (productName.startsWith(query)) score += 90;
+  if (productName.includes(query)) score += 70;
+  if (unitText.includes(query)) score += 62;
+  if (String(product.productId || "") === query) score += 60;
+  if (allText.includes(query)) score += 44;
+
+  const matchedTokens = tokens.filter((token) => allText.includes(token));
+  score += matchedTokens.length * 12;
+  if (matchedTokens.length === tokens.length) score += 25;
+
+  const orderedTokenMatch = tokens.reduce(
+    (state, token) => {
+      const nextIndex = allText.indexOf(token, state.index + 1);
+      return nextIndex >= 0 ? { index: nextIndex, count: state.count + 1 } : state;
+    },
+    { index: -1, count: 0 }
+  );
+  score += orderedTokenMatch.count * 5;
+
+  return score;
+}
+
+function filterLiftProducts(products: ApiLiftProduct[], rawQuery: string) {
+  const query = rawQuery.trim();
+  if (!query) return products;
+  return products
+    .map((product, index) => ({ product, index, score: scoreLiftProductSearch(product, query) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((item) => item.product);
+}
+
+function normalizeImportMatchKey(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeImportCompareValue(value: unknown) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function importRecordMatchesExisting(record: InventoryImportDraft, existing: any) {
+  const checks: Array<[unknown, unknown]> = [
+    [record.mapName, existing.mapName],
+    [record.mediaVariantKey, existing.mediaVariantKey],
+    [record.variantLabel, existing.variantLabel],
+    [record.mediaType, existing.mediaType],
+    [record.unitNumber, existing.unitNumber],
+    [record.isActive, existing.isActive],
+    [record.mapVisibilityMode, existing.mapVisibilityMode],
+    [record.trimHeight, existing.trimHeight],
+    [record.trimWidth, existing.trimWidth],
+    [record.safeHeight, existing.safeHeight],
+    [record.safeWidth, existing.safeWidth],
+    [record.substrate, existing.substrate],
+    [record.finishing, existing.finishing],
+    [record.locationDetail, existing.locationDetail],
+    [record.notes, existing.notes],
+  ];
+  return checks.every(([nextValue, currentValue]) => normalizeImportCompareValue(nextValue) === normalizeImportCompareValue(currentValue));
 }
 
 function knownLiftCatalogValue(catalogId: string, catalogName: string) {
@@ -464,6 +566,7 @@ export default function VenueImportPreviewPage() {
   const [rooms, setRooms] = useState<RoomRecord[]>(DEFAULT_ROOMS);
   const [liveVenueInventory, setLiveVenueInventory] = useState<any[]>([]);
   const [liveVenueVariants, setLiveVenueVariants] = useState<LiveVenueVariant[]>([]);
+  const [venueViewer, setVenueViewer] = useState<ApiVenueDetailResponse["viewer"] | null>(null);
   const [venueInventoryPresets, setVenueInventoryPresets] = useState<ApiVenueInventoryPreset[]>([]);
   const [presetEditor, setPresetEditor] = useState<PresetEditorState | null>(null);
   const [presetSaveError, setPresetSaveError] = useState("");
@@ -484,9 +587,11 @@ export default function VenueImportPreviewPage() {
   const [showCreateVenue, setShowCreateVenue] = useState(false);
   const [showAddMarketForm, setShowAddMarketForm] = useState(false);
   const [detailTab, setDetailTab] = useState<DetailTab>("setup");
+  const [expandedVariantInventoryRefs, setExpandedVariantInventoryRefs] = useState<Set<string>>(() => new Set());
   const [showImportModal, setShowImportModal] = useState(false);
   const [importStep, setImportStep] = useState<ImportStep>("source");
   const [inventoryEditMode, setInventoryEditMode] = useState(false);
+  const canEditVenueInventory = venueViewer?.canEditVenueInventory ?? true;
   const [newVenueCustomerName, setNewVenueCustomerName] = useState("");
   const activeCustomerVendors = useMemo(
     () => customerVendors.filter((vendor) => vendor.isActive),
@@ -520,6 +625,8 @@ export default function VenueImportPreviewPage() {
   const [sourceLabel, setSourceLabel] = useState("No file loaded");
   const [loadTone, setLoadTone] = useState<LoadTone>("idle");
   const [inactiveVisibilityMode, setInactiveVisibilityMode] = useState<"hidden" | "show_unavailable">("hidden");
+  const [inventoryImportMode, setInventoryImportMode] = useState<"merge" | "replace">("merge");
+  const [importDelimiter, setImportDelimiter] = useState<"auto" | "comma" | "tab">("auto");
   const [rowSearch, setRowSearch] = useState("");
   const [mapFilter, setMapFilter] = useState("all");
   const [variantFilter, setVariantFilter] = useState("all");
@@ -700,15 +807,20 @@ export default function VenueImportPreviewPage() {
         setRooms([]);
         setLiveVenueInventory([]);
         setVenueInventoryPresets([]);
+        setVenueViewer(null);
         return;
       }
 
       try {
-        const response = await request<{ venue: any; maps: any[]; variants: any[]; inventory: any[]; presets?: ApiVenueInventoryPreset[] }>(`/api/venues/${venueId}`);
+        const response = await request<ApiVenueDetailResponse>(`/api/venues/${venueId}`);
 
         setRooms((response.maps || []).map(mapRoomRecordFromApi));
-        setLiveVenueVariants(response.variants || []);
+        setLiveVenueVariants((response.variants || []) as LiveVenueVariant[]);
         setLiveVenueInventory(response.inventory || []);
+        setVenueViewer(response.viewer || null);
+        if (response.viewer && !response.viewer.canEditVenueInventory) {
+          setInventoryEditMode(false);
+        }
         setVenueInventoryPresets(response.presets || []);
         setVariantAppearanceOverrides(() => {
           const next: Record<string, VariantAppearance> = {};
@@ -765,6 +877,7 @@ export default function VenueImportPreviewPage() {
         setRooms([]);
         setLiveVenueInventory([]);
         setVenueInventoryPresets([]);
+        setVenueViewer(null);
         return;
       }
       await loadVenueDetailData(selectedVenueId);
@@ -807,6 +920,10 @@ export default function VenueImportPreviewPage() {
 
   const isDetailMode = Boolean(detailVenueId && venues.some((venue) => venue.id === detailVenueId));
   const projectsPath = "/customer/projects";
+  const filteredLiftProducts = useMemo(
+    () => filterLiftProducts(liftProductMapper?.results || [], liftProductMapper?.localQuery || ""),
+    [liftProductMapper?.localQuery, liftProductMapper?.results]
+  );
 
   const marketsById = useMemo(
     () => new Map(markets.map((market) => [market.id, market])),
@@ -1145,11 +1262,11 @@ export default function VenueImportPreviewPage() {
   const parsedRows = useMemo(() => {
     if (!effectiveCsvText.trim()) return [];
     try {
-      return parseCsvText(effectiveCsvText);
+      return parseCsvText(effectiveCsvText, { delimiter: importDelimiter });
     } catch {
       return [];
     }
-  }, [effectiveCsvText]);
+  }, [effectiveCsvText, importDelimiter]);
 
   const result = useMemo(() => {
     if (!parsedRows.length) return null;
@@ -1406,6 +1523,74 @@ export default function VenueImportPreviewPage() {
     });
   }, [headerOverrides, parsedRows]);
 
+  const importPlan = useMemo(() => {
+    const records = result?.records || [];
+    const existingInventoryById = new Map(
+      liveVenueInventory
+        .map((item) => [normalizeImportMatchKey(item.inventoryId), item] as const)
+        .filter(([key]) => Boolean(key))
+    );
+    const validMapNames = new Set(activeVenueRooms.map((room) => normalizeImportMatchKey(room.name)).filter(Boolean));
+    const importIds = new Set(records.map((record) => normalizeImportMatchKey(record.inventoryId)).filter(Boolean));
+    const existingVariantKeys = new Set(liveVenueVariants.map((variant) => variant.mediaVariantKey));
+    const importVariantKeys = new Set(records.map((record) => record.mediaVariantKey).filter(Boolean));
+    const existingVariantsByKey = new Map(liveVenueVariants.map((variant) => [variant.mediaVariantKey, variant] as const));
+
+    let matchedCount = 0;
+    let addedCount = 0;
+    let unchangedCount = 0;
+    let rowMappingsPreserved = 0;
+    records.forEach((record) => {
+      const existing = existingInventoryById.get(normalizeImportMatchKey(record.inventoryId));
+      if (!existing) {
+        addedCount += 1;
+        return;
+      }
+      matchedCount += 1;
+      if (importRecordMatchesExisting(record, existing)) unchangedCount += 1;
+      if (existing.liftProductMapping) rowMappingsPreserved += 1;
+    });
+
+    let variantMappingsPreserved = 0;
+    let existingVariantsReused = 0;
+    importVariantKeys.forEach((variantKey) => {
+      const variant = existingVariantsByKey.get(variantKey);
+      if (!variant) return;
+      existingVariantsReused += 1;
+      if (variant.liftProductMapping) variantMappingsPreserved += 1;
+    });
+
+    const retainedMissingInventory = liveVenueInventory.filter((item) => !importIds.has(normalizeImportMatchKey(item.inventoryId)));
+    const retainedMissingCount = retainedMissingInventory.length;
+    const nextVariantKeys = new Set(importVariantKeys);
+    if (inventoryImportMode === "merge") {
+      retainedMissingInventory.forEach((item) => {
+        if (item.mediaVariantKey) nextVariantKeys.add(item.mediaVariantKey);
+      });
+    }
+    const orphanedVariantKeys = liveVenueVariants
+      .filter((variant) => !nextVariantKeys.has(variant.mediaVariantKey))
+      .map((variant) => variant.mediaVariantKey);
+
+    return {
+      mode: inventoryImportMode,
+      incomingCount: records.length,
+      unknownMapCount: records.filter((record) => record.mapName && !validMapNames.has(normalizeImportMatchKey(record.mapName))).length,
+      matchedCount,
+      updatedCount: Math.max(matchedCount - unchangedCount, 0),
+      unchangedCount,
+      addedCount,
+      retainedMissingCount,
+      replaceRemovalCount: inventoryImportMode === "replace" ? retainedMissingCount : 0,
+      rowMappingsPreserved: inventoryImportMode === "merge" ? rowMappingsPreserved : 0,
+      variantMappingsPreserved: inventoryImportMode === "merge" ? variantMappingsPreserved : 0,
+      existingVariantsReused,
+      newVariantCount: Array.from(importVariantKeys).filter((variantKey) => !existingVariantKeys.has(variantKey)).length,
+      orphanedVariantCount: orphanedVariantKeys.length,
+      orphanedVariantKeys,
+    };
+  }, [activeVenueRooms, inventoryImportMode, liveVenueInventory, liveVenueVariants, result]);
+
   const importRisks = useMemo(() => {
     if (!result) return [];
 
@@ -1465,6 +1650,14 @@ export default function VenueImportPreviewPage() {
       });
     }
 
+    if (importPlan.unknownMapCount > 0) {
+      risks.push({
+        title: "Unknown maps",
+        detail: `${importPlan.unknownMapCount} rows reference a map name that does not exist on this venue. Add/map the room first or correct the source column before importing.`,
+        tone: "warning",
+      });
+    }
+
     if (mapsWithInactive > 0) {
       risks.push({
         title: "Maps with mixed availability",
@@ -1473,8 +1666,32 @@ export default function VenueImportPreviewPage() {
       });
     }
 
+    if (importPlan.mode === "merge" && importPlan.retainedMissingCount > 0) {
+      risks.push({
+        title: "Existing rows not in import",
+        detail: `${importPlan.retainedMissingCount} existing rows are not present in this file and will be retained unchanged in merge mode.`,
+        tone: "info",
+      });
+    }
+
+    if (importPlan.mode === "replace" && importPlan.replaceRemovalCount > 0) {
+      risks.push({
+        title: "Rows removed by replace",
+        detail: `${importPlan.replaceRemovalCount} existing rows are not present in this file and will be removed by replace mode.`,
+        tone: "warning",
+      });
+    }
+
+    if (importPlan.orphanedVariantCount > 0) {
+      risks.push({
+        title: importPlan.mode === "replace" ? "Variants removed by replace" : "Variants retained without incoming rows",
+        detail: `${importPlan.orphanedVariantCount} existing variants have no matching rows in this import${importPlan.mode === "merge" ? " and will remain only if retained existing inventory still references them." : " and will be removed."}`,
+        tone: importPlan.mode === "replace" ? "warning" : "info",
+      });
+    }
+
     return risks;
-  }, [groupedMaps, result]);
+  }, [groupedMaps, importPlan, result]);
 
   const selectedRoomImportRecords = useMemo(() => {
     if (!selectedRoom) return [];
@@ -1499,10 +1716,12 @@ export default function VenueImportPreviewPage() {
         abbreviation: string;
         productionRouting: "primary" | "external";
         externalVendorId?: string;
+        inventoryIds: string[];
       }
     >();
     effectiveRecords.forEach((record, index) => {
       const existing = counts.get(record.mediaVariantKey);
+      const inventoryId = String(record.inventoryId || "").trim();
       const override = variantAppearanceOverrides[record.mediaVariantKey];
       const persistedVariant = liveVenueVariantByKey.get(record.mediaVariantKey);
       const fallbackColor = variantPalette[index % variantPalette.length];
@@ -1517,10 +1736,12 @@ export default function VenueImportPreviewPage() {
           abbreviation: (override?.abbreviation || persistedVariant?.abbreviation || buildVariantAbbreviation(record.variantLabel)).slice(0, 4).toUpperCase(),
           productionRouting: override?.productionRouting || persistedVariant?.productionRouting || "primary",
           externalVendorId: override?.externalVendorId || persistedVariant?.externalVendorId,
+          inventoryIds: inventoryId ? [inventoryId] : [],
         });
         return;
       }
       existing.total += 1;
+      if (inventoryId) existing.inventoryIds.push(inventoryId);
       if (!existing.unitNumber && (override?.unitNumber || persistedVariant?.unitNumber)) {
         existing.unitNumber = override?.unitNumber ?? persistedVariant?.unitNumber;
       }
@@ -1531,7 +1752,12 @@ export default function VenueImportPreviewPage() {
         existing.externalVendorId = override?.externalVendorId || persistedVariant?.externalVendorId;
       }
     });
-    return Array.from(counts.values());
+    return Array.from(counts.values()).map((variant) => ({
+      ...variant,
+      inventoryIds: Array.from(new Set(variant.inventoryIds)).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+      ),
+    }));
   }, [effectiveRecords, liveVenueVariantByKey, variantAppearanceOverrides]);
 
   const selectedRoomVariantGroups = useMemo(() => {
@@ -2253,7 +2479,8 @@ export default function VenueImportPreviewPage() {
       await request(`/api/venues/${activeVenue.id}/inventory/import`, {
         method: "POST",
         body: JSON.stringify({
-          replaceExisting: true,
+          importMode: inventoryImportMode,
+          replaceExisting: inventoryImportMode === "replace",
           items: result.records.map((record) => ({
             inventoryId: record.inventoryId,
             mapName: record.mapName,
@@ -2467,6 +2694,7 @@ export default function VenueImportPreviewPage() {
       productType: "",
       status: "A",
       results: [],
+      localQuery: "",
       selectedProduct: null,
       selectedUnitNumber: mapping.liftUnitNumber || appearance.unitNumber || "",
       loading: false,
@@ -2492,6 +2720,7 @@ export default function VenueImportPreviewPage() {
       productType: "",
       status: "A",
       results: [],
+      localQuery: "",
       selectedProduct: null,
       selectedUnitNumber: mapping.liftUnitNumber || record.unitNumber || appearance.unitNumber || "",
       loading: false,
@@ -2503,6 +2732,15 @@ export default function VenueImportPreviewPage() {
 
   function patchLiftProductMapper(patch: Partial<LiftProductMapperState>) {
     setLiftProductMapper((current) => current ? { ...current, ...patch } : current);
+  }
+
+  function toggleVariantInventoryRefs(variantKey: string) {
+    setExpandedVariantInventoryRefs((current) => {
+      const next = new Set(current);
+      if (next.has(variantKey)) next.delete(variantKey);
+      else next.add(variantKey);
+      return next;
+    });
   }
 
   async function runLiftProductSearch() {
@@ -2518,7 +2756,7 @@ export default function VenueImportPreviewPage() {
       return;
     }
 
-    patchLiftProductMapper({ loading: true, error: "", hasSearched: true, selectedProduct: null, selectedUnitNumber: "" });
+    patchLiftProductMapper({ loading: true, error: "", hasSearched: true, selectedProduct: null, selectedUnitNumber: "", localQuery: "" });
     try {
       const response = await fetchLiftProducts(
         { request },
@@ -3270,27 +3508,45 @@ export default function VenueImportPreviewPage() {
                     <span className="venue-preview-kpiValue">{venueValidationSummary.duplicateInventoryCount}</span>
                   </div>
                 </div>
-                <div className="venue-preview-detailTabs">
+                <div className="venue-preview-detailTabs" role="tablist" aria-label="Venue management sections">
                   <button
                     type="button"
                     className={`venue-preview-detailTab ${detailTab === "setup" ? "is-active" : ""}`}
+                    role="tab"
+                    aria-selected={detailTab === "setup"}
                     onClick={() => setDetailTab("setup")}
                   >
-                    Venue Setup
+                    <span className="venue-preview-detailTabIcon"><Settings2 size={17} /></span>
+                    <span className="venue-preview-detailTabText">
+                      <strong>Venue Setup</strong>
+                      <small>{rooms.length} room{rooms.length === 1 ? "" : "s"}</small>
+                    </span>
                   </button>
                   <button
                     type="button"
                     className={`venue-preview-detailTab ${detailTab === "inventory" ? "is-active" : ""}`}
+                    role="tab"
+                    aria-selected={detailTab === "inventory"}
                     onClick={() => setDetailTab("inventory")}
                   >
-                    Inventory Management
+                    <span className="venue-preview-detailTabIcon"><PackageSearch size={17} /></span>
+                    <span className="venue-preview-detailTabText">
+                      <strong>Inventory Management</strong>
+                      <small>{effectiveRecords.length} row{effectiveRecords.length === 1 ? "" : "s"}</small>
+                    </span>
                   </button>
                   <button
                     type="button"
                     className={`venue-preview-detailTab ${detailTab === "placement" ? "is-active" : ""}`}
+                    role="tab"
+                    aria-selected={detailTab === "placement"}
                     onClick={() => setDetailTab("placement")}
                   >
-                    Map Placement
+                    <span className="venue-preview-detailTabIcon"><MapPin size={17} /></span>
+                    <span className="venue-preview-detailTabText">
+                      <strong>Map Placement</strong>
+                      <small>{venueValidationSummary.unpinnedActiveCount} unpinned</small>
+                    </span>
                   </button>
                 </div>
               </Panel>
@@ -3958,15 +4214,25 @@ export default function VenueImportPreviewPage() {
                 </div>
                 <div className="venue-preview-rowActions venue-preview-inventoryTopActions">
                   <button className="btn btn-primary venue-preview-importCta" type="button" onClick={() => { setImportStep("source"); setShowImportModal(true); }}>
+                    <Upload size={16} />
                     Import Venue Inventory
                   </button>
-                  <button
-                    className={`btn ${inventoryEditMode ? "btn-primary" : "btn-ghost btn-soft"}`}
-                    type="button"
-                    onClick={() => setInventoryEditMode((current) => !current)}
-                  >
-                    {inventoryEditMode ? "Lock Inventory" : "Unlock Inventory"}
-                  </button>
+                  {canEditVenueInventory ? (
+                    <button
+                      className={`btn venue-preview-editLockBtn ${inventoryEditMode ? "btn-primary is-unlocked" : "btn-ghost btn-soft is-locked"}`}
+                      type="button"
+                      onClick={() => setInventoryEditMode((current) => !current)}
+                      aria-pressed={inventoryEditMode}
+                    >
+                      {inventoryEditMode ? <UnlockKeyhole size={16} /> : <LockKeyhole size={16} />}
+                      {inventoryEditMode ? "Editing Unlocked" : "Editing Locked"}
+                    </button>
+                  ) : (
+                    <span className="venue-preview-editLockBtn venue-preview-editLockStatus is-restricted">
+                      <LockKeyhole size={16} />
+                      Editing Restricted
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -4378,6 +4644,9 @@ export default function VenueImportPreviewPage() {
                       <tbody>
                         {variantRows.map((variant, index) => {
                           const appearance = getVariantAppearance(variant.key, variant.label, index);
+                          const visibleInventoryIds = variant.inventoryIds.slice(0, 4);
+                          const hiddenInventoryCount = Math.max(variant.inventoryIds.length - visibleInventoryIds.length, 0);
+                          const isInventoryRefsExpanded = expandedVariantInventoryRefs.has(variant.key);
                           return (
                             <tr key={variant.key}>
                               <td>
@@ -4390,6 +4659,31 @@ export default function VenueImportPreviewPage() {
                                   </span>
                                   <div>
                                     <div className="venue-preview-cellStrong">{variant.label}</div>
+                                    {variant.inventoryIds.length ? (
+                                      <div className="venue-preview-variantRefs" aria-label={`Inventory IDs for ${variant.label}`}>
+                                        <div className="venue-preview-variantRefLine">
+                                          {visibleInventoryIds.map((inventoryId) => (
+                                            <span key={inventoryId}>{inventoryId}</span>
+                                          ))}
+                                          {hiddenInventoryCount > 0 ? (
+                                            <button
+                                              className="venue-preview-variantRefToggle"
+                                              type="button"
+                                              onClick={() => toggleVariantInventoryRefs(variant.key)}
+                                            >
+                                              {isInventoryRefsExpanded ? "Hide" : `+${hiddenInventoryCount} Show all`}
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                        {isInventoryRefsExpanded && hiddenInventoryCount > 0 ? (
+                                          <div className="venue-preview-variantRefPanel">
+                                            {variant.inventoryIds.map((inventoryId) => (
+                                              <span key={inventoryId}>{inventoryId}</span>
+                                            ))}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
                                   </div>
                                 </div>
                               </td>
@@ -4675,8 +4969,17 @@ export default function VenueImportPreviewPage() {
 
               <div className="venue-preview-modalBody">
                 {!inventoryEditMode ? (
-                  <div className="venue-preview-alert venue-preview-alert-warning">
-                    Inventory is locked. You can search Lift products, but unlock inventory before saving this mapping.
+                  <div className="venue-preview-alert venue-preview-alert-warning venue-preview-alertAction">
+                    <span>
+                      {canEditVenueInventory
+                        ? "Inventory editing is locked. You can keep searching Lift products, then unlock editing here before saving this mapping."
+                        : "Inventory editing is restricted for your role. You can search Lift products, but cannot save this mapping."}
+                    </span>
+                    {canEditVenueInventory ? (
+                      <button className="btn btn-ghost btn-soft venue-preview-alertButton" type="button" onClick={() => setInventoryEditMode(true)}>
+                        <UnlockKeyhole size={15} /> Unlock Editing
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -4697,6 +5000,7 @@ export default function VenueImportPreviewPage() {
                             catalogId: catalog?.id || "",
                             catalogName: catalog?.name || "",
                             results: [],
+                            localQuery: "",
                             selectedProduct: null,
                             selectedUnitNumber: "",
                             hasSearched: false,
@@ -4794,11 +5098,19 @@ export default function VenueImportPreviewPage() {
                     onClick={() => void runLiftProductSearch()}
                     disabled={liftProductMapper.loading}
                   >
-                    <Search size={16} /> {liftProductMapper.loading ? "Searching..." : "Search Lift Products"}
+                    <Search size={16} /> {liftProductMapper.loading ? "Loading..." : "Load Lift Products"}
                   </button>
                   {liftProductMapper.hasSearched ? (
                     <span className="venue-preview-resultCount">
-                      <strong>{liftProductMapper.results.length}</strong> result{liftProductMapper.results.length === 1 ? "" : "s"}
+                      {liftProductMapper.results.length === filteredLiftProducts.length ? (
+                        <>
+                          <strong>{liftProductMapper.results.length}</strong> loaded
+                        </>
+                      ) : (
+                        <>
+                          <strong>{filteredLiftProducts.length}</strong> shown of {liftProductMapper.results.length} loaded
+                        </>
+                      )}
                     </span>
                   ) : null}
                   {liftProductMapper.hasMore ? (
@@ -4817,20 +5129,32 @@ export default function VenueImportPreviewPage() {
                         <div className="venue-preview-title">Products</div>
                         <div className="venue-preview-sub">
                           {liftProductMapper.hasSearched
-                            ? `${liftProductMapper.results.length} returned from Lift`
-                            : "Search a catalog to load products."}
+                            ? `${liftProductMapper.results.length} loaded from Lift`
+                            : "Load a catalog to browse products."}
                         </div>
                       </div>
+                      <label className="venue-preview-liftLocalSearch">
+                        <Search size={15} />
+                        <input
+                          type="search"
+                          value={liftProductMapper.localQuery}
+                          onChange={(e) => patchLiftProductMapper({ localQuery: e.target.value })}
+                          placeholder="Filter loaded products"
+                          disabled={!liftProductMapper.results.length}
+                        />
+                      </label>
                     </div>
                     <div className="venue-preview-liftResults">
                       {!liftProductMapper.hasSearched ? (
-                        <div className="venue-preview-empty">Start with a Lift catalog ID or catalog name, then search for the matching product.</div>
+                        <div className="venue-preview-empty">Start with a Lift catalog ID or catalog name, then load products from Lift.</div>
                       ) : liftProductMapper.loading ? (
-                        <div className="venue-preview-empty">Searching Lift products...</div>
+                        <div className="venue-preview-empty">Loading Lift products...</div>
                       ) : !liftProductMapper.results.length ? (
                         <div className="venue-preview-empty">No Lift products matched these filters.</div>
+                      ) : !filteredLiftProducts.length ? (
+                        <div className="venue-preview-empty">No loaded products match this filter.</div>
                       ) : (
-                        liftProductMapper.results.map((product) => {
+                        filteredLiftProducts.map((product) => {
                           const isSelected = liftProductMapper.selectedProduct?.productId === product.productId;
                           const unitNumbers = product.unitNumbers || [];
                           const unitLabel = unitNumbers.length
@@ -5004,6 +5328,15 @@ export default function VenueImportPreviewPage() {
                           <option value="hidden">Inactive imports hidden on maps</option>
                           <option value="show_unavailable">Inactive imports visible as unavailable</option>
                         </select>
+                        <select
+                          className="select venue-preview-select"
+                          value={importDelimiter}
+                          onChange={(e) => setImportDelimiter(e.target.value as "auto" | "comma" | "tab")}
+                        >
+                          <option value="auto">Delimiter: Auto</option>
+                          <option value="comma">Delimiter: Comma CSV</option>
+                          <option value="tab">Delimiter: Tab / pasted table</option>
+                        </select>
                         <button
                           className="btn btn-ghost btn-soft"
                           type="button"
@@ -5015,6 +5348,35 @@ export default function VenueImportPreviewPage() {
                         >
                           Clear
                         </button>
+                      </div>
+
+                      <div className="venue-preview-importMode" role="radiogroup" aria-label="Inventory import behavior">
+                        <label className={`venue-preview-importModeOption ${inventoryImportMode === "merge" ? "is-selected" : ""}`}>
+                          <input
+                            type="radio"
+                            name="inventoryImportMode"
+                            value="merge"
+                            checked={inventoryImportMode === "merge"}
+                            onChange={() => setInventoryImportMode("merge")}
+                          />
+                          <span>
+                            <strong>Merge update/add</strong>
+                            <small>Update matching inventory IDs, add new rows, keep existing rows that are missing from this file, and preserve product mappings.</small>
+                          </span>
+                        </label>
+                        <label className={`venue-preview-importModeOption is-danger ${inventoryImportMode === "replace" ? "is-selected" : ""}`}>
+                          <input
+                            type="radio"
+                            name="inventoryImportMode"
+                            value="replace"
+                            checked={inventoryImportMode === "replace"}
+                            onChange={() => setInventoryImportMode("replace")}
+                          />
+                          <span>
+                            <strong>Replace current inventory</strong>
+                            <small>Remove rows and variants not present in this file. Use only for a deliberate full reset.</small>
+                          </span>
+                        </label>
                       </div>
 
                       <div className="venue-preview-editor">
@@ -5318,8 +5680,33 @@ export default function VenueImportPreviewPage() {
                           <div className="venue-preview-kpi"><span className="venue-preview-kpiLabel">Variants</span><span className="venue-preview-kpiValue">{result?.summary.variantCount || 0}</span></div>
                           <div className="venue-preview-kpi"><span className="venue-preview-kpiLabel">Maps</span><span className="venue-preview-kpiValue">{result?.summary.mapCount || 0}</span></div>
                         </div>
-                        <div className="venue-preview-empty">
-                          This import will replace the current venue inventory with the normalized rows above.
+                        <div className="venue-preview-importPlan">
+                          <div className="venue-preview-importPlanHead">
+                            <div>
+                              <div className="venue-preview-title">
+                                {inventoryImportMode === "merge" ? "Merge import plan" : "Replace import plan"}
+                              </div>
+                              <div className="venue-preview-sub">
+                                {inventoryImportMode === "merge"
+                                  ? "Existing inventory IDs are updated, new IDs are added, and missing existing rows are retained."
+                                  : "Current inventory and variants are replaced with the normalized rows from this file."}
+                              </div>
+                            </div>
+                            <span className={`venue-preview-status ${inventoryImportMode === "merge" ? "is-ok" : "is-warning"}`}>
+                              {inventoryImportMode === "merge" ? "Safe merge" : "Destructive replace"}
+                            </span>
+                          </div>
+                          <div className="venue-preview-importPlanGrid">
+                            <div><span>Updated</span><strong>{importPlan.updatedCount}</strong></div>
+                            <div><span>Unchanged</span><strong>{importPlan.unchangedCount}</strong></div>
+                            <div><span>Added</span><strong>{importPlan.addedCount}</strong></div>
+                            <div><span>{inventoryImportMode === "merge" ? "Retained" : "Removed"}</span><strong>{inventoryImportMode === "merge" ? importPlan.retainedMissingCount : importPlan.replaceRemovalCount}</strong></div>
+                            <div><span>Row mappings preserved</span><strong>{importPlan.rowMappingsPreserved}</strong></div>
+                            <div><span>Variant mappings preserved</span><strong>{importPlan.variantMappingsPreserved}</strong></div>
+                            <div><span>New variants</span><strong>{importPlan.newVariantCount}</strong></div>
+                            <div><span>Orphan risk</span><strong>{importPlan.orphanedVariantCount}</strong></div>
+                            <div><span>Unknown maps</span><strong>{importPlan.unknownMapCount}</strong></div>
+                          </div>
                         </div>
                       </div>
                     </Panel>
@@ -5354,9 +5741,17 @@ export default function VenueImportPreviewPage() {
                     }
                     setImportStep(importStep === "source" ? "validate" : importStep === "validate" ? "review" : "confirm");
                   }}
-                  disabled={importStep !== "confirm" && !parsedRows.length}
+                  disabled={
+                    importStep === "confirm"
+                      ? !result?.records.length || result.summary.errorCount > 0 || importPlan.unknownMapCount > 0
+                      : !parsedRows.length
+                  }
                 >
-                  {importStep === "confirm" ? "Confirm Import" : "Next"}
+                  {importStep === "confirm"
+                    ? inventoryImportMode === "merge"
+                      ? "Confirm Merge"
+                      : "Confirm Replace"
+                    : "Next"}
                 </button>
               </div>
             </div>

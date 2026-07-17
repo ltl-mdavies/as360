@@ -1129,6 +1129,11 @@ export type ApiVenueDetailResponse = {
     marketId?: string;
     marketName?: string;
   };
+  viewer?: {
+    isPlatformAdmin: boolean;
+    role: "platform_admin" | "customer_admin";
+    canEditVenueInventory: boolean;
+  };
   maps: Array<{ id: string; name: string; mapUrl?: string | null; imageUrl?: string | null; inventoryCount?: number; unpinnedCount?: number }>;
   variants: Array<Record<string, unknown>>;
   inventory: Array<{

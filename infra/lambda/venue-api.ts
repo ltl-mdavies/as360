@@ -279,6 +279,7 @@ type InventoryImportPayload = {
     color?: string;
     abbreviation?: string;
   }>;
+  importMode?: "merge" | "replace";
   replaceExisting?: boolean;
 };
 
@@ -775,6 +776,11 @@ async function getVenueDetail(venueId: string, auth: AuthContext) {
 
   const response = {
     venue,
+    viewer: {
+      isPlatformAdmin: auth.isPlatformAdmin,
+      role: auth.profile.role,
+      canEditVenueInventory: auth.isPlatformAdmin || customerStatus(customer) === "active",
+    },
     maps: mapSummaries,
     variants,
     inventory,
@@ -1375,7 +1381,9 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
   const existingInventory = venueItems.filter((item): item is InventoryItem => item.entityType === "InventoryItem");
   const existingVariants = venueItems.filter((item): item is MediaVariantItem => item.entityType === "MediaVariant");
 
-  if (payload.replaceExisting) {
+  const importMode: "merge" | "replace" = payload.importMode === "replace" || payload.replaceExisting === true ? "replace" : "merge";
+
+  if (importMode === "replace") {
     await deleteMany([
       ...existingInventory.map((item) => ({ pk: `VENUE#${venueId}`, sk: `INVENTORY#${item.id}` })),
       ...existingVariants.map((item) => ({ pk: `VENUE#${venueId}`, sk: `VARIANT#${item.id}` })),
@@ -1385,6 +1393,13 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
   const now = isoNow();
   const inventoryRecords: InventoryItem[] = [];
   const variantsByKey = new Map<string, MediaVariantItem>();
+  const existingInventoryByDisplayId = new Map(existingInventory.map((item) => [normalizeText(item.inventoryId), item]));
+  const existingVariantsByKey = new Map(existingVariants.map((variant) => [variant.mediaVariantKey, variant]));
+  const importedInventoryIds = new Set<string>();
+  let addedCount = 0;
+  let updatedCount = 0;
+  let preservedInventoryMappingCount = 0;
+  let preservedVariantMappingCount = 0;
 
   for (const [index, raw] of items.entries()) {
     const resolvedMap =
@@ -1408,7 +1423,13 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
     const variantLabel = variantIdentity.variantLabel;
     const mediaType = variantIdentity.mediaType;
     const inventoryId = raw.inventoryId || raw.id || `INV-${Date.now()}-${index + 1}`;
-    const itemId = raw.id || makeId("inventory", venueId, inventoryId);
+    const matchedExistingItem = existingInventoryByDisplayId.get(normalizeText(inventoryId));
+    const existingItem = importMode === "merge" ? matchedExistingItem : undefined;
+    const itemId = existingItem?.id || raw.id || makeId("inventory", venueId, inventoryId);
+    importedInventoryIds.add(normalizeText(inventoryId));
+    if (matchedExistingItem) updatedCount += 1;
+    else addedCount += 1;
+    if (importMode === "merge" && existingItem?.liftProductMapping) preservedInventoryMappingCount += 1;
 
     const nextItem: InventoryItem = {
       entityType: "InventoryItem",
@@ -1420,67 +1441,110 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
       mediaVariantKey,
       variantLabel,
       mediaType,
-      unitNumber: raw.unitNumber,
-      x: typeof raw.x === "number" ? raw.x : null,
-      y: typeof raw.y === "number" ? raw.y : null,
+      unitNumber: raw.unitNumber ?? existingItem?.unitNumber,
+      liftProductMapping: existingItem?.liftProductMapping,
+      x: typeof raw.x === "number" ? raw.x : existingItem?.x ?? null,
+      y: typeof raw.y === "number" ? raw.y : existingItem?.y ?? null,
       isActive: raw.isActive ?? true,
-      mapVisibilityMode: raw.mapVisibilityMode || "hidden",
+      mapVisibilityMode: raw.mapVisibilityMode || existingItem?.mapVisibilityMode || "hidden",
       trimHeight,
       trimWidth,
-      safeHeight: numberOrNull(raw.safeHeight),
-      safeWidth: numberOrNull(raw.safeWidth),
-      substrate: raw.substrate,
-      finishing: raw.finishing,
-      locationDetail: raw.locationDetail,
-      notes: raw.notes,
+      safeHeight: raw.safeHeight === undefined ? existingItem?.safeHeight ?? null : numberOrNull(raw.safeHeight),
+      safeWidth: raw.safeWidth === undefined ? existingItem?.safeWidth ?? null : numberOrNull(raw.safeWidth),
+      substrate: raw.substrate ?? existingItem?.substrate,
+      finishing: raw.finishing ?? existingItem?.finishing,
+      locationDetail: raw.locationDetail ?? existingItem?.locationDetail,
+      notes: raw.notes ?? existingItem?.notes,
       productionRoutingOverride:
         raw.productionRoutingOverride === "external" || raw.productionRoutingOverride === "primary"
           ? raw.productionRoutingOverride
-          : undefined,
-      externalVendorIdOverride: raw.productionRoutingOverride === "external" ? raw.externalVendorIdOverride : undefined,
-      dpi: numberOrNull(raw.dpi),
-      bleedTop: numberOrNull(raw.bleedTop),
-      bleedRight: numberOrNull(raw.bleedRight),
-      bleedBottom: numberOrNull(raw.bleedBottom),
-      bleedLeft: numberOrNull(raw.bleedLeft),
-      createdAt: now,
+          : existingItem?.productionRoutingOverride,
+      externalVendorIdOverride:
+        raw.productionRoutingOverride === "external"
+          ? raw.externalVendorIdOverride
+          : raw.productionRoutingOverride === "primary"
+            ? undefined
+            : existingItem?.externalVendorIdOverride,
+      dpi: raw.dpi === undefined ? existingItem?.dpi ?? null : numberOrNull(raw.dpi),
+      bleedTop: raw.bleedTop === undefined ? existingItem?.bleedTop ?? null : numberOrNull(raw.bleedTop),
+      bleedRight: raw.bleedRight === undefined ? existingItem?.bleedRight ?? null : numberOrNull(raw.bleedRight),
+      bleedBottom: raw.bleedBottom === undefined ? existingItem?.bleedBottom ?? null : numberOrNull(raw.bleedBottom),
+      bleedLeft: raw.bleedLeft === undefined ? existingItem?.bleedLeft ?? null : numberOrNull(raw.bleedLeft),
+      createdAt: existingItem?.createdAt || now,
       updatedAt: now,
     };
+    if (nextItem.productionRoutingOverride !== "external") {
+      nextItem.externalVendorIdOverride = undefined;
+    }
     inventoryRecords.push(nextItem);
 
     if (!variantsByKey.has(mediaVariantKey)) {
+      const existingVariant = importMode === "merge" ? existingVariantsByKey.get(mediaVariantKey) : undefined;
+      if (existingVariant?.liftProductMapping) preservedVariantMappingCount += 1;
       variantsByKey.set(mediaVariantKey, {
+        ...existingVariant,
         entityType: "MediaVariant",
-        id: makeId("variant", venueId, mediaVariantKey),
+        id: existingVariant?.id || makeId("variant", venueId, mediaVariantKey),
         venueId,
         mediaVariantKey,
         label: variantLabel,
         mediaType,
-        color: raw.color,
-        abbreviation: raw.abbreviation,
-        unitNumber: raw.unitNumber,
-        productionRouting: "primary",
-        externalVendorId: undefined,
+        color: raw.color ?? existingVariant?.color,
+        abbreviation: raw.abbreviation ?? existingVariant?.abbreviation,
+        unitNumber: existingVariant?.unitNumber ?? raw.unitNumber,
+        productionRouting: existingVariant?.productionRouting || "primary",
+        externalVendorId: existingVariant?.externalVendorId,
+        liftProductMapping: existingVariant?.liftProductMapping,
         updatedAt: now,
       });
     }
   }
+
+  const retainedExistingInventory = importMode === "merge"
+    ? existingInventory.filter((item) => !importedInventoryIds.has(normalizeText(item.inventoryId)))
+    : [];
+  const nextInventorySet = importMode === "merge"
+    ? [...retainedExistingInventory, ...inventoryRecords]
+    : inventoryRecords;
 
   await putMany([
     ...inventoryRecords.map((item) => buildInventoryRecord(item)),
     ...Array.from(variantsByKey.values()).map((item) => buildVariantRecord(item)),
   ]);
 
+  await reconcileVenueVariantsForInventorySet(venueId, nextInventorySet);
+  venueDetailResponseCache.delete(`venue-detail:${venueId}:${authScopeCacheKey(auth)}`);
+  const nextVenueItems = await queryByPk(`VENUE#${venueId}`);
+  const nextVariantKeys = new Set(nextVenueItems
+    .filter((item): item is MediaVariantItem => item.entityType === "MediaVariant")
+    .map((variant) => variant.mediaVariantKey));
+  const orphanedVariantCount = existingVariants.filter((variant) => !nextVariantKeys.has(variant.mediaVariantKey)).length;
+  const retainedMissingCount = retainedExistingInventory.length;
+
   await writeAudit(`VENUE_ADMIN#${venueId}`, "inventory.imported", auth.actorName, {
     venueId,
     importedCount: inventoryRecords.length,
-    replaceExisting: Boolean(payload.replaceExisting),
+    importMode,
+    replaceExisting: importMode === "replace",
+    addedCount,
+    updatedCount,
+    retainedMissingCount,
+    preservedInventoryMappingCount,
+    preservedVariantMappingCount,
+    orphanedVariantCount,
   });
 
   return {
     importedCount: inventoryRecords.length,
     variantCount: variantsByKey.size,
-    replaceExisting: Boolean(payload.replaceExisting),
+    importMode,
+    replaceExisting: importMode === "replace",
+    addedCount,
+    updatedCount,
+    retainedMissingCount,
+    preservedInventoryMappingCount,
+    preservedVariantMappingCount,
+    orphanedVariantCount,
   };
 }
 
