@@ -1,9 +1,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Link2, LockKeyhole, MapPin, PackageSearch, Search, Settings2, UnlockKeyhole, Upload, X } from "lucide-react";
+import { Download, Link2, LockKeyhole, MapPin, PackageSearch, PencilLine, Search, Settings2, UnlockKeyhole, Upload, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import AppShell from "../../app/AppShell";
 import { useApiClient } from "../../api/useApiClient";
 import {
+  fetchAdminSettings,
   fetchCustomerSettings,
   fetchLiftProducts,
   type ApiCustomerVendor,
@@ -17,6 +18,7 @@ import PageHeader from "../../components/common/PageHeader";
 import InventoryScopeModal from "../../components/projects/InventoryScopeModal";
 import { useSharedMapWorkspace } from "../../components/maps/useSharedMapWorkspace";
 import { mockMaps } from "../../logic/mockAssignment";
+import { triggerBrowserDownload } from "../../logic/downloads";
 import {
   isRequiredCanonicalField,
   normalizeInventoryImportRows,
@@ -91,7 +93,74 @@ type CustomerRecord = {
 };
 
 type DetailTab = "setup" | "inventory" | "placement";
-type ImportStep = "source" | "validate" | "review" | "confirm";
+type ImportStep = "source" | "validate" | "review" | "confirm" | "results";
+type ImportPlanSnapshot = {
+  mode: "merge" | "replace";
+  incomingCount: number;
+  unknownMapCount: number;
+  matchedCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+  addedCount: number;
+  retainedMissingCount: number;
+  replaceRemovalCount: number;
+  rowMappingsPreserved: number;
+  variantMappingsPreserved: number;
+  existingVariantsReused: number;
+  newVariantCount: number;
+  orphanedVariantCount: number;
+  orphanedVariantKeys: string[];
+};
+type InventoryImportResponse = {
+  importedCount: number;
+  variantCount: number;
+  importMode: "merge" | "replace";
+  replaceExisting: boolean;
+  addedCount: number;
+  updatedCount: number;
+  retainedMissingCount: number;
+  preservedInventoryMappingCount: number;
+  preservedVariantMappingCount: number;
+  orphanedVariantCount: number;
+};
+type ImportApplyResult = InventoryImportResponse & {
+  appliedAt: string;
+  sourceLabel: string;
+  plan: ImportPlanSnapshot;
+  risks: Array<{ title: string; detail: string; tone: "warning" | "info" }>;
+};
+type VenueInventoryHistoryEvent = {
+  eventType: string;
+  scopeId?: string;
+  actorName?: string;
+  createdAt: string;
+  detail: Record<string, any>;
+};
+type VenueReadinessAction =
+  | "open_import"
+  | "missing_maps"
+  | "missing_identifiers"
+  | "variant_mapping"
+  | "missing_dimensions"
+  | "placement_unpinned"
+  | "external_vendor_routes"
+  | "duplicate_ids";
+type VenueReadinessItem = {
+  id: string;
+  title: string;
+  detail: string;
+  count: number;
+  tone: "ok" | "warning" | "blocked";
+  action: string;
+  actionId?: VenueReadinessAction;
+  actionLabel?: string;
+};
+type VenueReadinessIssueDetail = {
+  actionId: VenueReadinessAction;
+  label: string;
+  detail: string;
+  tone: "warning" | "blocked";
+};
 type VariantAppearance = {
   color: string;
   abbreviation?: string;
@@ -178,6 +247,60 @@ type PresetEditorState = {
   name: string;
   description: string;
 };
+type BulkInventoryField =
+  | "availability"
+  | "locationId"
+  | "locationDetail"
+  | "mediaType"
+  | "trimHeight"
+  | "trimWidth"
+  | "safeHeight"
+  | "safeWidth"
+  | "substrate"
+  | "finishing"
+  | "dpi"
+  | "bleedTop"
+  | "bleedRight"
+  | "bleedBottom"
+  | "bleedLeft"
+  | "routing"
+  | "unitNumber"
+  | "productMapping"
+  | "notes";
+type BulkInventoryEditDraft = {
+  enabled: Partial<Record<BulkInventoryField, boolean>>;
+  availability: "active" | "inactive_hidden" | "inactive_unavailable";
+  locationId: string;
+  locationDetailMode: "replace" | "clear";
+  locationDetail: string;
+  mediaType: string;
+  trimHeight: string;
+  trimWidth: string;
+  safeHeight: string;
+  safeWidth: string;
+  substrate: string;
+  finishing: string;
+  dpi: string;
+  bleedTop: string;
+  bleedRight: string;
+  bleedBottom: string;
+  bleedLeft: string;
+  routing: "inherit" | "primary" | "external";
+  externalVendorId: string;
+  unitNumberMode: "replace" | "clear";
+  unitNumber: string;
+  productMappingMode: "replace" | "clear";
+  productId: string;
+  productName: string;
+  notesMode: "replace" | "append" | "clear";
+  notes: string;
+};
+type BulkInventoryEditorState = {
+  recordKeys: string[];
+  draft: BulkInventoryEditDraft;
+  error: string;
+  saving: boolean;
+};
 
 const PROFILE_STORAGE_KEY = "adspace360.venue-import-profiles";
 const KNOWN_LIFT_CATALOGS = [
@@ -185,6 +308,98 @@ const KNOWN_LIFT_CATALOGS = [
   { id: "7147", name: "AS360 Station Dom Master Catalog West" },
   { id: "6338", name: "Penn Station Amtrak - AS360" },
 ];
+const VENUE_INVENTORY_IMPORT_HEADERS = [
+  "CustomerName",
+  "VenueName",
+  "MapName",
+  "UnitNumber",
+  "InventoryID",
+  "MediaType",
+  "TrimHeight",
+  "TrimWidth",
+  "SafeHeight",
+  "SafeWidth",
+  "Substrate",
+  "Finishing",
+  "LocationDetail",
+  "Notes",
+  "DPI",
+  "Bleed_Top",
+  "Bleed_Right",
+  "Bleed_Bot",
+  "Bleed_Left",
+  "Active",
+];
+const VENUE_INVENTORY_EXPORT_REFERENCE_HEADERS = [
+  "LiftProductID",
+  "LiftProductName",
+  "LiftCatalogID",
+  "LiftCatalogName",
+  "LiftUnitNumber",
+  "LiftMappingSource",
+  "MapVisibilityReference",
+];
+
+function escapeCsvCell(value: unknown) {
+  const text = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function buildCsvText(headers: string[], rows: Array<Record<string, unknown>>) {
+  return [
+    headers.map(escapeCsvCell).join(","),
+    ...rows.map((row) => headers.map((header) => escapeCsvCell(row[header])).join(",")),
+  ].join("\n");
+}
+
+function slugifyDownloadName(value: string) {
+  return (value || "venue")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "venue";
+}
+
+function downloadCsvText(filename: string, csvTextValue: string) {
+  const blob = new Blob([`\uFEFF${csvTextValue}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  triggerBrowserDownload(url, filename);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function createBulkInventoryEditDraft(): BulkInventoryEditDraft {
+  return {
+    enabled: {},
+    availability: "active",
+    locationId: "",
+    locationDetailMode: "replace",
+    locationDetail: "",
+    mediaType: "",
+    trimHeight: "",
+    trimWidth: "",
+    safeHeight: "",
+    safeWidth: "",
+    substrate: "",
+    finishing: "",
+    dpi: "",
+    bleedTop: "",
+    bleedRight: "",
+    bleedBottom: "",
+    bleedLeft: "",
+    routing: "inherit",
+    externalVendorId: "",
+    unitNumberMode: "replace",
+    unitNumber: "",
+    productMappingMode: "replace",
+    productId: "",
+    productName: "",
+    notesMode: "append",
+    notes: "",
+  };
+}
 const DEFAULT_PENN_SAMPLE_CSV = `Tenant name,Venue name,Room name,Unit Sku,Ad Space Key,Media,Substrate,Trim Height,Trim Width,Safe Area Height,Safe Area Width,Sq Ft,Location,Finishing,Special Instructions,Addl Info,Active Flag
 Intersection,Penn Station,Amtrak Track Level,2SHEET_46x60_48PT,PS-2-001,2-Sheet,48 PT,46.2,60.2,43,57,,Track Level Bay 1,,, ,Y
 Intersection,Penn Station,Amtrak Track Level,2SHEET_46x60_48PT,PS-2-002,2-Sheet,48 PT,46.2,60.2,43,57,,Track Level Bay 2,,, ,Y
@@ -566,12 +781,16 @@ export default function VenueImportPreviewPage() {
   const [rooms, setRooms] = useState<RoomRecord[]>(DEFAULT_ROOMS);
   const [liveVenueInventory, setLiveVenueInventory] = useState<any[]>([]);
   const [liveVenueVariants, setLiveVenueVariants] = useState<LiveVenueVariant[]>([]);
+  const [venueInventoryHistory, setVenueInventoryHistory] = useState<VenueInventoryHistoryEvent[]>([]);
+  const [isInventoryHistoryLoading, setIsInventoryHistoryLoading] = useState(false);
+  const [liftProductIdentifierMode, setLiftProductIdentifierMode] = useState<"unit_number" | "product_id">("unit_number");
   const [venueViewer, setVenueViewer] = useState<ApiVenueDetailResponse["viewer"] | null>(null);
   const [venueInventoryPresets, setVenueInventoryPresets] = useState<ApiVenueInventoryPreset[]>([]);
   const [presetEditor, setPresetEditor] = useState<PresetEditorState | null>(null);
   const [presetSaveError, setPresetSaveError] = useState("");
   const [vendorPicker, setVendorPicker] = useState<VendorPickerState | null>(null);
   const [vendorSearch, setVendorSearch] = useState("");
+  const [bulkInventoryEditor, setBulkInventoryEditor] = useState<BulkInventoryEditorState | null>(null);
   const [liftProductMapper, setLiftProductMapper] = useState<LiftProductMapperState | null>(null);
   const [apiError, setApiError] = useState("");
   const [, setIsVenueDataLoading] = useState(true);
@@ -590,6 +809,7 @@ export default function VenueImportPreviewPage() {
   const [expandedVariantInventoryRefs, setExpandedVariantInventoryRefs] = useState<Set<string>>(() => new Set());
   const [showImportModal, setShowImportModal] = useState(false);
   const [importStep, setImportStep] = useState<ImportStep>("source");
+  const [importApplyResult, setImportApplyResult] = useState<ImportApplyResult | null>(null);
   const [inventoryEditMode, setInventoryEditMode] = useState(false);
   const canEditVenueInventory = venueViewer?.canEditVenueInventory ?? true;
   const [newVenueCustomerName, setNewVenueCustomerName] = useState("");
@@ -631,6 +851,7 @@ export default function VenueImportPreviewPage() {
   const [mapFilter, setMapFilter] = useState("all");
   const [variantFilter, setVariantFilter] = useState("all");
   const [activityFilter, setActivityFilter] = useState<"all" | "active" | "inactive">("all");
+  const [readinessFocus, setReadinessFocus] = useState<{ actionId: VenueReadinessAction; label: string } | null>(null);
   const [headerOverrides, setHeaderOverrides] = useState<Partial<Record<string, VenueImportHeaderOverride>>>({});
   const [profileName, setProfileName] = useState("");
   const [profiles, setProfiles] = useState<ImportProfile[]>([]);
@@ -801,6 +1022,26 @@ export default function VenueImportPreviewPage() {
     }
   }, [request]);
 
+  const loadVenueInventoryHistory = useCallback(
+    async (venueId: string) => {
+      if (!venueId) {
+        setVenueInventoryHistory([]);
+        return;
+      }
+
+      try {
+        setIsInventoryHistoryLoading(true);
+        const response = await request<{ events: VenueInventoryHistoryEvent[] }>(`/api/venues/${venueId}/inventory/history`);
+        setVenueInventoryHistory(response.events || []);
+      } catch {
+        setVenueInventoryHistory([]);
+      } finally {
+        setIsInventoryHistoryLoading(false);
+      }
+    },
+    [request]
+  );
+
   const loadVenueDetailData = useCallback(
     async (venueId: string) => {
       if (!venueId) {
@@ -808,6 +1049,7 @@ export default function VenueImportPreviewPage() {
         setLiveVenueInventory([]);
         setVenueInventoryPresets([]);
         setVenueViewer(null);
+        setVenueInventoryHistory([]);
         return;
       }
 
@@ -852,11 +1094,12 @@ export default function VenueImportPreviewPage() {
               : venue
           )
         );
+        void loadVenueInventoryHistory(venueId);
       } catch (error) {
         setApiError(error instanceof Error ? error.message : "Unable to load venue detail");
       }
     },
-    [request]
+    [loadVenueInventoryHistory, request]
   );
 
   useEffect(() => {
@@ -917,6 +1160,30 @@ export default function VenueImportPreviewPage() {
       cancelled = true;
     };
   }, [activeVenue?.customerId, request]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadLiftIdentifierMode() {
+      try {
+        const response = await fetchAdminSettings({ request });
+        if (cancelled) return;
+        setLiftProductIdentifierMode(
+          response.settings.integrations.primaryPrintVendor.productIdentifierMode === "product_id"
+            ? "product_id"
+            : "unit_number"
+        );
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Failed to load Lift product identifier mode", error);
+        setLiftProductIdentifierMode("unit_number");
+      }
+    }
+
+    void loadLiftIdentifierMode();
+    return () => {
+      cancelled = true;
+    };
+  }, [request]);
 
   const isDetailMode = Boolean(detailVenueId && venues.some((venue) => venue.id === detailVenueId));
   const projectsPath = "/customer/projects";
@@ -1198,8 +1465,13 @@ export default function VenueImportPreviewPage() {
     setMapFilter("all");
     setVariantFilter("all");
     setActivityFilter("all");
+    setReadinessFocus(null);
     setSelectedRecordKeys([]);
-  }, [selectedVenueId, detailTab]);
+  }, [selectedVenueId]);
+
+  useEffect(() => {
+    setSelectedRecordKeys([]);
+  }, [detailTab]);
 
   useEffect(() => {
     if (!draggingPinRecordKey) return;
@@ -1429,20 +1701,122 @@ export default function VenueImportPreviewPage() {
       .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
   }, [effectiveRecords]);
 
-  const rowIssueCounts = useMemo(() => {
-    if (!result) return new Map<number, number>();
-    const counts = new Map<number, number>();
-    result.issues.forEach((issue) => {
-      counts.set(issue.rowNumber, (counts.get(issue.rowNumber) || 0) + 1);
+  const validActiveRoomIds = useMemo(
+    () => new Set(activeVenueRooms.map((room) => room.id)),
+    [activeVenueRooms]
+  );
+
+  const duplicateActiveInventoryIds = useMemo(() => {
+    const counts = new Map<string, number>();
+    effectiveRecords.forEach((record) => {
+      if (!record.isActive) return;
+      const key = normalizeImportMatchKey(record.inventoryId);
+      if (!key) return;
+      counts.set(key, (counts.get(key) || 0) + 1);
     });
-    return counts;
-  }, [result]);
+    return new Set(Array.from(counts.entries()).filter(([, count]) => count > 1).map(([key]) => key));
+  }, [effectiveRecords]);
+
+  function getReadinessIssueDetailsForRecord(record: any): VenueReadinessIssueDetail[] {
+    if (!record.isActive) return [];
+
+    const issues: VenueReadinessIssueDetail[] = [];
+    const vendor = resolveInventoryVendor(record);
+    const appearance = getVariantAppearance(record.mediaVariantKey, record.variantLabel);
+    const isLiftRouted = vendor.route !== "external";
+    const hasUnitCoverage = Boolean(String(record.unitNumber || "").trim());
+    const hasProductIdCoverage = Boolean(record.liftProductMapping?.liftProductId || appearance.liftProductMapping?.liftProductId);
+
+    if (!record.locationId || !validActiveRoomIds.has(record.locationId)) {
+      issues.push({
+        actionId: "missing_maps",
+        label: "Map",
+        detail: "Map link is missing or no longer points to an active venue map.",
+        tone: "blocked",
+      });
+    }
+
+    if (isLiftRouted && liftProductIdentifierMode === "product_id" && !hasProductIdCoverage) {
+      issues.push({
+        actionId: "missing_identifiers",
+        label: "Product ID",
+        detail: "Lift submit mode is Product ID, but this row has no row or variant Product ID mapping.",
+        tone: "blocked",
+      });
+    }
+
+    if (isLiftRouted && liftProductIdentifierMode !== "product_id" && !hasUnitCoverage) {
+      issues.push({
+        actionId: "missing_identifiers",
+        label: "Unit #",
+        detail: "Lift submit mode is Unit Number, but this row has no unit number coverage.",
+        tone: "blocked",
+      });
+    }
+
+    if (isLiftRouted && !hasUnitCoverage && !hasProductIdCoverage) {
+      issues.push({
+        actionId: "variant_mapping",
+        label: "Variant map",
+        detail: "No row-level or variant-level Lift product mapping is available for this inventory row.",
+        tone: "warning",
+      });
+    }
+
+    const missingDimensions = [
+      record.trimHeight == null ? "trim height" : "",
+      record.trimWidth == null ? "trim width" : "",
+      record.safeHeight == null ? "safe height" : "",
+      record.safeWidth == null ? "safe width" : "",
+    ].filter(Boolean);
+    if (missingDimensions.length) {
+      issues.push({
+        actionId: "missing_dimensions",
+        label: "Dimensions",
+        detail: `Missing ${missingDimensions.join(", ")}.`,
+        tone: "warning",
+      });
+    }
+
+    if (vendor.route === "external" && vendor.unresolved) {
+      issues.push({
+        actionId: "external_vendor_routes",
+        label: "Vendor",
+        detail: "This row routes to an external vendor, but the vendor is missing or inactive.",
+        tone: "blocked",
+      });
+    }
+
+    if (duplicateActiveInventoryIds.has(normalizeImportMatchKey(record.inventoryId))) {
+      issues.push({
+        actionId: "duplicate_ids",
+        label: "Duplicate ID",
+        detail: "Another active inventory row uses this same inventory ID.",
+        tone: "blocked",
+      });
+    }
+
+    if (record.x == null || record.y == null) {
+      issues.push({
+        actionId: "placement_unpinned",
+        label: "Map pin",
+        detail: "This active row has not been pinned on the map.",
+        tone: "warning",
+      });
+    }
+
+    return issues;
+  }
 
   const filteredRecords = useMemo(() => {
     if (!effectiveRecords.length) return [];
     const query = rowSearch.trim().toLowerCase();
 
     return effectiveRecords.filter((record) => {
+      if (readinessFocus) {
+        const readinessIssues = getReadinessIssueDetailsForRecord(record);
+        if (!readinessIssues.some((issue) => issue.actionId === readinessFocus.actionId)) return false;
+      }
       if (mapFilter !== "all" && record.mapName !== mapFilter) return false;
       if (variantFilter !== "all" && record.mediaVariantKey !== variantFilter) return false;
       if (activityFilter === "active" && !record.isActive) return false;
@@ -1465,8 +1839,78 @@ export default function VenueImportPreviewPage() {
 
       return searchable.includes(query);
     });
-  }, [activityFilter, customerVendorsById, effectiveRecords, mapFilter, rowSearch, variantFilter, liveVenueVariants, variantAppearanceOverrides]);
+  }, [
+    activityFilter,
+    customerVendorsById,
+    duplicateActiveInventoryIds,
+    effectiveRecords,
+    liftProductIdentifierMode,
+    liveVenueVariants,
+    mapFilter,
+    readinessFocus,
+    rowSearch,
+    validActiveRoomIds,
+    variantFilter,
+    variantAppearanceOverrides,
+  ]);
+
+  const readinessFocusSummary = useMemo(() => {
+    if (!readinessFocus) return null;
+    const matchesFocus = (record: any) =>
+      getReadinessIssueDetailsForRecord(record).some((issue) => issue.actionId === readinessFocus.actionId);
+    const affectedRecords = effectiveRecords.filter(matchesFocus);
+    const visibleAffectedRecords = filteredRecords.filter(matchesFocus);
+    const affectedVariantKeys = new Set(affectedRecords.map((record) => record.mediaVariantKey).filter(Boolean));
+    const affectedMapNames = new Set(affectedRecords.map((record) => record.mapName).filter(Boolean));
+    return {
+      actionId: readinessFocus.actionId,
+      label: readinessFocus.label,
+      totalCount: affectedRecords.length,
+      visibleCount: visibleAffectedRecords.length,
+      variantCount: affectedVariantKeys.size,
+      mapCount: affectedMapNames.size,
+      firstRecord: visibleAffectedRecords[0] || affectedRecords[0] || null,
+      visibleRecordKeys: visibleAffectedRecords.map((record) => record.recordKey),
+    };
+  }, [
+    customerVendorsById,
+    duplicateActiveInventoryIds,
+    effectiveRecords,
+    filteredRecords,
+    liftProductIdentifierMode,
+    liveVenueVariants,
+    readinessFocus,
+    validActiveRoomIds,
+    variantAppearanceOverrides,
+  ]);
+
   const hasInventoryRows = effectiveRecords.length > 0;
+  const bulkEditorRecords = useMemo(
+    () => bulkInventoryEditor
+      ? effectiveRecords.filter((record) => bulkInventoryEditor.recordKeys.includes(record.recordKey))
+      : [],
+    [bulkInventoryEditor, effectiveRecords]
+  );
+  const bulkEditorBackendIds = useMemo(
+    () => bulkEditorRecords.map((record) => getBackendInventoryId(record.recordKey)).filter(Boolean) as string[],
+    [bulkEditorRecords]
+  );
+  const bulkEditorSummary = useMemo(() => {
+    const maps = Array.from(new Set(bulkEditorRecords.map((record) => record.mapName).filter(Boolean))).sort();
+    const variants = Array.from(new Set(bulkEditorRecords.map((record) => record.variantLabel).filter(Boolean))).sort();
+    const mappedRows = bulkEditorRecords.filter((record) => record.liftProductMapping?.liftProductId).length;
+    const inheritedMappings = bulkEditorRecords.filter((record) => {
+      const appearance = getVariantAppearance(record.mediaVariantKey, record.variantLabel);
+      return !record.liftProductMapping?.liftProductId && Boolean(appearance.liftProductMapping?.liftProductId);
+    }).length;
+    return {
+      maps,
+      variants,
+      mappedRows,
+      inheritedMappings,
+      unsavedRows: Math.max(bulkEditorRecords.length - bulkEditorBackendIds.length, 0),
+    };
+  }, [bulkEditorBackendIds.length, bulkEditorRecords, liveVenueVariants, variantAppearanceOverrides]);
 
   const mapOptions = useMemo(
     () => activeVenueRooms.map((room) => room.name).filter((name, index, all) => all.indexOf(name) === index),
@@ -1760,6 +2204,152 @@ export default function VenueImportPreviewPage() {
     }));
   }, [effectiveRecords, liveVenueVariantByKey, variantAppearanceOverrides]);
 
+  const venueReadinessChecklist = useMemo(() => {
+    const validRoomIds = new Set(activeVenueRooms.map((room) => room.id));
+    const activeRecords = effectiveRecords.filter((record) => record.isActive);
+    const activePrimaryRecords = activeRecords.filter((record) => resolveInventoryVendor(record).route !== "external");
+    const duplicateInventoryIds = new Map<string, number>();
+    activeRecords.forEach((record) => {
+      const key = String(record.inventoryId || "").trim().toLowerCase();
+      if (!key) return;
+      duplicateInventoryIds.set(key, (duplicateInventoryIds.get(key) || 0) + 1);
+    });
+
+    const missingMapCount = activeRecords.filter((record) => !record.locationId || !validRoomIds.has(record.locationId)).length;
+    const duplicateIdCount = Array.from(duplicateInventoryIds.values()).filter((count) => count > 1).length;
+    const missingTrimCount = activeRecords.filter((record) => record.trimHeight == null || record.trimWidth == null).length;
+    const missingSafeCount = activeRecords.filter((record) => record.safeHeight == null || record.safeWidth == null).length;
+    const unpinnedCount = activeRecords.filter((record) => record.x == null || record.y == null).length;
+    const externalVendorIssueCount = activeRecords.filter((record) => {
+      const route = resolveInventoryVendor(record);
+      return route.route === "external" && route.unresolved;
+    }).length;
+    const missingUnitCount = activePrimaryRecords.filter((record) => !String(record.unitNumber || "").trim()).length;
+    const missingProductIdCount = activePrimaryRecords.filter((record) => {
+      const appearance = getVariantAppearance(record.mediaVariantKey, record.variantLabel);
+      return !record.liftProductMapping?.liftProductId && !appearance.liftProductMapping?.liftProductId;
+    }).length;
+    const activePrimaryVariantKeys = new Set(activePrimaryRecords.map((record) => record.mediaVariantKey));
+    const variantMappingGapCount = variantRows.filter((variant) => {
+      if (!activePrimaryVariantKeys.has(variant.key)) return false;
+      const appearance = getVariantAppearance(variant.key, variant.label);
+      return !variant.unitNumber && !appearance.liftProductMapping?.liftProductId;
+    }).length;
+
+    const identifierLabel = liftProductIdentifierMode === "product_id" ? "Product ID" : "Unit Number";
+    const mappingGapCount = liftProductIdentifierMode === "product_id" ? missingProductIdCount : missingUnitCount;
+    const mappingAction = liftProductIdentifierMode === "product_id"
+      ? "Map Lift products on variants or rows before submitting Lift orders."
+      : "Add unit numbers directly or map Lift products to populate unit numbers.";
+
+    const items: VenueReadinessItem[] = [
+      {
+        id: "inventory",
+        title: "Inventory loaded",
+        detail: `${activeRecords.length} active row${activeRecords.length === 1 ? "" : "s"} available for project scopes.`,
+        count: activeRecords.length,
+        tone: activeRecords.length ? "ok" : "blocked",
+        action: activeRecords.length ? "Ready" : "Import or add active inventory rows.",
+        actionId: activeRecords.length ? undefined : "open_import",
+        actionLabel: activeRecords.length ? undefined : "Import inventory",
+      },
+      {
+        id: "maps",
+        title: "Map links valid",
+        detail: missingMapCount
+          ? `${missingMapCount} active row${missingMapCount === 1 ? "" : "s"} reference missing maps.`
+          : "All active rows point to configured venue maps.",
+        count: missingMapCount,
+        tone: missingMapCount ? "blocked" : "ok",
+        action: missingMapCount ? "Correct the Map column or create the missing room/map." : "Ready",
+        actionId: missingMapCount ? "missing_maps" : undefined,
+        actionLabel: missingMapCount ? "Review rows" : undefined,
+      },
+      {
+        id: "identifiers",
+        title: `${identifierLabel} coverage`,
+        detail: mappingGapCount
+          ? `${mappingGapCount} Lift-routed active row${mappingGapCount === 1 ? "" : "s"} missing ${identifierLabel.toLowerCase()} coverage.`
+          : `Lift-routed active rows have ${identifierLabel.toLowerCase()} coverage.`,
+        count: mappingGapCount,
+        tone: mappingGapCount ? "blocked" : "ok",
+        action: mappingGapCount ? mappingAction : "Ready",
+        actionId: mappingGapCount ? "missing_identifiers" : undefined,
+        actionLabel: mappingGapCount ? "Review rows" : undefined,
+      },
+      {
+        id: "variant-mapping",
+        title: "Variant mapping defaults",
+        detail: variantMappingGapCount
+          ? `${variantMappingGapCount} active Lift-routed variant${variantMappingGapCount === 1 ? "" : "s"} have no shared unit/product mapping.`
+          : "Active Lift-routed variants have shared mapping defaults or row-level coverage.",
+        count: variantMappingGapCount,
+        tone: variantMappingGapCount ? "warning" : "ok",
+        action: variantMappingGapCount ? "Map products at the variant level where possible." : "Ready",
+        actionId: variantMappingGapCount ? "variant_mapping" : undefined,
+        actionLabel: variantMappingGapCount ? "Review rows" : undefined,
+      },
+      {
+        id: "dimensions",
+        title: "Dimensions complete",
+        detail: [missingTrimCount ? `${missingTrimCount} missing trim` : "", missingSafeCount ? `${missingSafeCount} missing safe area` : ""]
+          .filter(Boolean)
+          .join(" · ") || "Trim and safe-area dimensions are complete for active rows.",
+        count: missingTrimCount + missingSafeCount,
+        tone: missingTrimCount || missingSafeCount ? "warning" : "ok",
+        action: missingTrimCount || missingSafeCount ? "Fill dimensions before proofing/order validation." : "Ready",
+        actionId: missingTrimCount || missingSafeCount ? "missing_dimensions" : undefined,
+        actionLabel: missingTrimCount || missingSafeCount ? "Review rows" : undefined,
+      },
+      {
+        id: "placement",
+        title: "Map placement",
+        detail: unpinnedCount
+          ? `${unpinnedCount} active row${unpinnedCount === 1 ? "" : "s"} still need map pins.`
+          : "All active rows have map placement coordinates.",
+        count: unpinnedCount,
+        tone: unpinnedCount ? "warning" : "ok",
+        action: unpinnedCount ? "Use Map Placement to pin active inventory." : "Ready",
+        actionId: unpinnedCount ? "placement_unpinned" : undefined,
+        actionLabel: unpinnedCount ? "Open placement" : undefined,
+      },
+      {
+        id: "vendors",
+        title: "External vendor routes",
+        detail: externalVendorIssueCount
+          ? `${externalVendorIssueCount} external-routed row${externalVendorIssueCount === 1 ? "" : "s"} need an active vendor.`
+          : "External-routed rows have active vendor assignments.",
+        count: externalVendorIssueCount,
+        tone: externalVendorIssueCount ? "blocked" : "ok",
+        action: externalVendorIssueCount ? "Assign an active external vendor or return route to primary." : "Ready",
+        actionId: externalVendorIssueCount ? "external_vendor_routes" : undefined,
+        actionLabel: externalVendorIssueCount ? "Review rows" : undefined,
+      },
+      {
+        id: "duplicates",
+        title: "Inventory IDs unique",
+        detail: duplicateIdCount
+          ? `${duplicateIdCount} duplicate active inventory ID group${duplicateIdCount === 1 ? "" : "s"} found.`
+          : "Active inventory IDs are unique.",
+        count: duplicateIdCount,
+        tone: duplicateIdCount ? "blocked" : "ok",
+        action: duplicateIdCount ? "Resolve duplicate inventory IDs before importing or assigning artwork." : "Ready",
+        actionId: duplicateIdCount ? "duplicate_ids" : undefined,
+        actionLabel: duplicateIdCount ? "Review rows" : undefined,
+      },
+    ];
+
+    const blockerCount = items.filter((item) => item.tone === "blocked").length;
+    const warningCount = items.filter((item) => item.tone === "warning").length;
+    return {
+      items,
+      blockerCount,
+      warningCount,
+      readyCount: items.length - blockerCount - warningCount,
+      identifierMode: liftProductIdentifierMode,
+    };
+  }, [activeVenueRooms, effectiveRecords, liftProductIdentifierMode, liveVenueVariants, variantAppearanceOverrides, variantRows]);
+
   const selectedRoomVariantGroups = useMemo(() => {
     if (!selectedRoom) return [];
 
@@ -1862,20 +2452,6 @@ export default function VenueImportPreviewPage() {
         .filter((record) => record.isPinned),
     [pinStateOverrides, selectedRoomImportRecords]
   );
-
-  const recordIssueDetailsByKey = useMemo(() => {
-    const issues = new Map<string, string[]>();
-
-    effectiveRecords.forEach((record) => {
-      const rowIssues: string[] = [];
-      if (!String(record.unitNumber || "").trim()) {
-        rowIssues.push("Missing unit number. Lift order posting depends on a valid unit number.");
-      }
-      if (rowIssues.length) issues.set(record.recordKey, rowIssues);
-    });
-
-    return issues;
-  }, [effectiveRecords]);
 
   async function onFileChange(file: File | null) {
     if (!file) return;
@@ -2012,6 +2588,158 @@ export default function VenueImportPreviewPage() {
 
   function removeProfile(profileId: string) {
     setProfiles((current) => current.filter((profile) => profile.id !== profileId));
+  }
+
+  function resetInventoryImportSource() {
+    setCsvText("");
+    setSourceLabel("No file loaded");
+    setLoadTone("idle");
+    setHeaderOverrides({});
+    setImportApplyResult(null);
+  }
+
+  function openInventoryImportModal() {
+    setImportStep("source");
+    setImportApplyResult(null);
+    setShowImportModal(true);
+  }
+
+  function closeInventoryImportModal() {
+    setShowImportModal(false);
+    if (importStep === "results") {
+      resetInventoryImportSource();
+      setImportStep("source");
+    }
+  }
+
+  function applyReadinessItemAction(item: VenueReadinessItem) {
+    if (!item.actionId) return;
+
+    setSelectedRecordKeys([]);
+
+    if (item.actionId === "open_import") {
+      openInventoryImportModal();
+      return;
+    }
+
+    if (item.actionId === "placement_unpinned") {
+      const firstUnpinned = effectiveRecords.find(
+        (record) => record.isActive && (record.x == null || record.y == null) && record.locationId && validActiveRoomIds.has(record.locationId)
+      );
+      if (firstUnpinned?.locationId) {
+        setSelectedRoomId(firstUnpinned.locationId);
+      }
+      setReadinessFocus(null);
+      setDetailTab("placement");
+      setPlacementSearch("");
+      setPlacementVariantFilter("all");
+      setPlacementPinFilter("awaiting");
+      return;
+    }
+
+    setDetailTab("inventory");
+    setReadinessFocus({ actionId: item.actionId, label: item.title });
+    setRowSearch("");
+    setMapFilter("all");
+    setVariantFilter("all");
+    setActivityFilter("all");
+  }
+
+  function selectFocusedReadinessRows() {
+    if (!readinessFocusSummary?.visibleRecordKeys.length) return;
+    setSelectedRecordKeys(readinessFocusSummary.visibleRecordKeys);
+  }
+
+  function openFocusedReadinessBulkEdit() {
+    if (!readinessFocusSummary?.visibleRecordKeys.length || !inventoryEditMode || !canEditVenueInventory) return;
+    setSelectedRecordKeys(readinessFocusSummary.visibleRecordKeys);
+    setBulkInventoryEditor({
+      recordKeys: readinessFocusSummary.visibleRecordKeys,
+      draft: createBulkInventoryEditDraft(),
+      error: "",
+      saving: false,
+    });
+  }
+
+  function openFocusedReadinessVendorPicker() {
+    if (!readinessFocusSummary?.visibleRecordKeys.length || !inventoryEditMode || !canEditVenueInventory) return;
+    setSelectedRecordKeys(readinessFocusSummary.visibleRecordKeys);
+    setVendorPicker({ recordKeys: readinessFocusSummary.visibleRecordKeys });
+  }
+
+  function openFocusedReadinessProductMapper() {
+    const record = readinessFocusSummary?.firstRecord;
+    if (!record) return;
+    const variantIndex = variantRows.findIndex((variant) => variant.key === record.mediaVariantKey);
+    const appearance = getVariantAppearance(record.mediaVariantKey, record.variantLabel, Math.max(variantIndex, 0));
+    openInventoryLiftProductMapper(record, appearance);
+  }
+
+  function openFocusedReadinessPlacement() {
+    const record = readinessFocusSummary?.firstRecord;
+    if (!record) return;
+    if (record.locationId && validActiveRoomIds.has(record.locationId)) {
+      setSelectedRoomId(record.locationId);
+    }
+    setDetailTab("placement");
+    setPlacementSearch("");
+    setPlacementVariantFilter("all");
+    setPlacementPinFilter("awaiting");
+  }
+
+  function downloadBlankInventoryTemplate() {
+    if (!activeVenue) return;
+    const csv = buildCsvText(VENUE_INVENTORY_IMPORT_HEADERS, []);
+    const filename = `${slugifyDownloadName(activeVenue.name)}-inventory-template.csv`;
+    downloadCsvText(filename, csv);
+  }
+
+  function downloadCurrentVenueInventoryCsv() {
+    if (!activeVenue) return;
+    const headers = [...VENUE_INVENTORY_IMPORT_HEADERS, ...VENUE_INVENTORY_EXPORT_REFERENCE_HEADERS];
+    const rows = effectiveRecords.map((record) => {
+      const appearance = getVariantAppearance(record.mediaVariantKey, record.variantLabel);
+      const rowMapping = record.liftProductMapping;
+      const variantMapping = appearance.liftProductMapping;
+      const mapping = rowMapping || variantMapping || {};
+      const mappingSource = rowMapping?.liftProductId
+        ? "Row"
+        : variantMapping?.liftProductId
+          ? "Variant"
+          : "";
+      return {
+        CustomerName: record.customerName || activeVenue.customerName || "",
+        VenueName: record.venueName || activeVenue.name || "",
+        MapName: record.mapName || "",
+        UnitNumber: record.unitNumber || "",
+        InventoryID: record.inventoryId || "",
+        MediaType: record.mediaType || "",
+        TrimHeight: record.trimHeight ?? "",
+        TrimWidth: record.trimWidth ?? "",
+        SafeHeight: record.safeHeight ?? "",
+        SafeWidth: record.safeWidth ?? "",
+        Substrate: record.substrate || "",
+        Finishing: record.finishing || "",
+        LocationDetail: record.locationDetail || "",
+        Notes: record.notes || "",
+        DPI: record.dpi ?? "",
+        Bleed_Top: record.bleedTop ?? "",
+        Bleed_Right: record.bleedRight ?? "",
+        Bleed_Bot: record.bleedBottom ?? "",
+        Bleed_Left: record.bleedLeft ?? "",
+        Active: record.isActive ? "Y" : "N",
+        LiftProductID: mapping.liftProductId || "",
+        LiftProductName: mapping.liftProductName || "",
+        LiftCatalogID: mapping.liftCatalogId || "",
+        LiftCatalogName: mapping.liftCatalogName || "",
+        LiftUnitNumber: mapping.liftUnitNumber || "",
+        LiftMappingSource: mappingSource,
+        MapVisibilityReference: record.isActive ? "included" : record.mapVisibilityMode || "hidden",
+      };
+    });
+    const dateToken = new Date().toISOString().slice(0, 10);
+    const filename = `${slugifyDownloadName(activeVenue.name)}-current-inventory-${dateToken}.csv`;
+    downloadCsvText(filename, buildCsvText(headers, rows));
   }
 
   function updateActiveVenue(
@@ -2476,7 +3204,7 @@ export default function VenueImportPreviewPage() {
     if (!activeVenue || !result?.records?.length) return;
 
     try {
-      await request(`/api/venues/${activeVenue.id}/inventory/import`, {
+      const response = await request<InventoryImportResponse>(`/api/venues/${activeVenue.id}/inventory/import`, {
         method: "POST",
         body: JSON.stringify({
           importMode: inventoryImportMode,
@@ -2508,14 +3236,21 @@ export default function VenueImportPreviewPage() {
           })),
         }),
       });
-      setCsvText("");
-      setSourceLabel("No file loaded");
-      setLoadTone("idle");
-      setHeaderOverrides({});
-      setShowImportModal(false);
-      setImportStep("source");
+      setImportApplyResult({
+        ...response,
+        appliedAt: new Date().toISOString(),
+        sourceLabel: isUsingPennSampleInventory ? "Penn Station sample" : sourceLabel,
+        plan: { ...importPlan, orphanedVariantKeys: [...importPlan.orphanedVariantKeys] },
+        risks: importRisks,
+      });
+      setImportStep("results");
+      setLoadTone("success");
       await loadVenueDashboardData();
       await loadVenueDetailData(activeVenue.id);
+      setInventorySaveState({
+        tone: "saved",
+        message: `${response.importedCount} inventory row${response.importedCount === 1 ? "" : "s"} imported.`,
+      });
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Unable to import venue inventory");
     }
@@ -2919,6 +3654,286 @@ export default function VenueImportPreviewPage() {
     );
   }
 
+  function openBulkInventoryEditor() {
+    if (!selectedRecordKeys.length || !inventoryEditMode || !canEditVenueInventory) return;
+    setBulkInventoryEditor({
+      recordKeys: selectedRecordKeys,
+      draft: createBulkInventoryEditDraft(),
+      error: "",
+      saving: false,
+    });
+  }
+
+  function patchBulkInventoryDraft(patch: Partial<BulkInventoryEditDraft>) {
+    setBulkInventoryEditor((current) =>
+      current
+        ? {
+            ...current,
+            error: "",
+            draft: {
+              ...current.draft,
+              ...patch,
+            },
+          }
+        : current
+    );
+  }
+
+  function toggleBulkInventoryField(field: BulkInventoryField) {
+    setBulkInventoryEditor((current) =>
+      current
+        ? {
+            ...current,
+            error: "",
+            draft: {
+              ...current.draft,
+              enabled: {
+                ...current.draft.enabled,
+                [field]: !current.draft.enabled[field],
+              },
+            },
+          }
+        : current
+    );
+  }
+
+  function bulkNumberValue(value: string, fieldLabel: string) {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const next = Number(trimmed);
+    if (!Number.isFinite(next)) throw new Error(`${fieldLabel} must be a number.`);
+    return next;
+  }
+
+  function buildBulkInventoryPayload(draft: BulkInventoryEditDraft) {
+    const patch: Record<string, unknown> = {};
+    const clearFields: string[] = [];
+    const enabledFields = Object.entries(draft.enabled).filter(([, enabled]) => enabled).map(([field]) => field);
+    if (!enabledFields.length) throw new Error("Choose at least one field to update.");
+
+    if (draft.enabled.availability) {
+      if (draft.availability === "active") {
+        patch.isActive = true;
+      } else {
+        patch.isActive = false;
+        patch.mapVisibilityMode = draft.availability === "inactive_unavailable" ? "show_unavailable" : "hidden";
+      }
+    }
+    if (draft.enabled.locationId) {
+      if (!draft.locationId) throw new Error("Choose a map before applying the map change.");
+      patch.locationId = draft.locationId;
+    }
+    if (draft.enabled.locationDetail) {
+      if (draft.locationDetailMode === "clear") clearFields.push("locationDetail");
+      else {
+        if (!draft.locationDetail.trim()) throw new Error("Location detail is required when replacing that field.");
+        patch.locationDetail = draft.locationDetail.trim();
+      }
+    }
+    if (draft.enabled.mediaType) {
+      if (!draft.mediaType.trim()) throw new Error("Media type is required when that field is selected.");
+      patch.mediaType = draft.mediaType.trim();
+    }
+    if (draft.enabled.trimHeight) patch.trimHeight = bulkNumberValue(draft.trimHeight, "Trim height");
+    if (draft.enabled.trimWidth) patch.trimWidth = bulkNumberValue(draft.trimWidth, "Trim width");
+    if (draft.enabled.safeHeight) patch.safeHeight = bulkNumberValue(draft.safeHeight, "Safe height");
+    if (draft.enabled.safeWidth) patch.safeWidth = bulkNumberValue(draft.safeWidth, "Safe width");
+    if (draft.enabled.substrate) {
+      if (!draft.substrate.trim()) throw new Error("Substrate is required when that field is selected.");
+      patch.substrate = draft.substrate.trim();
+    }
+    if (draft.enabled.finishing) {
+      if (!draft.finishing.trim()) throw new Error("Finishing is required when that field is selected.");
+      patch.finishing = draft.finishing.trim();
+    }
+    if (draft.enabled.dpi) patch.dpi = bulkNumberValue(draft.dpi, "DPI");
+    if (draft.enabled.bleedTop) patch.bleedTop = bulkNumberValue(draft.bleedTop, "Bleed top");
+    if (draft.enabled.bleedRight) patch.bleedRight = bulkNumberValue(draft.bleedRight, "Bleed right");
+    if (draft.enabled.bleedBottom) patch.bleedBottom = bulkNumberValue(draft.bleedBottom, "Bleed bottom");
+    if (draft.enabled.bleedLeft) patch.bleedLeft = bulkNumberValue(draft.bleedLeft, "Bleed left");
+    if (draft.enabled.routing) {
+      if (draft.routing === "inherit") {
+        clearFields.push("productionRoutingOverride", "externalVendorIdOverride");
+      } else if (draft.routing === "primary") {
+        patch.productionRoutingOverride = "primary";
+        clearFields.push("externalVendorIdOverride");
+      } else {
+        if (!draft.externalVendorId) throw new Error("Choose an external vendor before applying that route.");
+        patch.productionRoutingOverride = "external";
+        patch.externalVendorIdOverride = draft.externalVendorId;
+      }
+    }
+    if (draft.enabled.unitNumber) {
+      if (draft.unitNumberMode === "clear") clearFields.push("unitNumber");
+      else {
+        if (!draft.unitNumber.trim()) throw new Error("Unit number is required when replacing that field.");
+        patch.unitNumber = draft.unitNumber.trim();
+      }
+    }
+    if (draft.enabled.productMapping) {
+      if (draft.productMappingMode === "clear") {
+        clearFields.push("liftProductMapping");
+      } else {
+        const productId = Number(draft.productId.trim());
+        if (!Number.isFinite(productId)) throw new Error("Product ID must be a number.");
+        patch.liftProductMapping = {
+          liftProductId: productId,
+          liftProductName: draft.productName.trim() || undefined,
+          liftUnitNumber: draft.unitNumberMode === "replace" && draft.unitNumber.trim() ? draft.unitNumber.trim() : undefined,
+        };
+      }
+    }
+    if (draft.enabled.notes) {
+      if (draft.notesMode === "clear") clearFields.push("notes");
+      else {
+        if (!draft.notes.trim()) throw new Error("Note text is required before applying notes.");
+        patch.notes = draft.notes.trim();
+      }
+    }
+
+    return {
+      patch,
+      clearFields: Array.from(new Set(clearFields)),
+      notesMode: draft.enabled.notes ? draft.notesMode : "replace",
+      enabledFields,
+    };
+  }
+
+  function describeBulkInventoryChanges(draft: BulkInventoryEditDraft) {
+    const labels: string[] = [];
+    if (draft.enabled.availability) labels.push(`Availability: ${draft.availability === "active" ? "Active" : draft.availability === "inactive_unavailable" ? "Inactive, show unavailable" : "Inactive, hidden"}`);
+    if (draft.enabled.locationId) labels.push("Map");
+    if (draft.enabled.locationDetail) labels.push(draft.locationDetailMode === "clear" ? "Clear location detail" : "Location detail");
+    if (draft.enabled.mediaType) labels.push("Media type");
+    if (draft.enabled.trimHeight || draft.enabled.trimWidth) labels.push("Trim dimensions");
+    if (draft.enabled.safeHeight || draft.enabled.safeWidth) labels.push("Safe dimensions");
+    if (draft.enabled.substrate) labels.push("Substrate");
+    if (draft.enabled.finishing) labels.push("Finishing");
+    if (draft.enabled.dpi) labels.push("DPI");
+    if (draft.enabled.bleedTop || draft.enabled.bleedRight || draft.enabled.bleedBottom || draft.enabled.bleedLeft) labels.push("Bleed");
+    if (draft.enabled.routing) labels.push(`Routing: ${draft.routing === "inherit" ? "Inherit variant" : draft.routing === "primary" ? "Primary print vendor" : "External vendor"}`);
+    if (draft.enabled.unitNumber) labels.push(draft.unitNumberMode === "clear" ? "Clear unit number" : "Unit number");
+    if (draft.enabled.productMapping) labels.push(draft.productMappingMode === "clear" ? "Clear row product mapping" : "Row product mapping");
+    if (draft.enabled.notes) labels.push(draft.notesMode === "clear" ? "Clear notes" : draft.notesMode === "append" ? "Append notes" : "Replace notes");
+    return labels;
+  }
+
+  function formatInventoryHistoryEventTitle(event: VenueInventoryHistoryEvent) {
+    switch (event.eventType) {
+      case "inventory.imported":
+        return event.detail?.importMode === "replace" ? "Inventory replaced" : "Inventory merged";
+      case "inventory.bulk_updated":
+        return "Bulk inventory edit";
+      case "inventory.updated":
+        return "Inventory row updated";
+      case "inventory.deleted":
+        return "Inventory row deleted";
+      case "variant.updated":
+        return "Media variant updated";
+      case "inventory_preset.created":
+        return "Inventory preset created";
+      case "inventory_preset.updated":
+        return "Inventory preset updated";
+      case "inventory_preset.archived":
+        return "Inventory preset archived";
+      default:
+        return event.eventType.replace(/[._]/g, " ");
+    }
+  }
+
+  function formatInventoryHistoryMeta(event: VenueInventoryHistoryEvent) {
+    const detail = event.detail || {};
+    if (event.eventType === "inventory.imported") {
+      const pieces = [
+        `${detail.importedCount ?? 0} rows`,
+        `${detail.addedCount ?? 0} added`,
+        `${detail.updatedCount ?? 0} updated`,
+        detail.importMode === "merge" ? `${detail.retainedMissingCount ?? 0} retained` : "replace mode",
+      ];
+      return pieces.join(" · ");
+    }
+    if (event.eventType === "inventory.bulk_updated") {
+      const fields = [...(detail.patchFields || []), ...(detail.clearFields || [])].filter(Boolean);
+      return [
+        `${detail.updatedCount ?? 0} updated`,
+        `${detail.failedCount ?? 0} failed`,
+        fields.length ? fields.join(", ") : "No fields listed",
+      ].join(" · ");
+    }
+    if (event.eventType === "variant.updated") {
+      const changes = Object.keys(detail.changes || {});
+      return changes.length ? changes.join(", ") : "Variant settings changed";
+    }
+    if (event.eventType.startsWith("inventory_preset.")) {
+      return [detail.name, detail.includedCount != null ? `${detail.includedCount} rows` : ""].filter(Boolean).join(" · ") || "Preset changed";
+    }
+    return [detail.inventoryItemId, detail.locationId].filter(Boolean).join(" · ") || "Inventory changed";
+  }
+
+  function inventoryHistoryMetrics(event: VenueInventoryHistoryEvent) {
+    const detail = event.detail || {};
+    if (event.eventType === "inventory.imported") {
+      return [
+        ["Rows", detail.importedCount],
+        ["Added", detail.addedCount],
+        ["Updated", detail.updatedCount],
+        ["Mappings", (detail.preservedInventoryMappingCount || 0) + (detail.preservedVariantMappingCount || 0)],
+      ].filter(([, value]) => value != null);
+    }
+    if (event.eventType === "inventory.bulk_updated") {
+      return [
+        ["Requested", detail.requestedCount],
+        ["Updated", detail.updatedCount],
+        ["Failed", detail.failedCount],
+      ].filter(([, value]) => value != null);
+    }
+    return [];
+  }
+
+  async function applyBulkInventoryEdit() {
+    if (!activeVenue || !bulkInventoryEditor) return;
+    try {
+      const payload = buildBulkInventoryPayload(bulkInventoryEditor.draft);
+      if (!bulkEditorBackendIds.length) throw new Error("The selected rows need to be saved before they can be bulk edited.");
+      setBulkInventoryEditor((current) => current ? { ...current, saving: true, error: "" } : current);
+      setInventorySaveState({ tone: "saving", message: "Applying bulk inventory edits…" });
+      const response = await request<{ updated: number; failed: number; failures?: Array<{ inventoryItemId: string; message: string }> }>(
+        `/api/venues/${activeVenue.id}/inventory/bulk`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            inventoryItemIds: bulkEditorBackendIds,
+            patch: payload.patch,
+            clearFields: payload.clearFields,
+            notesMode: payload.notesMode,
+          }),
+        }
+      );
+      await loadVenueDashboardData();
+      await loadVenueDetailData(activeVenue.id);
+      if (response.failed) {
+        setBulkInventoryEditor((current) =>
+          current
+            ? {
+                ...current,
+                saving: false,
+                error: `${response.updated} row${response.updated === 1 ? "" : "s"} updated; ${response.failed} failed. ${response.failures?.[0]?.message || ""}`,
+              }
+            : current
+        );
+        setInventorySaveState({ tone: "error", message: "Some selected rows could not be updated." });
+        return;
+      }
+      setSelectedRecordKeys([]);
+      setBulkInventoryEditor(null);
+      setInventorySaveState({ tone: "saved", message: `${response.updated} row${response.updated === 1 ? "" : "s"} updated.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to apply bulk inventory edits.";
+      setBulkInventoryEditor((current) => current ? { ...current, saving: false, error: message } : current);
+      setInventorySaveState({ tone: "error", message });
+    }
+  }
+
   async function applyBulkRecordPatch(patch: Partial<InventoryRecordOverride>) {
     setRecordOverrides((current) => {
       const next = { ...current };
@@ -3020,6 +4035,9 @@ export default function VenueImportPreviewPage() {
   ]
     .filter(Boolean)
     .join(" ");
+  const bulkEditorChangeLabels = bulkInventoryEditor
+    ? describeBulkInventoryChanges(bulkInventoryEditor.draft)
+    : [];
 
   return (
     <AppShell pageClassName="wide" showNavTrigger>
@@ -4213,9 +5231,27 @@ export default function VenueImportPreviewPage() {
                   <div className="venue-preview-kpi venue-preview-kpi-success"><span className="venue-preview-kpiLabel">Source</span><span className="venue-preview-kpiValue">{isUsingPennSampleInventory ? "Penn sample" : "Uploaded"}</span></div>
                 </div>
                 <div className="venue-preview-rowActions venue-preview-inventoryTopActions">
-                  <button className="btn btn-primary venue-preview-importCta" type="button" onClick={() => { setImportStep("source"); setShowImportModal(true); }}>
+                  <button className="btn btn-primary venue-preview-importCta" type="button" onClick={openInventoryImportModal}>
                     <Upload size={16} />
                     Import Venue Inventory
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-soft"
+                    type="button"
+                    onClick={downloadCurrentVenueInventoryCsv}
+                    disabled={!hasInventoryRows}
+                  >
+                    <Download size={16} />
+                    Current CSV
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-soft"
+                    type="button"
+                    onClick={downloadBlankInventoryTemplate}
+                    disabled={!activeVenue}
+                  >
+                    <Download size={16} />
+                    Blank Template
                   </button>
                   {canEditVenueInventory ? (
                     <button
@@ -4235,6 +5271,49 @@ export default function VenueImportPreviewPage() {
                   )}
                 </div>
               </div>
+
+              <Panel className="panel-tight venue-preview-panel venue-preview-readinessPanel">
+                <div className="venue-preview-head">
+                  <div>
+                    <div className="venue-preview-title">Import Readiness Checklist</div>
+                    <div className="venue-preview-sub">
+                      Pre-flight checks for large inventory loads, Lift submit mapping, placement, and routing.
+                    </div>
+                  </div>
+                  <div className="venue-preview-readinessSummary">
+                    <span className={`venue-preview-status ${venueReadinessChecklist.blockerCount ? "is-warning" : "is-ok"}`}>
+                      {venueReadinessChecklist.blockerCount ? `${venueReadinessChecklist.blockerCount} blocker${venueReadinessChecklist.blockerCount === 1 ? "" : "s"}` : "No blockers"}
+                    </span>
+                    <span className="venue-preview-status is-neutral">
+                      {venueReadinessChecklist.identifierMode === "product_id" ? "Product ID mode" : "Unit # mode"}
+                    </span>
+                  </div>
+                </div>
+                <div className="venue-preview-readinessGrid">
+                  {venueReadinessChecklist.items.map((item) => (
+                    <div key={item.id} className={`venue-preview-readinessCard is-${item.tone}`}>
+                      <div className="venue-preview-readinessCardHead">
+                        <span className="venue-preview-readinessIcon" aria-hidden="true" />
+                        <span className="venue-preview-readinessTitle">{item.title}</span>
+                        <strong>{item.tone === "ok" ? "OK" : item.count}</strong>
+                      </div>
+                      <div className="venue-preview-readinessDetail">{item.detail}</div>
+                      <div className="venue-preview-readinessAction">
+                        <span>{item.action}</span>
+                        {item.actionId ? (
+                          <button
+                            className="btn btn-ghost btn-soft venue-preview-readinessButton"
+                            type="button"
+                            onClick={() => applyReadinessItemAction(item)}
+                          >
+                            {item.actionLabel || "Review"}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
 
               <Panel className="panel-tight venue-preview-panel">
                 <div className="venue-preview-head">
@@ -4260,17 +5339,26 @@ export default function VenueImportPreviewPage() {
                       <span className="venue-preview-cellMeta">
                         {selectedRecordKeys.length} row{selectedRecordKeys.length === 1 ? "" : "s"} selected
                       </span>
-                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ isActive: true })} disabled={!selectedRecordKeys.length}>
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ isActive: true })} disabled={!selectedRecordKeys.length || !inventoryEditMode}>
                         Mark Active
                       </button>
-                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ isActive: false })} disabled={!selectedRecordKeys.length}>
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ isActive: false })} disabled={!selectedRecordKeys.length || !inventoryEditMode}>
                         Mark Inactive
                       </button>
-                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ mapVisibilityMode: "show_unavailable" })} disabled={!selectedRecordKeys.length}>
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ mapVisibilityMode: "show_unavailable" })} disabled={!selectedRecordKeys.length || !inventoryEditMode}>
                         Show Unavailable
                       </button>
-                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ mapVisibilityMode: "hidden" })} disabled={!selectedRecordKeys.length}>
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => applyBulkRecordPatch({ mapVisibilityMode: "hidden" })} disabled={!selectedRecordKeys.length || !inventoryEditMode}>
                         Hide on Map
+                      </button>
+                      <button
+                        className="btn btn-primary btn-soft"
+                        type="button"
+                        onClick={openBulkInventoryEditor}
+                        disabled={!selectedRecordKeys.length || !inventoryEditMode || !canEditVenueInventory}
+                      >
+                        <PencilLine size={16} />
+                        Edit Selected
                       </button>
                       <button
                         className="btn btn-ghost btn-soft"
@@ -4284,7 +5372,7 @@ export default function VenueImportPreviewPage() {
                         <button className="btn btn-ghost btn-soft" type="button" onClick={() => void createInventoryRow()}>
                           Add Inventory Row
                         </button>
-                        <button className="btn btn-ghost btn-soft" type="button" onClick={() => void deleteSelectedRows()} disabled={!selectedRecordKeys.length}>
+                        <button className="btn btn-ghost btn-soft" type="button" onClick={() => void deleteSelectedRows()} disabled={!selectedRecordKeys.length || !inventoryEditMode}>
                           Delete Selected
                         </button>
                       </div>
@@ -4336,8 +5424,68 @@ export default function VenueImportPreviewPage() {
                         <option value="all">All rows</option>
                         <option value="active">Active only</option>
                         <option value="inactive">Inactive only</option>
-                      </select>
-                    </div>
+                        </select>
+                      </div>
+
+                      {readinessFocus ? (
+                        <div className="venue-preview-focusBanner">
+                          <div className="venue-preview-focusSummary">
+                            <div className="venue-preview-focusSummaryTitle">
+                              <span>Focused review</span>
+                              <strong>{readinessFocus.label}</strong>
+                            </div>
+                            {readinessFocusSummary ? (
+                              <div className="venue-preview-focusMeta">
+                                <span>
+                                  Showing {readinessFocusSummary.visibleCount} of {readinessFocusSummary.totalCount} affected row{readinessFocusSummary.totalCount === 1 ? "" : "s"}
+                                </span>
+                                <span>{readinessFocusSummary.variantCount} variant{readinessFocusSummary.variantCount === 1 ? "" : "s"}</span>
+                                <span>{readinessFocusSummary.mapCount} map{readinessFocusSummary.mapCount === 1 ? "" : "s"}</span>
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="venue-preview-focusActions">
+                            {readinessFocusSummary?.visibleRecordKeys.length ? (
+                              <button className="btn btn-ghost btn-soft" type="button" onClick={selectFocusedReadinessRows}>
+                                Select visible
+                              </button>
+                            ) : null}
+                            {readinessFocusSummary?.actionId === "missing_identifiers" || readinessFocusSummary?.actionId === "variant_mapping" ? (
+                              <button className="btn btn-primary btn-soft" type="button" onClick={openFocusedReadinessProductMapper} disabled={!readinessFocusSummary?.firstRecord}>
+                                Map first row
+                              </button>
+                            ) : null}
+                            {readinessFocusSummary?.actionId === "missing_maps" || readinessFocusSummary?.actionId === "missing_dimensions" ? (
+                              <button
+                                className="btn btn-primary btn-soft"
+                                type="button"
+                                onClick={openFocusedReadinessBulkEdit}
+                                disabled={!readinessFocusSummary?.visibleRecordKeys.length || !inventoryEditMode || !canEditVenueInventory}
+                              >
+                                Bulk edit rows
+                              </button>
+                            ) : null}
+                            {readinessFocusSummary?.actionId === "external_vendor_routes" ? (
+                              <button
+                                className="btn btn-primary btn-soft"
+                                type="button"
+                                onClick={openFocusedReadinessVendorPicker}
+                                disabled={!readinessFocusSummary?.visibleRecordKeys.length || !inventoryEditMode || !canEditVenueInventory}
+                              >
+                                Set vendor
+                              </button>
+                            ) : null}
+                            {readinessFocusSummary?.actionId === "placement_unpinned" ? (
+                              <button className="btn btn-primary btn-soft" type="button" onClick={openFocusedReadinessPlacement} disabled={!readinessFocusSummary?.firstRecord}>
+                                Open placement
+                              </button>
+                            ) : null}
+                            <button className="btn btn-ghost btn-soft" type="button" onClick={() => setReadinessFocus(null)}>
+                              Clear focus
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
 
                     {!filteredRecords.length ? (
                       <div className="venue-preview-empty">No inventory rows match the current filters.</div>
@@ -4369,9 +5517,18 @@ export default function VenueImportPreviewPage() {
                             </thead>
                             <tbody>
                               {filteredRecords.map((record) => {
-                                const issueCount =
-                                  (rowIssueCounts.get(record.rowNumber) || 0) +
-                                  (recordIssueDetailsByKey.get(record.recordKey)?.length || 0);
+                                const importIssueMessages =
+                                  result?.issues
+                                    .filter((issue) => issue.rowNumber === record.rowNumber)
+                                    .map((issue) => issue.message) || [];
+                                const readinessIssues = getReadinessIssueDetailsForRecord(record);
+                                const sortedReadinessIssues = readinessFocus
+                                  ? [
+                                      ...readinessIssues.filter((issue) => issue.actionId === readinessFocus.actionId),
+                                      ...readinessIssues.filter((issue) => issue.actionId !== readinessFocus.actionId),
+                                    ]
+                                  : readinessIssues;
+                                const issueCount = importIssueMessages.length + readinessIssues.length;
                                 const variantIndex = variantRows.findIndex((variant) => variant.key === record.mediaVariantKey);
                                 const appearance = getVariantAppearance(record.mediaVariantKey, record.variantLabel, Math.max(variantIndex, 0));
                                 const vendorRoute = resolveInventoryVendor(record);
@@ -4581,17 +5738,40 @@ export default function VenueImportPreviewPage() {
                                     </td>
                                     <td>
                                       {issueCount > 0 ? (
-                                        <span
-                                          className="venue-preview-status is-warning"
+                                        <div
+                                          className="venue-preview-rowIssueStack"
                                           title={[
-                                            ...(recordIssueDetailsByKey.get(record.recordKey) || []),
-                                            ...(result?.issues
-                                              .filter((issue) => issue.rowNumber === record.rowNumber)
-                                              .map((issue) => issue.message) || []),
+                                            ...sortedReadinessIssues.map((issue) => issue.detail),
+                                            ...importIssueMessages,
                                           ].join(" • ")}
                                         >
-                                          {issueCount} issue{issueCount === 1 ? "" : "s"}
-                                        </span>
+                                          <span className="venue-preview-status is-warning">
+                                            {issueCount} issue{issueCount === 1 ? "" : "s"}
+                                          </span>
+                                          <div className="venue-preview-rowIssuePills">
+                                            {sortedReadinessIssues.slice(0, 3).map((issue) => (
+                                              <span
+                                                key={`${issue.actionId}-${issue.label}`}
+                                                className={`venue-preview-rowIssuePill is-${issue.tone} ${
+                                                  readinessFocus?.actionId === issue.actionId ? "is-focused" : ""
+                                                }`}
+                                              >
+                                                {issue.label}
+                                              </span>
+                                            ))}
+                                            {sortedReadinessIssues.length > 3 ? (
+                                              <span className="venue-preview-rowIssueMore">+{sortedReadinessIssues.length - 3}</span>
+                                            ) : null}
+                                            {importIssueMessages.length ? (
+                                              <span className="venue-preview-rowIssuePill is-warning">Import x{importIssueMessages.length}</span>
+                                            ) : null}
+                                          </div>
+                                          {readinessFocus ? (
+                                            <div className="venue-preview-rowIssueDetail">
+                                              {sortedReadinessIssues.find((issue) => issue.actionId === readinessFocus.actionId)?.detail || "Review this row before continuing."}
+                                            </div>
+                                          ) : null}
+                                        </div>
                                       ) : (
                                         <span className="venue-preview-status is-ok">Clean</span>
                                       )}
@@ -4611,6 +5791,61 @@ export default function VenueImportPreviewPage() {
                       </>
                     )}
                   </>
+                )}
+              </Panel>
+
+              <Panel className="panel-tight venue-preview-panel">
+                <div className="venue-preview-head">
+                  <div>
+                    <div className="venue-preview-title">Inventory History</div>
+                    <div className="venue-preview-sub">
+                      Recent imports, bulk edits, row changes, and variant mapping updates for this venue.
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-ghost btn-soft"
+                    type="button"
+                    onClick={() => activeVenue && void loadVenueInventoryHistory(activeVenue.id)}
+                    disabled={!activeVenue || isInventoryHistoryLoading}
+                  >
+                    {isInventoryHistoryLoading ? "Refreshing..." : "Refresh"}
+                  </button>
+                </div>
+
+                {isInventoryHistoryLoading && !venueInventoryHistory.length ? (
+                  <div className="venue-preview-empty">Loading inventory history…</div>
+                ) : !venueInventoryHistory.length ? (
+                  <div className="venue-preview-empty">
+                    No inventory history yet. Imports, bulk edits, variant changes, and row edits will appear here.
+                  </div>
+                ) : (
+                  <div className="venue-preview-historyList">
+                    {venueInventoryHistory.slice(0, 8).map((event) => {
+                      const metrics = inventoryHistoryMetrics(event);
+                      return (
+                        <div key={`${event.eventType}-${event.createdAt}`} className="venue-preview-historyItem">
+                          <div className="venue-preview-historyMarker" aria-hidden="true" />
+                          <div className="venue-preview-historyMain">
+                            <div className="venue-preview-historyTitle">{formatInventoryHistoryEventTitle(event)}</div>
+                            <div className="venue-preview-historyMeta">{formatInventoryHistoryMeta(event)}</div>
+                            {metrics.length ? (
+                              <div className="venue-preview-historyMetrics">
+                                {metrics.map(([label, value]) => (
+                                  <span key={String(label)}>
+                                    {label} <strong>{String(value)}</strong>
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="venue-preview-historySide">
+                            <span>{event.actorName || "System"}</span>
+                            <strong>{event.createdAt ? new Date(event.createdAt).toLocaleString() : "Unknown time"}</strong>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </Panel>
 
@@ -4843,6 +6078,363 @@ export default function VenueImportPreviewPage() {
                     <div className="venue-preview-empty">No map uploaded for this room yet.</div>
                   )}
                 </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {bulkInventoryEditor ? (
+          <div className="venue-preview-modalScrim" onClick={() => setBulkInventoryEditor(null)}>
+            <div className="venue-preview-modal venue-preview-modal-bulkEdit" onClick={(e) => e.stopPropagation()}>
+              <div className="venue-preview-modalHead">
+                <div>
+                  <div className="venue-preview-sectionEyebrow">Inventory Bulk Edit</div>
+                  <div className="venue-preview-sectionTitle">Edit selected inventory</div>
+                  <div className="venue-preview-sectionSub">
+                    Applies to {bulkInventoryEditor.recordKeys.length} selected row{bulkInventoryEditor.recordKeys.length === 1 ? "" : "s"}.
+                  </div>
+                </div>
+                <button
+                  className="btn btn-ghost btn-soft"
+                  type="button"
+                  onClick={() => setBulkInventoryEditor(null)}
+                  disabled={bulkInventoryEditor.saving}
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="venue-preview-modalBody venue-preview-bulkEditBody">
+                <div className="venue-preview-bulkEditForm">
+                  <div className="venue-preview-bulkEditGroup">
+                    <div className="venue-preview-bulkEditGroupHead">
+                      <span>Status & visibility</span>
+                      <small>Controls whether rows participate in venue/order scope.</small>
+                    </div>
+                    <label className="venue-preview-bulkEditField">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bulkInventoryEditor.draft.enabled.availability)}
+                        onChange={() => toggleBulkInventoryField("availability")}
+                      />
+                      <span>Availability</span>
+                      <select
+                        className="select venue-preview-select"
+                        value={bulkInventoryEditor.draft.availability}
+                        onChange={(e) => patchBulkInventoryDraft({ availability: e.target.value as BulkInventoryEditDraft["availability"] })}
+                        disabled={!bulkInventoryEditor.draft.enabled.availability}
+                      >
+                        <option value="active">Active / included</option>
+                        <option value="inactive_unavailable">Inactive / show unavailable</option>
+                        <option value="inactive_hidden">Inactive / hidden from map</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="venue-preview-bulkEditGroup">
+                    <div className="venue-preview-bulkEditGroupHead">
+                      <span>Location</span>
+                      <small>Move rows to a map or replace/clear the location note.</small>
+                    </div>
+                    <label className="venue-preview-bulkEditField">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bulkInventoryEditor.draft.enabled.locationId)}
+                        onChange={() => toggleBulkInventoryField("locationId")}
+                      />
+                      <span>Map</span>
+                      <select
+                        className="select venue-preview-select"
+                        value={bulkInventoryEditor.draft.locationId}
+                        onChange={(e) => patchBulkInventoryDraft({ locationId: e.target.value })}
+                        disabled={!bulkInventoryEditor.draft.enabled.locationId}
+                      >
+                        <option value="">Choose map</option>
+                        {activeVenueRooms.map((room) => (
+                          <option key={room.id} value={room.id}>{room.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="venue-preview-bulkEditField venue-preview-bulkEditField-tall">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bulkInventoryEditor.draft.enabled.locationDetail)}
+                        onChange={() => toggleBulkInventoryField("locationDetail")}
+                      />
+                      <span>Location detail</span>
+                      <div className="venue-preview-bulkEditStack">
+                        <select
+                          className="select venue-preview-select"
+                          value={bulkInventoryEditor.draft.locationDetailMode}
+                          onChange={(e) => patchBulkInventoryDraft({ locationDetailMode: e.target.value as "replace" | "clear" })}
+                          disabled={!bulkInventoryEditor.draft.enabled.locationDetail}
+                        >
+                          <option value="replace">Replace</option>
+                          <option value="clear">Clear value</option>
+                        </select>
+                        {bulkInventoryEditor.draft.locationDetailMode === "replace" ? (
+                          <textarea
+                            className="field-input venue-preview-bulkTextarea"
+                            value={bulkInventoryEditor.draft.locationDetail}
+                            onChange={(e) => patchBulkInventoryDraft({ locationDetail: e.target.value })}
+                            disabled={!bulkInventoryEditor.draft.enabled.locationDetail}
+                            placeholder="New location detail"
+                          />
+                        ) : null}
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="venue-preview-bulkEditGroup">
+                    <div className="venue-preview-bulkEditGroupHead">
+                      <span>Media specs</span>
+                      <small>Trim/media changes may move rows into a different media variant.</small>
+                    </div>
+                    <div className="venue-preview-bulkEditGrid">
+                      {([
+                        ["mediaType", "Media type", "text"],
+                        ["trimHeight", "Trim H", "decimal"],
+                        ["trimWidth", "Trim W", "decimal"],
+                        ["safeHeight", "Safe H", "decimal"],
+                        ["safeWidth", "Safe W", "decimal"],
+                        ["substrate", "Substrate", "text"],
+                        ["finishing", "Finishing", "text"],
+                        ["dpi", "DPI", "numeric"],
+                        ["bleedTop", "Bleed top", "decimal"],
+                        ["bleedRight", "Bleed right", "decimal"],
+                        ["bleedBottom", "Bleed bottom", "decimal"],
+                        ["bleedLeft", "Bleed left", "decimal"],
+                      ] as Array<[BulkInventoryField, string, string]>).map(([field, label, inputMode]) => (
+                        <label className="venue-preview-bulkEditField venue-preview-bulkEditField-compact" key={field}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(bulkInventoryEditor.draft.enabled[field])}
+                            onChange={() => toggleBulkInventoryField(field)}
+                          />
+                          <span>{label}</span>
+                          <input
+                            className="field-input"
+                            value={String(bulkInventoryEditor.draft[field as keyof BulkInventoryEditDraft] || "")}
+                            onChange={(e) => patchBulkInventoryDraft({ [field]: e.target.value } as Partial<BulkInventoryEditDraft>)}
+                            disabled={!bulkInventoryEditor.draft.enabled[field]}
+                            inputMode={inputMode as any}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="venue-preview-bulkEditGroup">
+                    <div className="venue-preview-bulkEditGroupHead">
+                      <span>Production routing</span>
+                      <small>Row-level overrides only. Variant defaults are not changed.</small>
+                    </div>
+                    <label className="venue-preview-bulkEditField">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bulkInventoryEditor.draft.enabled.routing)}
+                        onChange={() => toggleBulkInventoryField("routing")}
+                      />
+                      <span>Routing</span>
+                      <select
+                        className="select venue-preview-select"
+                        value={bulkInventoryEditor.draft.routing}
+                        onChange={(e) => patchBulkInventoryDraft({ routing: e.target.value as BulkInventoryEditDraft["routing"] })}
+                        disabled={!bulkInventoryEditor.draft.enabled.routing}
+                      >
+                        <option value="inherit">Inherit variant default</option>
+                        <option value="primary">Primary print vendor</option>
+                        <option value="external">External vendor</option>
+                      </select>
+                    </label>
+                    {bulkInventoryEditor.draft.routing === "external" ? (
+                      <label className="venue-preview-bulkEditField">
+                        <i className="venue-preview-bulkEditSpacer" aria-hidden="true" />
+                        <span>Vendor</span>
+                        <select
+                          className="select venue-preview-select"
+                          value={bulkInventoryEditor.draft.externalVendorId}
+                          onChange={(e) => patchBulkInventoryDraft({ externalVendorId: e.target.value })}
+                          disabled={!bulkInventoryEditor.draft.enabled.routing}
+                        >
+                          <option value="">Choose vendor</option>
+                          {activeCustomerVendors.map((vendor) => (
+                            <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                  </div>
+
+                  <div className="venue-preview-bulkEditGroup">
+                    <div className="venue-preview-bulkEditGroupHead">
+                      <span>Lift mapping</span>
+                      <small>Preserved unless one of these fields is selected.</small>
+                    </div>
+                    <label className="venue-preview-bulkEditField">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bulkInventoryEditor.draft.enabled.unitNumber)}
+                        onChange={() => toggleBulkInventoryField("unitNumber")}
+                      />
+                      <span>Unit number</span>
+                      <div className="venue-preview-bulkEditInline">
+                        <select
+                          className="select venue-preview-select"
+                          value={bulkInventoryEditor.draft.unitNumberMode}
+                          onChange={(e) => patchBulkInventoryDraft({ unitNumberMode: e.target.value as "replace" | "clear" })}
+                          disabled={!bulkInventoryEditor.draft.enabled.unitNumber}
+                        >
+                          <option value="replace">Replace</option>
+                          <option value="clear">Clear value</option>
+                        </select>
+                        {bulkInventoryEditor.draft.unitNumberMode === "replace" ? (
+                          <input
+                            className="field-input"
+                            value={bulkInventoryEditor.draft.unitNumber}
+                            onChange={(e) => patchBulkInventoryDraft({ unitNumber: e.target.value })}
+                            disabled={!bulkInventoryEditor.draft.enabled.unitNumber}
+                            placeholder="Unit number"
+                          />
+                        ) : null}
+                      </div>
+                    </label>
+                    <label className="venue-preview-bulkEditField">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bulkInventoryEditor.draft.enabled.productMapping)}
+                        onChange={() => toggleBulkInventoryField("productMapping")}
+                      />
+                      <span>Product mapping</span>
+                      <div className="venue-preview-bulkEditStack">
+                        <select
+                          className="select venue-preview-select"
+                          value={bulkInventoryEditor.draft.productMappingMode}
+                          onChange={(e) => patchBulkInventoryDraft({ productMappingMode: e.target.value as "replace" | "clear" })}
+                          disabled={!bulkInventoryEditor.draft.enabled.productMapping}
+                        >
+                          <option value="replace">Set Product ID</option>
+                          <option value="clear">Clear row mapping</option>
+                        </select>
+                        {bulkInventoryEditor.draft.productMappingMode === "replace" ? (
+                          <div className="venue-preview-bulkEditInline">
+                            <input
+                              className="field-input"
+                              value={bulkInventoryEditor.draft.productId}
+                              onChange={(e) => patchBulkInventoryDraft({ productId: e.target.value })}
+                              disabled={!bulkInventoryEditor.draft.enabled.productMapping}
+                              placeholder="Product ID"
+                              inputMode="numeric"
+                            />
+                            <input
+                              className="field-input"
+                              value={bulkInventoryEditor.draft.productName}
+                              onChange={(e) => patchBulkInventoryDraft({ productName: e.target.value })}
+                              disabled={!bulkInventoryEditor.draft.enabled.productMapping}
+                              placeholder="Product name optional"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="venue-preview-bulkEditGroup">
+                    <div className="venue-preview-bulkEditGroupHead">
+                      <span>Notes</span>
+                      <small>Append is safest when preserving existing row notes matters.</small>
+                    </div>
+                    <label className="venue-preview-bulkEditField venue-preview-bulkEditField-tall">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(bulkInventoryEditor.draft.enabled.notes)}
+                        onChange={() => toggleBulkInventoryField("notes")}
+                      />
+                      <span>Notes</span>
+                      <div className="venue-preview-bulkEditStack">
+                        <select
+                          className="select venue-preview-select"
+                          value={bulkInventoryEditor.draft.notesMode}
+                          onChange={(e) => patchBulkInventoryDraft({ notesMode: e.target.value as BulkInventoryEditDraft["notesMode"] })}
+                          disabled={!bulkInventoryEditor.draft.enabled.notes}
+                        >
+                          <option value="append">Append</option>
+                          <option value="replace">Replace</option>
+                          <option value="clear">Clear value</option>
+                        </select>
+                        {bulkInventoryEditor.draft.notesMode !== "clear" ? (
+                          <textarea
+                            className="field-input venue-preview-bulkTextarea"
+                            value={bulkInventoryEditor.draft.notes}
+                            onChange={(e) => patchBulkInventoryDraft({ notes: e.target.value })}
+                            disabled={!bulkInventoryEditor.draft.enabled.notes}
+                            placeholder="Note text"
+                          />
+                        ) : null}
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <aside className="venue-preview-bulkEditSummary">
+                  <div className="venue-preview-bulkEditSummaryCard">
+                    <div className="venue-preview-kpiLabel">Rows selected</div>
+                    <div className="venue-preview-kpiValue">{bulkInventoryEditor.recordKeys.length}</div>
+                    {bulkEditorSummary.unsavedRows ? (
+                      <div className="venue-preview-alert venue-preview-alert-warning">
+                        {bulkEditorSummary.unsavedRows} selected row{bulkEditorSummary.unsavedRows === 1 ? "" : "s"} must be saved before bulk edit can apply.
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="venue-preview-bulkEditSummaryCard">
+                    <div className="venue-preview-kpiLabel">Maps affected</div>
+                    <div className="venue-preview-bulkEditChips">
+                      {(bulkEditorSummary.maps.length ? bulkEditorSummary.maps : ["No map"]).slice(0, 4).map((item) => <span key={item}>{item}</span>)}
+                      {bulkEditorSummary.maps.length > 4 ? <span>+{bulkEditorSummary.maps.length - 4}</span> : null}
+                    </div>
+                  </div>
+                  <div className="venue-preview-bulkEditSummaryCard">
+                    <div className="venue-preview-kpiLabel">Variants affected</div>
+                    <div className="venue-preview-bulkEditChips">
+                      {(bulkEditorSummary.variants.length ? bulkEditorSummary.variants : ["No variant"]).slice(0, 4).map((item) => <span key={item}>{item}</span>)}
+                      {bulkEditorSummary.variants.length > 4 ? <span>+{bulkEditorSummary.variants.length - 4}</span> : null}
+                    </div>
+                  </div>
+                  <div className="venue-preview-bulkEditSummaryCard">
+                    <div className="venue-preview-kpiLabel">Mapping posture</div>
+                    <div className="venue-preview-bulkEditMetaLine">{bulkEditorSummary.mappedRows} row-level mappings</div>
+                    <div className="venue-preview-bulkEditMetaLine">{bulkEditorSummary.inheritedMappings} inherited variant mappings</div>
+                    <div className="venue-preview-bulkEditNote">Mappings are preserved unless Unit number or Product mapping is selected.</div>
+                  </div>
+                  <div className="venue-preview-bulkEditSummaryCard">
+                    <div className="venue-preview-kpiLabel">Fields changing</div>
+                    {bulkEditorChangeLabels.length ? (
+                      <div className="venue-preview-bulkEditChangeList">
+                        {bulkEditorChangeLabels.map((label) => <span key={label}>{label}</span>)}
+                      </div>
+                    ) : (
+                      <div className="venue-preview-bulkEditNote">Select one or more fields to preview the change.</div>
+                    )}
+                  </div>
+                  {bulkInventoryEditor.error ? (
+                    <div className="venue-preview-alert venue-preview-alert-danger">{bulkInventoryEditor.error}</div>
+                  ) : null}
+                </aside>
+              </div>
+
+              <div className="venue-preview-modalFoot">
+                <span className="venue-preview-cellMeta">Inventory IDs, pin placement, and variant defaults are protected from this bulk editor.</span>
+                <button className="btn btn-ghost btn-soft" type="button" onClick={() => setBulkInventoryEditor(null)} disabled={bulkInventoryEditor.saving}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={() => void applyBulkInventoryEdit()}
+                  disabled={bulkInventoryEditor.saving || !bulkEditorChangeLabels.length || !bulkEditorBackendIds.length}
+                >
+                  {bulkInventoryEditor.saving ? "Applying..." : "Apply Bulk Edit"}
+                </button>
               </div>
             </div>
           </div>
@@ -5261,7 +6853,7 @@ export default function VenueImportPreviewPage() {
         ) : null}
 
         {showImportModal ? (
-          <div className="venue-preview-modalScrim" onClick={() => setShowImportModal(false)}>
+          <div className="venue-preview-modalScrim" onClick={closeInventoryImportModal}>
             <div className="venue-preview-modal" onClick={(e) => e.stopPropagation()}>
               <div className="venue-preview-modalHead">
                 <div>
@@ -5271,7 +6863,7 @@ export default function VenueImportPreviewPage() {
                     Upload or paste a sheet, validate translation, then confirm the import results before placement.
                   </div>
                 </div>
-                <button className="btn btn-ghost btn-soft" type="button" onClick={() => setShowImportModal(false)}>
+                <button className="btn btn-ghost btn-soft" type="button" onClick={closeInventoryImportModal}>
                   Close
                 </button>
               </div>
@@ -5282,11 +6874,13 @@ export default function VenueImportPreviewPage() {
                   ["validate", "2. Validation"],
                   ["review", "3. Review"],
                   ["confirm", "4. Confirm"],
+                  ["results", "5. Results"],
                 ].map(([id, label]) => (
                   <button
                     key={id}
                     type="button"
                     className={`btn ${importStep === id ? "btn-primary" : "btn-ghost btn-soft"}`}
+                    disabled={id === "results" && !importApplyResult}
                     onClick={() => setImportStep(id as ImportStep)}
                   >
                     {label}
@@ -5340,11 +6934,7 @@ export default function VenueImportPreviewPage() {
                         <button
                           className="btn btn-ghost btn-soft"
                           type="button"
-                          onClick={() => {
-                            setCsvText("");
-                            setSourceLabel("No file loaded");
-                            setLoadTone("idle");
-                          }}
+                          onClick={resetInventoryImportSource}
                         >
                           Clear
                         </button>
@@ -5712,47 +7302,177 @@ export default function VenueImportPreviewPage() {
                     </Panel>
                   </div>
                 ) : null}
+
+                {importStep === "results" ? (
+                  <div className="venue-preview-reviewFlow">
+                    {!importApplyResult ? (
+                      <div className="venue-preview-empty">No completed import result is available yet.</div>
+                    ) : (
+                      <>
+                        <Panel className="panel-tight venue-preview-panel venue-preview-importResultHero">
+                          <div className="venue-preview-head">
+                            <div>
+                              <div className="venue-preview-title">Import Applied</div>
+                              <div className="venue-preview-sub">
+                                {importApplyResult.sourceLabel} · {new Date(importApplyResult.appliedAt).toLocaleString()} · {importApplyResult.importMode === "merge" ? "Merge update/add" : "Replace current inventory"}
+                              </div>
+                            </div>
+                            <span className="venue-preview-status is-ok">Complete</span>
+                          </div>
+                          <div className="venue-preview-importPlanGrid venue-preview-importResultGrid">
+                            <div><span>Rows processed</span><strong>{importApplyResult.importedCount}</strong></div>
+                            <div><span>Added</span><strong>{importApplyResult.addedCount}</strong></div>
+                            <div><span>Updated</span><strong>{importApplyResult.updatedCount}</strong></div>
+                            <div><span>{importApplyResult.importMode === "merge" ? "Retained" : "Removed"}</span><strong>{importApplyResult.importMode === "merge" ? importApplyResult.retainedMissingCount : importApplyResult.plan.replaceRemovalCount}</strong></div>
+                            <div><span>Variants active</span><strong>{importApplyResult.variantCount}</strong></div>
+                            <div><span>New variants planned</span><strong>{importApplyResult.plan.newVariantCount}</strong></div>
+                          </div>
+                        </Panel>
+
+                        <div className="venue-preview-reviewGrid">
+                          <Panel className="panel-tight venue-preview-panel">
+                            <div className="venue-preview-head">
+                              <div>
+                                <div className="venue-preview-title">Mapping Preservation</div>
+                                <div className="venue-preview-sub">Product mappings remain untouched unless an import explicitly replaces them.</div>
+                              </div>
+                            </div>
+                            <div className="venue-preview-importResultList">
+                              <div>
+                                <span>Row product mappings preserved</span>
+                                <strong>{importApplyResult.preservedInventoryMappingCount}</strong>
+                              </div>
+                              <div>
+                                <span>Variant product mappings preserved</span>
+                                <strong>{importApplyResult.preservedVariantMappingCount}</strong>
+                              </div>
+                              <div>
+                                <span>Existing variants reused</span>
+                                <strong>{importApplyResult.plan.existingVariantsReused}</strong>
+                              </div>
+                              <div>
+                                <span>Rows unchanged by merge plan</span>
+                                <strong>{importApplyResult.plan.unchangedCount}</strong>
+                              </div>
+                            </div>
+                          </Panel>
+
+                          <Panel className="panel-tight venue-preview-panel">
+                            <div className="venue-preview-head">
+                              <div>
+                                <div className="venue-preview-title">Follow-up Review</div>
+                                <div className="venue-preview-sub">Items worth checking before using this inventory in production orders.</div>
+                              </div>
+                            </div>
+                            {importApplyResult.risks.length || importApplyResult.orphanedVariantCount ? (
+                              <div className="venue-preview-issues">
+                                {importApplyResult.orphanedVariantCount ? (
+                                  <div className="venue-preview-issue is-warning">
+                                    <div className="venue-preview-issueMeta">
+                                      <span className="venue-preview-issueLevel">warning</span>
+                                    </div>
+                                    <div className="venue-preview-issueText">
+                                      <strong>Variant orphan check.</strong> {importApplyResult.orphanedVariantCount} existing variant{importApplyResult.orphanedVariantCount === 1 ? "" : "s"} no longer matched the resulting inventory set.
+                                    </div>
+                                  </div>
+                                ) : null}
+                                {importApplyResult.risks.map((risk) => (
+                                  <div key={risk.title} className={`venue-preview-issue is-${risk.tone}`}>
+                                    <div className="venue-preview-issueMeta">
+                                      <span className="venue-preview-issueLevel">{risk.tone}</span>
+                                    </div>
+                                    <div className="venue-preview-issueText">
+                                      <strong>{risk.title}.</strong> {risk.detail}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="venue-preview-empty venue-preview-empty-ok">No follow-up warnings were detected for this import.</div>
+                            )}
+                          </Panel>
+                        </div>
+
+                        <Panel className="panel-tight venue-preview-panel">
+                          <div className="venue-preview-head">
+                            <div>
+                              <div className="venue-preview-title">Before / After Plan</div>
+                              <div className="venue-preview-sub">The import used the reviewed plan below, then reconciled inventory and media variants.</div>
+                            </div>
+                          </div>
+                          <div className="venue-preview-importPlanGrid">
+                            <div><span>Incoming rows</span><strong>{importApplyResult.plan.incomingCount}</strong></div>
+                            <div><span>Matched existing</span><strong>{importApplyResult.plan.matchedCount}</strong></div>
+                            <div><span>Planned updates</span><strong>{importApplyResult.plan.updatedCount}</strong></div>
+                            <div><span>Planned adds</span><strong>{importApplyResult.plan.addedCount}</strong></div>
+                            <div><span>Missing existing retained</span><strong>{importApplyResult.plan.retainedMissingCount}</strong></div>
+                            <div><span>Unknown maps blocked</span><strong>{importApplyResult.plan.unknownMapCount}</strong></div>
+                          </div>
+                        </Panel>
+                      </>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               <div className="venue-preview-modalFoot">
-                <div className="venue-preview-rowActions">
-                  <button className="btn btn-ghost btn-soft" type="button" onClick={() => setShowImportModal(false)}>
-                    Close
-                  </button>
-                  {importStep !== "source" ? (
+                {importStep === "results" ? (
+                  <>
+                    <span className="venue-preview-cellMeta">Inventory has been reloaded from the backend.</span>
+                    <div className="venue-preview-rowActions">
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={() => {
+                        resetInventoryImportSource();
+                        setImportStep("source");
+                      }}>
+                        Import Another
+                      </button>
+                      <button className="btn btn-primary" type="button" onClick={closeInventoryImportModal}>
+                        Back to Inventory
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="venue-preview-rowActions">
+                      <button className="btn btn-ghost btn-soft" type="button" onClick={closeInventoryImportModal}>
+                        Close
+                      </button>
+                      {importStep !== "source" ? (
+                        <button
+                          className="btn btn-ghost btn-soft"
+                          type="button"
+                          onClick={() =>
+                            setImportStep(importStep === "validate" ? "source" : importStep === "review" ? "validate" : "review")
+                          }
+                        >
+                          Back
+                        </button>
+                      ) : null}
+                    </div>
                     <button
-                      className="btn btn-ghost btn-soft"
+                      className="btn btn-primary"
                       type="button"
-                      onClick={() =>
-                        setImportStep(importStep === "validate" ? "source" : importStep === "review" ? "validate" : "review")
+                      onClick={() => {
+                        if (importStep === "confirm") {
+                          void confirmImport();
+                          return;
+                        }
+                        setImportStep(importStep === "source" ? "validate" : importStep === "validate" ? "review" : "confirm");
+                      }}
+                      disabled={
+                        importStep === "confirm"
+                          ? !result?.records.length || result.summary.errorCount > 0 || importPlan.unknownMapCount > 0
+                          : !parsedRows.length
                       }
                     >
-                      Back
+                      {importStep === "confirm"
+                        ? inventoryImportMode === "merge"
+                          ? "Confirm Merge"
+                          : "Confirm Replace"
+                        : "Next"}
                     </button>
-                  ) : null}
-                </div>
-                <button
-                  className="btn btn-primary"
-                  type="button"
-                  onClick={() => {
-                    if (importStep === "confirm") {
-                      void confirmImport();
-                      return;
-                    }
-                    setImportStep(importStep === "source" ? "validate" : importStep === "validate" ? "review" : "confirm");
-                  }}
-                  disabled={
-                    importStep === "confirm"
-                      ? !result?.records.length || result.summary.errorCount > 0 || importPlan.unknownMapCount > 0
-                      : !parsedRows.length
-                  }
-                >
-                  {importStep === "confirm"
-                    ? inventoryImportMode === "merge"
-                      ? "Confirm Merge"
-                      : "Confirm Replace"
-                    : "Next"}
-                </button>
+                  </>
+                )}
               </div>
             </div>
           </div>

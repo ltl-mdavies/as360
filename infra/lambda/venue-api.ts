@@ -326,6 +326,8 @@ export async function handler(event: ApiEvent) {
         return ok({ venues: await listVenues(event.queryStringParameters?.customerId, auth, isLiteRequest(event)) });
       case "GET /api/venues/{venueId}":
         return ok(await getVenueDetail(requirePath(event, "venueId"), auth));
+      case "GET /api/venues/{venueId}/inventory/history":
+        return ok({ events: await listVenueInventoryHistory(requirePath(event, "venueId"), auth) });
       case "POST /api/markets":
         return created({ market: await createMarket(getBody(event), auth) });
       case "PATCH /api/markets/{marketId}":
@@ -371,6 +373,8 @@ export async function handler(event: ApiEvent) {
         });
       case "POST /api/venues/{venueId}/inventory/import":
         return ok(await importInventory(requirePath(event, "venueId"), getBody<InventoryImportPayload>(event), auth));
+      case "PATCH /api/venues/{venueId}/inventory/bulk":
+        return ok(await bulkUpdateInventory(requirePath(event, "venueId"), getBody(event), auth));
       case "PATCH /api/inventory/{inventoryItemId}":
         return ok({
           inventoryItem: await updateInventory(requirePath(event, "inventoryItemId"), getBody(event), auth),
@@ -974,6 +978,45 @@ async function updateVenue(venueId: string, payload: Record<string, unknown>, au
   return next;
 }
 
+async function listVenueInventoryHistory(venueId: string, auth: AuthContext) {
+  const venue = await findVenueById(venueId);
+  if (!venue) throw new HttpError(404, `Venue ${venueId} not found`);
+  assertCustomerAccess(auth, venue.customerId);
+
+  const response = await client.send(
+    new QueryCommand({
+      TableName: AUDIT_TABLE_NAME,
+      KeyConditionExpression: "projectId = :scopeId",
+      ExpressionAttributeValues: marshall({ ":scopeId": `VENUE_ADMIN#${venueId}` }),
+      ScanIndexForward: false,
+      Limit: 80,
+    })
+  );
+
+  const inventoryEventTypes = new Set([
+    "inventory.imported",
+    "inventory.bulk_updated",
+    "inventory.updated",
+    "inventory.deleted",
+    "variant.updated",
+    "inventory_preset.created",
+    "inventory_preset.updated",
+    "inventory_preset.archived",
+  ]);
+
+  return (response.Items || [])
+    .map((item) => unmarshall(item) as Record<string, any>)
+    .filter((event) => inventoryEventTypes.has(String(event.eventType || "")))
+    .slice(0, 30)
+    .map((event) => ({
+      eventType: event.eventType,
+      scopeId: event.scopeId,
+      actorName: event.actorName,
+      createdAt: event.createdAt,
+      detail: event.detail || {},
+    }));
+}
+
 function normalizeDocumentSourceMode(value: unknown, documentLibraryUrl?: string | null): "adspace" | "external" | "hybrid" {
   const normalized = (optionalString(value) || "").toLowerCase();
   if (normalized === "external" || normalized === "hybrid" || normalized === "adspace") {
@@ -1545,6 +1588,281 @@ async function importInventory(venueId: string, payload: InventoryImportPayload,
     preservedInventoryMappingCount,
     preservedVariantMappingCount,
     orphanedVariantCount,
+  };
+}
+
+async function bulkUpdateInventory(venueId: string, payload: Record<string, unknown>, auth: AuthContext) {
+  const venue = await findVenueById(venueId);
+  if (!venue) throw new HttpError(404, `Venue ${venueId} not found`);
+  assertCustomerAccess(auth, venue.customerId);
+  const customer = await findCustomerById(venue.customerId);
+  if (!customer) throw new HttpError(404, `Customer ${venue.customerId} not found`);
+  assertCustomerMutable(auth, customer, "bulk update inventory");
+
+  const inventoryItemIds = Array.isArray(payload.inventoryItemIds)
+    ? Array.from(new Set(payload.inventoryItemIds.map((id) => optionalString(id)).filter(Boolean))) as string[]
+    : [];
+  if (!inventoryItemIds.length) throw new HttpError(400, "inventoryItemIds is required");
+  if (inventoryItemIds.length > 500) throw new HttpError(400, "Bulk inventory edits are limited to 500 rows at a time");
+
+  const patch = payload.patch && typeof payload.patch === "object" && !Array.isArray(payload.patch)
+    ? payload.patch as Record<string, unknown>
+    : {};
+  const clearFields = new Set(
+    Array.isArray(payload.clearFields)
+      ? payload.clearFields.map((field) => optionalString(field)).filter(Boolean) as string[]
+      : []
+  );
+  const notesMode = optionalString(payload.notesMode) || "replace";
+  if (!["replace", "append", "clear"].includes(notesMode)) {
+    throw new HttpError(400, "notesMode must be replace, append, or clear");
+  }
+
+  const allowedPatchFields = new Set([
+    "locationId",
+    "locationDetail",
+    "mediaType",
+    "unitNumber",
+    "liftProductMapping",
+    "isActive",
+    "mapVisibilityMode",
+    "trimHeight",
+    "trimWidth",
+    "safeHeight",
+    "safeWidth",
+    "substrate",
+    "finishing",
+    "notes",
+    "productionRoutingOverride",
+    "externalVendorIdOverride",
+    "dpi",
+    "bleedTop",
+    "bleedRight",
+    "bleedBottom",
+    "bleedLeft",
+  ]);
+  const allowedClearFields = new Set([
+    "locationDetail",
+    "unitNumber",
+    "liftProductMapping",
+    "trimHeight",
+    "trimWidth",
+    "safeHeight",
+    "safeWidth",
+    "substrate",
+    "finishing",
+    "notes",
+    "productionRoutingOverride",
+    "externalVendorIdOverride",
+    "dpi",
+    "bleedTop",
+    "bleedRight",
+    "bleedBottom",
+    "bleedLeft",
+  ]);
+  const blockedPatchFields = Object.keys(patch).filter((field) => !allowedPatchFields.has(field));
+  const blockedClearFields = Array.from(clearFields).filter((field) => !allowedClearFields.has(field));
+  if (blockedPatchFields.length) {
+    throw new HttpError(400, `Bulk inventory edit cannot update: ${blockedPatchFields.join(", ")}`);
+  }
+  if (blockedClearFields.length) {
+    throw new HttpError(400, `Bulk inventory edit cannot clear: ${blockedClearFields.join(", ")}`);
+  }
+  if (!Object.keys(patch).length && !clearFields.size && notesMode !== "clear") {
+    throw new HttpError(400, "At least one bulk edit field is required");
+  }
+
+  const venueItems = await queryByPk(`VENUE#${venueId}`);
+  const maps = venueItems.filter((item): item is RoomMapItem => item.entityType === "RoomMap");
+  const mapsById = new Map(maps.map((map) => [map.id, map]));
+  const existingInventory = venueItems.filter((item): item is InventoryItem => item.entityType === "InventoryItem");
+  const existingInventoryById = new Map(existingInventory.map((item) => [item.id, item]));
+  const requestedIds = new Set(inventoryItemIds);
+  const now = isoNow();
+  const failures: Array<{ inventoryItemId: string; message: string }> = [];
+  const nextItems: InventoryItem[] = [];
+  const validatedVendors = new Map<string, boolean>();
+
+  for (const inventoryItemId of inventoryItemIds) {
+    const existing = existingInventoryById.get(inventoryItemId);
+    if (!existing) {
+      failures.push({ inventoryItemId, message: "Inventory row was not found for this venue." });
+      continue;
+    }
+
+    try {
+      const nextMapId = hasOwn(patch, "locationId") ? optionalString(patch.locationId) : undefined;
+      let nextMapName = existing.mapName;
+      if (nextMapId && nextMapId !== existing.locationId) {
+        const map = mapsById.get(nextMapId);
+        if (!map) throw new HttpError(400, `Map ${nextMapId} was not found for this venue.`);
+        nextMapName = map.name;
+      }
+
+      const nextMediaType = hasOwn(patch, "mediaType") ? optionalString(patch.mediaType) : existing.mediaType;
+      const nextTrimHeight = clearFields.has("trimHeight")
+        ? null
+        : hasOwn(patch, "trimHeight")
+          ? numberOrUndefined(patch.trimHeight, existing.trimHeight)
+          : existing.trimHeight;
+      const nextTrimWidth = clearFields.has("trimWidth")
+        ? null
+        : hasOwn(patch, "trimWidth")
+          ? numberOrUndefined(patch.trimWidth, existing.trimWidth)
+          : existing.trimWidth;
+      const nextVariantIdentity = buildInventoryVariantIdentity({
+        mediaVariantKey: existing.mediaVariantKey,
+        variantLabel: existing.variantLabel,
+        mediaType: nextMediaType,
+        trimHeight: nextTrimHeight,
+        trimWidth: nextTrimWidth,
+      });
+
+      const nextRouting = clearFields.has("productionRoutingOverride")
+        ? undefined
+        : hasOwn(patch, "productionRoutingOverride")
+          ? optionalString(patch.productionRoutingOverride) === "external" || optionalString(patch.productionRoutingOverride) === "primary"
+            ? optionalString(patch.productionRoutingOverride) as "primary" | "external"
+            : undefined
+          : existing.productionRoutingOverride;
+      let nextExternalVendorId = clearFields.has("externalVendorIdOverride")
+        ? undefined
+        : hasOwn(patch, "externalVendorIdOverride")
+          ? optionalString(patch.externalVendorIdOverride)
+          : existing.externalVendorIdOverride;
+      if (nextRouting !== "external") {
+        nextExternalVendorId = undefined;
+      }
+      if (nextRouting === "external") {
+        if (!nextExternalVendorId) throw new HttpError(400, "External vendor is required when routing is external.");
+        if (!validatedVendors.has(nextExternalVendorId)) {
+          const vendor = await findCustomerVendor(venue.customerId, nextExternalVendorId);
+          validatedVendors.set(nextExternalVendorId, Boolean(vendor?.isActive));
+        }
+        if (!validatedVendors.get(nextExternalVendorId)) {
+          throw new HttpError(400, `External vendor ${nextExternalVendorId} is not available for this customer.`);
+        }
+      }
+
+      const nextNotes = notesMode === "clear" || clearFields.has("notes")
+        ? undefined
+        : notesMode === "append" && hasOwn(patch, "notes")
+          ? [existing.notes, optionalString(patch.notes)].filter(Boolean).join("\n")
+          : hasOwn(patch, "notes")
+            ? optionalString(patch.notes)
+            : existing.notes;
+
+      nextItems.push({
+        ...existing,
+        locationId: nextMapId || existing.locationId,
+        mapName: nextMapName,
+        unitNumber: clearFields.has("unitNumber")
+          ? undefined
+          : hasOwn(patch, "unitNumber")
+            ? optionalString(patch.unitNumber) || undefined
+            : existing.unitNumber,
+        liftProductMapping: clearFields.has("liftProductMapping")
+          ? undefined
+          : hasOwn(patch, "liftProductMapping")
+            ? normalizeLiftProductMapping(patch.liftProductMapping, auth.actorName)
+            : existing.liftProductMapping,
+        mediaVariantKey: nextVariantIdentity.mediaVariantKey,
+        variantLabel: nextVariantIdentity.variantLabel,
+        mediaType: nextVariantIdentity.mediaType,
+        isActive: optionalBoolean(patch.isActive) ?? existing.isActive,
+        mapVisibilityMode:
+          optionalString(patch.mapVisibilityMode) === "show_unavailable"
+            ? "show_unavailable"
+            : optionalString(patch.mapVisibilityMode) === "hidden"
+              ? "hidden"
+              : existing.mapVisibilityMode,
+        trimHeight: nextTrimHeight,
+        trimWidth: nextTrimWidth,
+        safeHeight: clearFields.has("safeHeight")
+          ? null
+          : hasOwn(patch, "safeHeight")
+            ? numberOrUndefined(patch.safeHeight, existing.safeHeight)
+            : existing.safeHeight,
+        safeWidth: clearFields.has("safeWidth")
+          ? null
+          : hasOwn(patch, "safeWidth")
+            ? numberOrUndefined(patch.safeWidth, existing.safeWidth)
+            : existing.safeWidth,
+        substrate: clearFields.has("substrate")
+          ? undefined
+          : hasOwn(patch, "substrate")
+            ? optionalString(patch.substrate)
+            : existing.substrate,
+        finishing: clearFields.has("finishing")
+          ? undefined
+          : hasOwn(patch, "finishing")
+            ? optionalString(patch.finishing)
+            : existing.finishing,
+        locationDetail: clearFields.has("locationDetail")
+          ? undefined
+          : hasOwn(patch, "locationDetail")
+            ? optionalString(patch.locationDetail)
+            : existing.locationDetail,
+        notes: nextNotes,
+        productionRoutingOverride: nextRouting,
+        externalVendorIdOverride: nextExternalVendorId,
+        dpi: clearFields.has("dpi")
+          ? null
+          : hasOwn(patch, "dpi")
+            ? numberOrUndefined(patch.dpi, existing.dpi)
+            : existing.dpi,
+        bleedTop: clearFields.has("bleedTop")
+          ? null
+          : hasOwn(patch, "bleedTop")
+            ? numberOrUndefined(patch.bleedTop, existing.bleedTop)
+            : existing.bleedTop,
+        bleedRight: clearFields.has("bleedRight")
+          ? null
+          : hasOwn(patch, "bleedRight")
+            ? numberOrUndefined(patch.bleedRight, existing.bleedRight)
+            : existing.bleedRight,
+        bleedBottom: clearFields.has("bleedBottom")
+          ? null
+          : hasOwn(patch, "bleedBottom")
+            ? numberOrUndefined(patch.bleedBottom, existing.bleedBottom)
+            : existing.bleedBottom,
+        bleedLeft: clearFields.has("bleedLeft")
+          ? null
+          : hasOwn(patch, "bleedLeft")
+            ? numberOrUndefined(patch.bleedLeft, existing.bleedLeft)
+            : existing.bleedLeft,
+        updatedAt: now,
+      });
+    } catch (error) {
+      failures.push({
+        inventoryItemId,
+        message: error instanceof Error ? error.message : "Unable to update this inventory row.",
+      });
+    }
+  }
+
+  await putMany(nextItems.map((item) => buildInventoryRecord(item)));
+  const nextInventory = existingInventory.map((item) => requestedIds.has(item.id)
+    ? nextItems.find((candidate) => candidate.id === item.id) || item
+    : item
+  );
+  await reconcileVenueVariantsForInventorySet(venueId, nextInventory, venueItems);
+  venueDetailResponseCache.delete(`venue-detail:${venueId}:${authScopeCacheKey(auth)}`);
+  await writeAudit(`VENUE_ADMIN#${venueId}`, "inventory.bulk_updated", auth.actorName, {
+    venueId,
+    requestedCount: inventoryItemIds.length,
+    updatedCount: nextItems.length,
+    failedCount: failures.length,
+    patchFields: Object.keys(patch),
+    clearFields: Array.from(clearFields),
+    notesMode,
+  });
+
+  return {
+    updated: nextItems.length,
+    failed: failures.length,
+    failures,
+    inventoryItems: nextItems,
   };
 }
 
