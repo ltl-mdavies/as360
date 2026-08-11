@@ -473,6 +473,21 @@
   min-height:0;
 }
 
+@media (min-width: 981px){
+  .page.workspace > .pull-refresh:has(.assign-fullscreen){
+    height: 100%;
+    min-height: 0;
+    display:flex;
+    flex-direction:column;
+    overflow: hidden;
+  }
+
+  .page.workspace > .pull-refresh:has(.assign-fullscreen) > .assign-fullscreen{
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+
 .page-header.page-header-compactProject:has(.assign-projectMetaRow){
   margin: 6px 0 16px;
 }
